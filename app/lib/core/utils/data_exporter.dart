@@ -11,13 +11,20 @@ class DataExporter {
     final products = await db.query('products');
     final sales = await db.query('sales');
     final saleItems = await db.query('sale_items');
+    final shifts = await db.query('shifts');
+    final cashMovements = await db.query('cash_movements');
+    final auditLogs = await db.query('audit_logs');
 
     final exportData = {
       'exported_at': DateTime.now().toIso8601String(),
+      'version': 4,
       'users': users,
       'products': products,
       'sales': sales,
       'sale_items': saleItems,
+      'shifts': shifts,
+      'cash_movements': cashMovements,
+      'audit_logs': auditLogs,
     };
 
     final jsonString = const JsonEncoder.withIndent('  ').convert(exportData);

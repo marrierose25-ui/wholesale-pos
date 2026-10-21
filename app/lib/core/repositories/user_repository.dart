@@ -57,6 +57,19 @@ class UserRepository {
   }
 
   Future<void> createUser(String username, String password, String role) async {
+    if (username.trim().isEmpty) throw Exception('Username cannot be empty.');
+    if (password.length < 4) {
+      throw Exception('Password must be at least 4 characters.');
+    }
+
+    final existing = await _db.query(
+      'users',
+      where: 'username = ?',
+      whereArgs: [username.trim()],
+    );
+    if (existing.isNotEmpty) {
+      throw Exception('Username is already taken.');
+    }
     final salt = _generateSalt();
     final newUser = User(
       id: const Uuid().v4(),

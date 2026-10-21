@@ -40,9 +40,12 @@ class SaleRepository {
         where: 'id = ?',
         whereArgs: [saleId],
       );
-      if (saleMaps.isEmpty) throw Exception('Sale not found');
-      if (saleMaps.first['status'] == 'VOIDED')
+      if (saleMaps.isEmpty) {
+        throw Exception('Sale not found');
+      }
+      if (saleMaps.first['status'] == 'VOIDED') {
         throw Exception('Sale is already voided');
+      }
 
       await txn.update(
         'sales',
