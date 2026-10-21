@@ -1,26 +1,27 @@
 import 'package:flutter/material.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'core/database/local_database.dart';
+import 'core/licensing/license_validator.dart';
 import 'core/models/user.dart';
 import 'core/repositories/product_repository.dart';
 import 'core/repositories/sale_repository.dart';
-import 'core/repositories/user_repository.dart';
 import 'core/repositories/shift_repository.dart';
-import 'core/licensing/license_validator.dart';
+import 'core/repositories/user_repository.dart';
 import 'core/theme/app_theme.dart';
+import 'features/audit/audit_log_screen.dart';
 import 'features/auth/login_screen.dart';
 import 'features/dashboard/dashboard_screen.dart';
+import 'features/licensing/activation_screen.dart';
+import 'features/products/product_list_screen.dart';
+import 'features/register/register_screen.dart';
+import 'features/reports/reports_screen.dart';
 import 'features/sales/sales_history_screen.dart';
 import 'features/sales/sales_screen.dart';
-import 'features/users/user_management_screen.dart';
 import 'features/settings/settings_screen.dart';
-import 'features/audit/audit_log_screen.dart';
-import 'features/register/register_screen.dart';
-import 'features/licensing/activation_screen.dart';
+import 'features/users/user_management_screen.dart';
 
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
-
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final db = await LocalDatabase.open();
@@ -29,17 +30,11 @@ void main() async {
   final userRepository = UserRepository(db);
   final shiftRepository = ShiftRepository(db);
 
-  await userRepository.seedDefaultUser();
-
-  // Seed default device to satisfy foreign key constraints
-  final deviceResult = await db.query('devices', limit: 1);
-  if (deviceResult.isEmpty) {
-    await db.insert('devices', {
-      'id': 'device-1',
-      'name': 'Primary Register PC',
-      'platform': 'Windows',
-    });
-  }
+  final deviceId = await LocalDatabase.registerCurrentDevice(db);
+  final themeSetting = await LocalDatabase.getSetting(
+    db,
+    LocalDatabase.themeSettingKey,
+  );
 
   runApp(
     WholesalePosApp(
@@ -48,6 +43,8 @@ void main() async {
       saleRepository: saleRepository,
       userRepository: userRepository,
       shiftRepository: shiftRepository,
+      deviceId: deviceId,
+      initialDarkMode: themeSetting == 'dark',
     ),
   );
 }
@@ -58,6 +55,8 @@ class WholesalePosApp extends StatefulWidget {
   final SaleRepository saleRepository;
   final UserRepository userRepository;
   final ShiftRepository shiftRepository;
+  final String deviceId;
+  final bool initialDarkMode;
 
   const WholesalePosApp({
     super.key,
@@ -66,6 +65,8 @@ class WholesalePosApp extends StatefulWidget {
     required this.saleRepository,
     required this.userRepository,
     required this.shiftRepository,
+    required this.deviceId,
+    required this.initialDarkMode,
   });
 
   @override
@@ -73,10 +74,21 @@ class WholesalePosApp extends StatefulWidget {
 }
 
 class _WholesalePosAppState extends State<WholesalePosApp> {
-  ThemeMode _themeMode = ThemeMode.light;
+  late ThemeMode _themeMode;
+
+  @override
+  void initState() {
+    super.initState();
+    _themeMode = widget.initialDarkMode ? ThemeMode.dark : ThemeMode.light;
+  }
 
   void _toggleTheme(bool isDark) {
     setState(() => _themeMode = isDark ? ThemeMode.dark : ThemeMode.light);
+    LocalDatabase.setSetting(
+      widget.db,
+      LocalDatabase.themeSettingKey,
+      isDark ? 'dark' : 'light',
+    );
   }
 
   @override
@@ -93,6 +105,7 @@ class _WholesalePosAppState extends State<WholesalePosApp> {
         saleRepository: widget.saleRepository,
         userRepository: widget.userRepository,
         shiftRepository: widget.shiftRepository,
+        deviceId: widget.deviceId,
         isDarkMode: _themeMode == ThemeMode.dark,
         onToggleTheme: () => _toggleTheme(_themeMode == ThemeMode.light),
       ),
@@ -106,6 +119,7 @@ class LicenseWrapper extends StatefulWidget {
   final SaleRepository saleRepository;
   final UserRepository userRepository;
   final ShiftRepository shiftRepository;
+  final String deviceId;
   final bool isDarkMode;
   final VoidCallback onToggleTheme;
 
@@ -116,6 +130,7 @@ class LicenseWrapper extends StatefulWidget {
     required this.saleRepository,
     required this.userRepository,
     required this.shiftRepository,
+    required this.deviceId,
     required this.isDarkMode,
     required this.onToggleTheme,
   });
@@ -138,6 +153,7 @@ class _LicenseWrapperState extends State<LicenseWrapper> {
   Future<void> _checkLicense() async {
     setState(() => _isChecking = true);
     final license = await LicenseValidator.validateLicense();
+    if (!mounted) return;
 
     setState(() {
       if (license != null && license['error'] != null) {
@@ -166,6 +182,7 @@ class _LicenseWrapperState extends State<LicenseWrapper> {
       saleRepository: widget.saleRepository,
       userRepository: widget.userRepository,
       shiftRepository: widget.shiftRepository,
+      deviceId: widget.deviceId,
       isDarkMode: widget.isDarkMode,
       onToggleTheme: widget.onToggleTheme,
     );
@@ -178,6 +195,7 @@ class AuthWrapper extends StatefulWidget {
   final SaleRepository saleRepository;
   final UserRepository userRepository;
   final ShiftRepository shiftRepository;
+  final String deviceId;
   final bool isDarkMode;
   final VoidCallback onToggleTheme;
 
@@ -188,6 +206,7 @@ class AuthWrapper extends StatefulWidget {
     required this.saleRepository,
     required this.userRepository,
     required this.shiftRepository,
+    required this.deviceId,
     required this.isDarkMode,
     required this.onToggleTheme,
   });
@@ -214,6 +233,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
       saleRepository: widget.saleRepository,
       userRepository: widget.userRepository,
       shiftRepository: widget.shiftRepository,
+      deviceId: widget.deviceId,
       currentUser: _currentUser!,
       onLogout: () => setState(() => _currentUser = null),
       isDarkMode: widget.isDarkMode,
@@ -228,6 +248,7 @@ class MainLayout extends StatefulWidget {
   final SaleRepository saleRepository;
   final UserRepository userRepository;
   final ShiftRepository shiftRepository;
+  final String deviceId;
   final User currentUser;
   final VoidCallback onLogout;
   final bool isDarkMode;
@@ -240,6 +261,7 @@ class MainLayout extends StatefulWidget {
     required this.saleRepository,
     required this.userRepository,
     required this.shiftRepository,
+    required this.deviceId,
     required this.currentUser,
     required this.onLogout,
     required this.isDarkMode,
@@ -256,11 +278,14 @@ class _MainLayoutState extends State<MainLayout> {
       GlobalKey<RegisterScreenState>();
   final GlobalKey<DashboardScreenState> _dashboardKey =
       GlobalKey<DashboardScreenState>();
+  final GlobalKey<ReportsScreenState> _reportsKey =
+      GlobalKey<ReportsScreenState>();
   final GlobalKey<SalesScreenState> _salesKey = GlobalKey<SalesScreenState>();
 
   void _refreshDataScreens() {
     _registerKey.currentState?.loadData();
     _dashboardKey.currentState?.loadDashboard();
+    _reportsKey.currentState?.loadReports();
     _salesKey.currentState?.loadShift();
   }
 
@@ -273,6 +298,8 @@ class _MainLayoutState extends State<MainLayout> {
         key: _salesKey,
         saleRepository: widget.saleRepository,
         shiftRepository: widget.shiftRepository,
+        productRepository: widget.productRepository,
+        deviceId: widget.deviceId,
         currentUser: widget.currentUser,
         onSaleCompleted: _refreshDataScreens,
       ),
@@ -288,16 +315,24 @@ class _MainLayoutState extends State<MainLayout> {
         shiftRepository: widget.shiftRepository,
         saleRepository: widget.saleRepository,
       ),
+      if (isOwner) ProductListScreen(repository: widget.productRepository),
       if (isOwner)
         DashboardScreen(
           key: _dashboardKey,
           saleRepository: widget.saleRepository,
         ),
-      if (isOwner) UserManagementScreen(userRepository: widget.userRepository),
+      if (isOwner)
+        ReportsScreen(key: _reportsKey, saleRepository: widget.saleRepository),
+      if (isOwner)
+        UserManagementScreen(
+          userRepository: widget.userRepository,
+          currentUser: widget.currentUser,
+        ),
       if (isOwner) AuditLogScreen(saleRepository: widget.saleRepository),
       SettingsScreen(
         currentUser: widget.currentUser,
         db: widget.db,
+        userRepository: widget.userRepository,
         onLogout: widget.onLogout,
         isDarkMode: widget.isDarkMode,
         onToggleTheme: widget.onToggleTheme,
@@ -305,130 +340,141 @@ class _MainLayoutState extends State<MainLayout> {
     ];
 
     if (_selectedIndex >= screens.length) _selectedIndex = 0;
+    final settingsIndex = screens.length - 1;
 
     return Scaffold(
-      body: Row(
-        children: [
-          Container(
-            width: 250,
-            decoration: BoxDecoration(
-              color: Theme.of(context).cardColor,
-              border: Border(
-                right: BorderSide(
-                  color: Theme.of(context).dividerColor,
-                  width: 1,
-                ),
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(24.0),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.primary,
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Icon(
-                          Icons.storefront,
-                          color: Theme.of(context).colorScheme.onPrimary,
-                          size: 16,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Text(
-                        'Wholesale POS',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 16,
-                          letterSpacing: -0.5,
-                          color: Theme.of(context).colorScheme.onSurface,
-                        ),
-                      ),
-                    ],
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final sidebarWidth = constraints.maxWidth < 900 ? 200.0 : 250.0;
+          return Row(
+            children: [
+              Container(
+                width: sidebarWidth,
+                decoration: BoxDecoration(
+                  color: Theme.of(context).cardColor,
+                  border: Border(
+                    right: BorderSide(
+                      color: Theme.of(context).dividerColor,
+                      width: 1,
+                    ),
                   ),
                 ),
-
-                Expanded(
-                  child: ListView(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    children: [
-                      _buildNavItem(0, Icons.shopping_cart, 'POS'),
-                      _buildNavItem(1, Icons.history, 'History'),
-                      _buildNavItem(2, Icons.point_of_sale, 'Register'),
-                      if (isOwner) ...[
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(12, 24, 12, 8),
-                          child: Text(
-                            'ADMINISTRATION',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: Theme.of(context)
-                                  .textTheme
-                                  .bodySmall
-                                  ?.color,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(24.0),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context).colorScheme.primary,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Icon(
+                              Icons.storefront,
+                              color: Theme.of(context).colorScheme.onPrimary,
+                              size: 16,
                             ),
                           ),
-                        ),
-                        _buildNavItem(3, Icons.dashboard, 'Dashboard'),
-                        _buildNavItem(4, Icons.people, 'Users'),
-                        _buildNavItem(5, Icons.security, 'Audit Logs'),
-                      ],
-                    ],
-                  ),
-                ),
-
-                const Divider(),
-                ListTile(
-                  onTap: () => setState(() => _selectedIndex = isOwner ? 6 : 3),
-                  leading: CircleAvatar(
-                    radius: 16,
-                    backgroundColor: Theme.of(context).colorScheme.primary,
-                    child: Text(
-                      widget.currentUser.username[0].toUpperCase(),
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.onPrimary,
-                        fontSize: 12,
+                          const SizedBox(width: 12),
+                          Flexible(
+                            child: Text(
+                              'Wholesale POS',
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 16,
+                                letterSpacing: -0.5,
+                                color: Theme.of(context).colorScheme.onSurface,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ),
-                  title: Text(
-                    widget.currentUser.username,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w500,
-                      fontSize: 13,
+                    Expanded(
+                      child: ListView(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        children: [
+                          _buildNavItem(0, Icons.shopping_cart, 'POS'),
+                          _buildNavItem(1, Icons.history, 'History'),
+                          _buildNavItem(2, Icons.point_of_sale, 'Register'),
+                          if (isOwner) ...[
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(12, 24, 12, 8),
+                              child: Text(
+                                'ADMINISTRATION',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: Theme.of(context)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.color,
+                                ),
+                              ),
+                            ),
+                            _buildNavItem(3, Icons.inventory_2, 'Products'),
+                            _buildNavItem(4, Icons.dashboard, 'Dashboard'),
+                            _buildNavItem(5, Icons.bar_chart, 'Reports'),
+                            _buildNavItem(6, Icons.people, 'Users'),
+                            _buildNavItem(7, Icons.security, 'Audit Logs'),
+                          ],
+                        ],
+                      ),
                     ),
-                  ),
-                  subtitle: Text(
-                    widget.currentUser.role,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Theme.of(context).textTheme.bodySmall?.color,
+                    const Divider(),
+                    ListTile(
+                      onTap: () =>
+                          setState(() => _selectedIndex = settingsIndex),
+                      leading: CircleAvatar(
+                        radius: 16,
+                        backgroundColor: Theme.of(context).colorScheme.primary,
+                        child: Text(
+                          widget.currentUser.username.isEmpty
+                              ? '?'
+                              : widget.currentUser.username[0].toUpperCase(),
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.onPrimary,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                      title: Text(
+                        widget.currentUser.username,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w500,
+                          fontSize: 13,
+                        ),
+                      ),
+                      subtitle: Text(
+                        widget.currentUser.role,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Theme.of(context).textTheme.bodySmall?.color,
+                        ),
+                      ),
+                      trailing: Icon(
+                        Icons.settings,
+                        size: 16,
+                        color: Theme.of(context).textTheme.bodySmall?.color,
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 4,
+                      ),
                     ),
-                  ),
-                  trailing: Icon(
-                    Icons.settings,
-                    size: 16,
-                    color: Theme.of(context).textTheme.bodySmall?.color,
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 4,
-                  ),
+                  ],
                 ),
-              ],
-            ),
-          ),
-
-          Expanded(
-            child: IndexedStack(index: _selectedIndex, children: screens),
-          ),
-        ],
+              ),
+              Expanded(
+                child: IndexedStack(index: _selectedIndex, children: screens),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

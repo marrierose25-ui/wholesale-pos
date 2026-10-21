@@ -14,11 +14,11 @@ void main() {
     repository = SaleRepository(db);
 
     await db.insert('users', {
-      'id': 'cashier-1',
+      'id': 'owner-1',
       'username': 'test',
       'password_hash': 'x',
       'salt': 'x',
-      'role': 'CASHIER',
+      'role': 'OWNER',
       'created_at': DateTime.now().toIso8601String(),
     });
     await db.insert('devices', {
@@ -28,7 +28,7 @@ void main() {
     });
     await db.insert('shifts', {
       'id': 'shift-1',
-      'cashier_id': 'cashier-1',
+      'cashier_id': 'owner-1',
       'opening_cash_minor_units': 0,
       'status': 'OPEN',
       'opened_at': DateTime.now().toIso8601String(),
@@ -46,7 +46,7 @@ void main() {
       final sale = Sale(
         id: 'sale-to-void',
         receiptNumber: 'REC-VOID',
-        cashierId: 'cashier-1',
+        cashierId: 'owner-1',
         deviceId: 'device-1',
         shiftId: 'shift-1',
         subtotalMinorUnits: 5000,
@@ -75,7 +75,7 @@ void main() {
       await repository.voidSale(
         'sale-to-void',
         'REC-VOID',
-        'cashier-1',
+        'owner-1',
         'mistake',
       );
 

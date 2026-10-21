@@ -20,4 +20,13 @@ void main() {
 
     await db.close();
   });
+
+  test('Registers and reuses a generated device ID', () async {
+    final db = await LocalDatabase.openInMemory();
+    final first = await LocalDatabase.registerCurrentDevice(db);
+    final second = await LocalDatabase.registerCurrentDevice(db);
+    expect(first, isNot('device-1'));
+    expect(second, first);
+    await db.close();
+  });
 }

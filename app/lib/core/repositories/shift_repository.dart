@@ -20,9 +20,7 @@ class ShiftRepository {
   }
 
   Future<void> openShift(String cashierId, int openingCash) async {
-    final active = await getActiveShift();
-    if (active != null) throw Exception('A shift is already open');
-
+    if (openingCash < 0) throw Exception('Opening cash cannot be negative.');
     final shift = Shift(
       id: const Uuid().v4(),
       cashierId: cashierId,
@@ -30,22 +28,74 @@ class ShiftRepository {
       status: 'OPEN',
       openedAt: DateTime.now(),
     );
-    await _db.insert('shifts', shift.toMap());
+    await _db.transaction((txn) async {
+      final active = await txn.query(
+        'shifts',
+        where: "status = 'OPEN'",
+        limit: 1,
+      );
+      if (active.isNotEmpty) throw Exception('A shift is already open');
+      await txn.insert('shifts', shift.toMap());
+      await txn.insert('audit_logs', {
+        'id': const Uuid().v4(),
+        'user_id': cashierId,
+        'action': 'SHIFT_OPENED',
+        'details': 'Shift $shift.id opened with cash $openingCash minor units.',
+        'created_at': DateTime.now().toIso8601String(),
+      });
+    });
   }
 
   Future<void> addCashMovement(
     String shiftId,
     String type,
     int amount,
-    String reason,
-  ) async {
-    await _db.insert('cash_movements', {
-      'id': const Uuid().v4(),
-      'shift_id': shiftId,
-      'type': type, // WITHDRAWAL, DEPOSIT, EXPENSE
-      'amount_minor_units': amount,
-      'reason': reason,
-      'created_at': DateTime.now().toIso8601String(),
+    String reason, {
+    String? userId,
+  }) async {
+    if (amount <= 0) throw Exception('Movement amount must be positive.');
+    if (!{'WITHDRAWAL', 'DEPOSIT', 'EXPENSE'}.contains(type)) {
+      throw Exception('Invalid cash movement type.');
+    }
+    if (reason.trim().isEmpty) throw Exception('A reason is required.');
+    await _db.transaction((txn) async {
+      final shifts = await txn.query(
+        'shifts',
+        where: "id = ? AND status = 'OPEN'",
+        whereArgs: [shiftId],
+        limit: 1,
+      );
+      if (shifts.isEmpty) {
+        throw Exception('Cash movement requires an open shift.');
+      }
+      if (userId != null) {
+        final users = await txn.query(
+          'users',
+          columns: ['is_active'],
+          where: 'id = ?',
+          whereArgs: [userId],
+          limit: 1,
+        );
+        if (users.isEmpty || users.first['is_active'] != 1) {
+          throw Exception('An active user is required.');
+        }
+      }
+      await txn.insert('cash_movements', {
+        'id': const Uuid().v4(),
+        'shift_id': shiftId,
+        'user_id': userId,
+        'type': type,
+        'amount_minor_units': amount,
+        'reason': reason.trim(),
+        'created_at': DateTime.now().toIso8601String(),
+      });
+      await txn.insert('audit_logs', {
+        'id': const Uuid().v4(),
+        'user_id': userId,
+        'action': 'CASH_MOVEMENT_ADDED',
+        'details': '$type $amount for shift $shiftId: ${reason.trim()}',
+        'created_at': DateTime.now().toIso8601String(),
+      });
     });
   }
 
@@ -72,9 +122,9 @@ class ShiftRepository {
       '''
       SELECT SUM(total_minor_units) as total 
       FROM sales 
-      WHERE status = 'VOIDED' AND shift_id = ?
+      WHERE status = 'VOIDED' AND (voided_shift_id = ? OR (voided_shift_id IS NULL AND shift_id = ?))
     ''',
-      [shift.id],
+      [shift.id, shift.id],
     );
 
     final cashMovements = await _db.rawQuery(
@@ -96,7 +146,11 @@ class ShiftRepository {
     final withdrawals = (cashMovements.first['withdrawals'] as int?) ?? 0;
 
     final expectedCash =
-        shift.openingCashMinorUnits + cashTotal + deposits - withdrawals;
+        shift.openingCashMinorUnits +
+        cashTotal +
+        deposits -
+        withdrawals -
+        await _cashRefundsForShift(shift.id);
 
     return {
       'cash_sales': cashTotal,
@@ -108,18 +162,70 @@ class ShiftRepository {
     };
   }
 
-  Future<void> closeShift(Shift shift, int closingCash) async {
-    final summary = await getShiftSummary(shift);
-    await _db.update(
-      'shifts',
-      {
-        'closing_cash_minor_units': closingCash,
-        'expected_cash_minor_units': summary['expected_cash'],
-        'status': 'CLOSED',
-        'closed_at': DateTime.now().toIso8601String(),
-      },
-      where: 'id = ?',
-      whereArgs: [shift.id],
+  Future<int> _cashRefundsForShift(String shiftId) async {
+    final rows = await _db.rawQuery(
+      '''
+      SELECT COALESCE(SUM(total_minor_units), 0) AS total FROM sales
+      WHERE status = 'VOIDED' AND payment_method = 'CASH'
+        AND (voided_shift_id = ? OR (voided_shift_id IS NULL AND shift_id = ?))
+    ''',
+      [shiftId, shiftId],
     );
+    return rows.first['total'] as int;
+  }
+
+  Future<void> closeShift(
+    Shift shift,
+    int closingCash, {
+    String? userId,
+  }) async {
+    if (closingCash < 0) throw Exception('Closing cash cannot be negative.');
+    await _db.transaction((txn) async {
+      final rows = await txn.query(
+        'shifts',
+        where: "id = ? AND status = 'OPEN'",
+        whereArgs: [shift.id],
+        limit: 1,
+      );
+      if (rows.isEmpty) throw Exception('Shift is no longer open.');
+      final currentShift = Shift.fromMap(rows.first);
+      final cashSales = await txn.rawQuery(
+        "SELECT COALESCE(SUM(total_minor_units), 0) AS total FROM sales WHERE status = 'COMPLETED' AND payment_method = 'CASH' AND shift_id = ?",
+        [shift.id],
+      );
+      final movements = await txn.rawQuery(
+        "SELECT COALESCE(SUM(CASE WHEN type = 'DEPOSIT' THEN amount_minor_units ELSE -amount_minor_units END), 0) AS total FROM cash_movements WHERE shift_id = ?",
+        [shift.id],
+      );
+      final cashVoids = await txn.rawQuery(
+        "SELECT COALESCE(SUM(total_minor_units), 0) AS total FROM sales WHERE status = 'VOIDED' AND payment_method = 'CASH' AND (voided_shift_id = ? OR (voided_shift_id IS NULL AND shift_id = ?))",
+        [shift.id, shift.id],
+      );
+      final expected =
+          currentShift.openingCashMinorUnits +
+          (cashSales.first['total'] as int) +
+          (movements.first['total'] as int) -
+          (cashVoids.first['total'] as int);
+      await txn.update(
+        'shifts',
+        {
+          'closing_cash_minor_units': closingCash,
+          'expected_cash_minor_units': expected,
+          'status': 'CLOSED',
+          'closed_at': DateTime.now().toIso8601String(),
+        },
+        where: "id = ? AND status = 'OPEN'",
+        whereArgs: [shift.id],
+      );
+      await txn.insert('audit_logs', {
+        'id': const Uuid().v4(),
+        'user_id': userId ?? shift.cashierId,
+        'action': 'SHIFT_CLOSED',
+        'details':
+            'Shift ${shift.id} closed. Expected: $expected, '
+            'Counted: $closingCash, Difference: ${closingCash - expected}.',
+        'created_at': DateTime.now().toIso8601String(),
+      });
+    });
   }
 }

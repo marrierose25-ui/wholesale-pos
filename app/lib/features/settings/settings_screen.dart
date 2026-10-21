@@ -1,15 +1,18 @@
-import 'package:flutter/material.dart';
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/material.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import '../../core/database/local_database.dart';
 import '../../core/models/user.dart';
+import '../../core/repositories/user_repository.dart';
+import '../../core/theme/app_theme.dart';
 import '../../core/utils/data_exporter.dart';
 import '../../core/utils/data_importer.dart';
-import '../../core/theme/app_theme.dart';
 
 class SettingsScreen extends StatefulWidget {
   final User currentUser;
   final Database db;
+  final UserRepository userRepository;
   final VoidCallback onLogout;
   final bool isDarkMode;
   final VoidCallback onToggleTheme;
@@ -18,6 +21,7 @@ class SettingsScreen extends StatefulWidget {
     super.key,
     required this.currentUser,
     required this.db,
+    required this.userRepository,
     required this.onLogout,
     required this.isDarkMode,
     required this.onToggleTheme,
@@ -31,10 +35,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isExporting = false;
   bool _isImporting = false;
 
+  bool get _isOwner => widget.currentUser.role == 'OWNER';
+
   Future<void> _exportData() async {
     setState(() => _isExporting = true);
     try {
-      final path = await DataExporter.exportToJson(widget.db);
+      final path = await DataExporter.exportToJson(
+        widget.db,
+        requestingUserId: widget.currentUser.id,
+      );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -45,8 +54,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Export failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString().replaceAll('Exception: ', ''))),
+        );
       }
     } finally {
       if (mounted) setState(() => _isExporting = false);
@@ -65,7 +75,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Restore Data?'),
         content: const Text(
-          'WARNING: This will completely delete all current sales, products, and users, replacing them with the backup data. This action cannot be undone.',
+          'WARNING: This will completely delete all current sales, products, '
+          'and users (including passwords), replacing them with the backup '
+          'data. This action cannot be undone.',
         ),
         actions: [
           TextButton(
@@ -85,12 +97,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     setState(() => _isImporting = true);
     try {
-      await DataImporter.importFromJson(widget.db, file.path);
+      await DataImporter.importFromJson(
+        widget.db,
+        file.path,
+        requestingUserId: widget.currentUser.id,
+      );
+      // Restores replace the devices table; make sure this machine still has
+      // a device row so new sales do not violate the foreign key.
+      await LocalDatabase.registerCurrentDevice(widget.db);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'Data restored successfully. Please restart the app.',
+              'Data restored successfully. Restart the app to refresh all '
+              'screens.',
             ),
             duration: Duration(seconds: 5),
           ),
@@ -98,11 +118,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Restore failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString().replaceAll('Exception: ', ''))),
+        );
       }
     } finally {
       if (mounted) setState(() => _isImporting = false);
+    }
+  }
+
+  Future<void> _changePassword() async {
+    final changed = await showDialog<bool>(
+      context: context,
+      builder: (context) => _ChangePasswordDialog(
+        userRepository: widget.userRepository,
+        userId: widget.currentUser.id,
+      ),
+    );
+    if (changed == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Password changed successfully.')),
+      );
     }
   }
 
@@ -119,7 +155,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               leading: CircleAvatar(
                 backgroundColor: AppTheme.primary,
                 child: Text(
-                  widget.currentUser.username[0].toUpperCase(),
+                  widget.currentUser.username.isEmpty
+                      ? '?'
+                      : widget.currentUser.username[0].toUpperCase(),
                   style: const TextStyle(color: Colors.white),
                 ),
               ),
@@ -143,46 +181,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               title: const Text('Dark Mode'),
               value: widget.isDarkMode,
-              onChanged: (val) => widget.onToggleTheme(),
-            ),
-          ),
-          const SizedBox(height: 24),
-          const Text(
-            'Data Management',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-          ),
-          const SizedBox(height: 8),
-          Card(
-            child: Column(
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.download, color: Colors.blue),
-                  title: const Text('Export Data (Backup)'),
-                  subtitle: const Text('Save all data to a JSON file'),
-                  trailing: _isExporting
-                      ? const SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.chevron_right),
-                  onTap: _isExporting ? null : _exportData,
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.upload, color: Colors.orange),
-                  title: const Text('Restore Data (Import)'),
-                  subtitle: const Text('Restore from a previous JSON backup'),
-                  trailing: _isImporting
-                      ? const SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.chevron_right),
-                  onTap: _isImporting ? null : _importData,
-                ),
-              ],
+              onChanged: (value) => widget.onToggleTheme(),
             ),
           ),
           const SizedBox(height: 24),
@@ -192,17 +191,204 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 8),
           Card(
-            child: ListTile(
-              leading: const Icon(Icons.logout, color: AppTheme.danger),
-              title: const Text(
-                'Logout',
-                style: TextStyle(color: AppTheme.danger),
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.lock_reset),
+                  title: const Text('Change Password'),
+                  subtitle: const Text('Update your sign-in password'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _changePassword,
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.logout, color: AppTheme.danger),
+                  title: const Text(
+                    'Logout',
+                    style: TextStyle(color: AppTheme.danger),
+                  ),
+                  onTap: widget.onLogout,
+                ),
+              ],
+            ),
+          ),
+          if (_isOwner) ...[
+            const SizedBox(height: 24),
+            const Text(
+              'Data Management',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+            ),
+            const SizedBox(height: 8),
+            Card(
+              child: Column(
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.download, color: Colors.blue),
+                    title: const Text('Export Data (Backup)'),
+                    subtitle: const Text(
+                      'Owner only. The backup includes password hashes, so '
+                      'store it securely.',
+                    ),
+                    trailing: _isExporting
+                        ? const SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.chevron_right),
+                    onTap: _isExporting ? null : _exportData,
+                  ),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: const Icon(Icons.upload, color: Colors.orange),
+                    title: const Text('Restore Data (Import)'),
+                    subtitle: const Text('Restore from a previous JSON backup'),
+                    trailing: _isImporting
+                        ? const SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.chevron_right),
+                    onTap: _isImporting ? null : _importData,
+                  ),
+                ],
               ),
-              onTap: widget.onLogout,
+            ),
+          ],
+          const SizedBox(height: 24),
+          Center(
+            child: Text(
+              'Wholesale POS • Database schema v${LocalDatabase.schemaVersion}',
+              style: const TextStyle(color: AppTheme.muted, fontSize: 12),
             ),
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ChangePasswordDialog extends StatefulWidget {
+  final UserRepository userRepository;
+  final String userId;
+
+  const _ChangePasswordDialog({
+    required this.userRepository,
+    required this.userId,
+  });
+
+  @override
+  State<_ChangePasswordDialog> createState() => _ChangePasswordDialogState();
+}
+
+class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
+  final _currentController = TextEditingController();
+  final _newController = TextEditingController();
+  final _confirmController = TextEditingController();
+  bool _isSaving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _currentController.dispose();
+    _newController.dispose();
+    _confirmController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final current = _currentController.text;
+    final next = _newController.text;
+    if (next.length < UserRepository.minimumPasswordLength) {
+      setState(
+        () => _error =
+            'New password must be at least '
+            '${UserRepository.minimumPasswordLength} characters.',
+      );
+      return;
+    }
+    if (next != _confirmController.text) {
+      setState(() => _error = 'New passwords do not match.');
+      return;
+    }
+
+    setState(() {
+      _isSaving = true;
+      _error = null;
+    });
+    try {
+      await widget.userRepository.changePassword(
+        userId: widget.userId,
+        currentPassword: current,
+        newPassword: next,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.toString().replaceAll('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Change Password'),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _currentController,
+              obscureText: true,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: 'Current Password'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _newController,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'New Password'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _confirmController,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'Confirm New Password',
+              ),
+              onSubmitted: (_) => _submit(),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                _error!,
+                style: const TextStyle(color: AppTheme.danger, fontSize: 13),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isSaving ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _isSaving ? null : _submit,
+          child: _isSaving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Save'),
+        ),
+      ],
     );
   }
 }

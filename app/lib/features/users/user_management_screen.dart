@@ -2,11 +2,17 @@ import 'package:flutter/material.dart';
 
 import '../../core/models/user.dart';
 import '../../core/repositories/user_repository.dart';
+import '../../core/theme/app_theme.dart';
 
 class UserManagementScreen extends StatefulWidget {
   final UserRepository userRepository;
+  final User currentUser;
 
-  const UserManagementScreen({super.key, required this.userRepository});
+  const UserManagementScreen({
+    super.key,
+    required this.userRepository,
+    required this.currentUser,
+  });
 
   @override
   State<UserManagementScreen> createState() => _UserManagementScreenState();
@@ -15,6 +21,7 @@ class UserManagementScreen extends StatefulWidget {
 class _UserManagementScreenState extends State<UserManagementScreen> {
   List<User> _users = [];
   bool _isLoading = true;
+  String? _error;
 
   @override
   void initState() {
@@ -23,86 +30,118 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   }
 
   Future<void> _loadUsers() async {
-    setState(() => _isLoading = true);
-    final users = await widget.userRepository.getAllUsers();
     setState(() {
-      _users = users;
-      _isLoading = false;
+      _isLoading = true;
+      _error = null;
     });
+    try {
+      final users = await widget.userRepository.getAllUsers();
+      if (!mounted) return;
+      setState(() {
+        _users = users;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = e.toString().replaceAll('Exception: ', '');
+      });
+    }
   }
 
-  void _showAddUserDialog() {
-    final usernameController = TextEditingController();
-    final passwordController = TextEditingController();
-    String selectedRole = 'CASHIER';
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
 
-    showDialog(
+  Future<void> _showAddUserDialog() async {
+    final created = await showDialog<bool>(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          return AlertDialog(
-            title: const Text('Add New User'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: usernameController,
-                  decoration: const InputDecoration(labelText: 'Username'),
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: passwordController,
-                  obscureText: true,
-                  decoration: const InputDecoration(labelText: 'Password'),
-                ),
-                const SizedBox(height: 16),
-                DropdownButtonFormField<String>(
-                  initialValue: selectedRole,
-                  decoration: const InputDecoration(labelText: 'Role'),
-                  items: const [
-                    DropdownMenuItem(value: 'CASHIER', child: Text('Cashier')),
-                    DropdownMenuItem(
-                      value: 'OWNER',
-                      child: Text('Owner / Admin'),
-                    ),
-                  ],
-                  onChanged: (val) => setDialogState(() => selectedRole = val!),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () async {
-                  if (usernameController.text.trim().isEmpty ||
-                      passwordController.text.isEmpty) {
-                    return;
-                  }
+      builder: (context) =>
+          _AddUserDialog(userRepository: widget.userRepository),
+    );
+    if (created == true && mounted) {
+      await _loadUsers();
+      _showMessage('User created.');
+    }
+  }
 
-                  await widget.userRepository.createUser(
-                    usernameController.text.trim(),
-                    passwordController.text,
-                    selectedRole,
-                  );
-
-                  if (context.mounted) Navigator.pop(context);
-                  _loadUsers();
-                },
-                child: const Text('Create User'),
-              ),
-            ],
-          );
-        },
+  Future<void> _resetPassword(User user) async {
+    final reset = await showDialog<bool>(
+      context: context,
+      builder: (context) => _ResetPasswordDialog(
+        userRepository: widget.userRepository,
+        targetUserId: user.id,
+        actingUserId: widget.currentUser.id,
+        username: user.username,
       ),
     );
+    if (reset == true && mounted) {
+      _showMessage('Password reset for ${user.username}.');
+    }
+  }
+
+  Future<void> _toggleActive(User user) async {
+    final activating = !user.isActive;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(activating ? 'Activate User?' : 'Deactivate User?'),
+        content: Text(
+          activating
+              ? '${user.username} will be able to sign in again.'
+              : '${user.username} will no longer be able to sign in. '
+                    'Existing sales remain attributed to them.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: activating ? null : AppTheme.danger,
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(activating ? 'Activate' : 'Deactivate'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+
+    try {
+      await widget.userRepository.setUserActive(
+        targetUserId: user.id,
+        active: activating,
+        actingUserId: widget.currentUser.id,
+      );
+      if (!mounted) return;
+      await _loadUsers();
+      _showMessage(activating ? 'User activated.' : 'User deactivated.');
+    } catch (e) {
+      if (mounted) {
+        _showMessage(e.toString().replaceAll('Exception: ', ''));
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     if (_isLoading) return const Center(child: CircularProgressIndicator());
+    if (_error != null) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(_error!),
+            const SizedBox(height: 8),
+            TextButton(onPressed: _loadUsers, child: const Text('Retry')),
+          ],
+        ),
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -111,23 +150,54 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
           IconButton(icon: const Icon(Icons.refresh), onPressed: _loadUsers),
         ],
       ),
-      body: ListView.builder(
+      body: ListView.separated(
         itemCount: _users.length,
+        separatorBuilder: (context, index) => const Divider(height: 1),
         itemBuilder: (context, index) {
           final user = _users[index];
+          final isSelf = user.id == widget.currentUser.id;
           return ListTile(
             leading: CircleAvatar(
               backgroundColor: user.role == 'OWNER' ? Colors.blue : Colors.grey,
-              child: Icon(Icons.person, color: Colors.white),
+              child: const Icon(Icons.person, color: Colors.white),
             ),
-            title: Text(user.username),
-            subtitle: Text(user.role),
-            trailing: user.isActive
-                ? const Chip(label: Text('Active'))
-                : const Chip(
+            title: Text(
+              user.username,
+              style: TextStyle(
+                color: user.isActive ? null : AppTheme.muted,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            subtitle: Text(isSelf ? '${user.role} (you)' : user.role),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (!user.isActive)
+                  const Chip(
                     label: Text('Disabled'),
-                    backgroundColor: Colors.red,
+                    backgroundColor: AppTheme.danger,
+                    labelStyle: TextStyle(color: Colors.white, fontSize: 11),
                   ),
+                PopupMenuButton<String>(
+                  tooltip: 'User actions',
+                  onSelected: (value) {
+                    if (value == 'reset') _resetPassword(user);
+                    if (value == 'toggle') _toggleActive(user);
+                  },
+                  itemBuilder: (context) => [
+                    const PopupMenuItem(
+                      value: 'reset',
+                      child: Text('Reset Password'),
+                    ),
+                    if (!isSelf)
+                      PopupMenuItem(
+                        value: 'toggle',
+                        child: Text(user.isActive ? 'Deactivate' : 'Activate'),
+                      ),
+                  ],
+                ),
+              ],
+            ),
           );
         },
       ),
@@ -136,6 +206,252 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         icon: const Icon(Icons.person_add),
         label: const Text('Add User'),
       ),
+    );
+  }
+}
+
+class _AddUserDialog extends StatefulWidget {
+  final UserRepository userRepository;
+
+  const _AddUserDialog({required this.userRepository});
+
+  @override
+  State<_AddUserDialog> createState() => _AddUserDialogState();
+}
+
+class _AddUserDialogState extends State<_AddUserDialog> {
+  final _usernameController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _confirmController = TextEditingController();
+  String _role = 'CASHIER';
+  bool _isSaving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _usernameController.dispose();
+    _passwordController.dispose();
+    _confirmController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final username = _usernameController.text.trim();
+    final password = _passwordController.text;
+    if (username.isEmpty) {
+      setState(() => _error = 'Enter a username.');
+      return;
+    }
+    if (password.length < UserRepository.minimumPasswordLength) {
+      setState(
+        () => _error =
+            'Password must be at least '
+            '${UserRepository.minimumPasswordLength} characters.',
+      );
+      return;
+    }
+    if (password != _confirmController.text) {
+      setState(() => _error = 'Passwords do not match.');
+      return;
+    }
+
+    setState(() {
+      _isSaving = true;
+      _error = null;
+    });
+    try {
+      await widget.userRepository.createUser(username, password, _role);
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.toString().replaceAll('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Add New User'),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _usernameController,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: 'Username'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _passwordController,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'Password'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _confirmController,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'Confirm Password'),
+            ),
+            const SizedBox(height: 16),
+            DropdownButtonFormField<String>(
+              initialValue: _role,
+              decoration: const InputDecoration(labelText: 'Role'),
+              items: const [
+                DropdownMenuItem(value: 'CASHIER', child: Text('Cashier')),
+                DropdownMenuItem(value: 'OWNER', child: Text('Owner / Admin')),
+              ],
+              onChanged: (value) => setState(() => _role = value ?? 'CASHIER'),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                _error!,
+                style: const TextStyle(color: AppTheme.danger, fontSize: 13),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isSaving ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _isSaving ? null : _submit,
+          child: _isSaving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Create User'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ResetPasswordDialog extends StatefulWidget {
+  final UserRepository userRepository;
+  final String targetUserId;
+  final String actingUserId;
+  final String username;
+
+  const _ResetPasswordDialog({
+    required this.userRepository,
+    required this.targetUserId,
+    required this.actingUserId,
+    required this.username,
+  });
+
+  @override
+  State<_ResetPasswordDialog> createState() => _ResetPasswordDialogState();
+}
+
+class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
+  final _passwordController = TextEditingController();
+  final _confirmController = TextEditingController();
+  bool _isSaving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _passwordController.dispose();
+    _confirmController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final password = _passwordController.text;
+    if (password.length < UserRepository.minimumPasswordLength) {
+      setState(
+        () => _error =
+            'Password must be at least '
+            '${UserRepository.minimumPasswordLength} characters.',
+      );
+      return;
+    }
+    if (password != _confirmController.text) {
+      setState(() => _error = 'Passwords do not match.');
+      return;
+    }
+
+    setState(() {
+      _isSaving = true;
+      _error = null;
+    });
+    try {
+      await widget.userRepository.resetPassword(
+        targetUserId: widget.targetUserId,
+        newPassword: password,
+        actingUserId: widget.actingUserId,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.toString().replaceAll('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Reset Password for ${widget.username}'),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _passwordController,
+              autofocus: true,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'New Password'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _confirmController,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'Confirm New Password',
+              ),
+              onSubmitted: (_) => _submit(),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                _error!,
+                style: const TextStyle(color: AppTheme.danger, fontSize: 13),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isSaving ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _isSaving ? null : _submit,
+          child: _isSaving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Reset Password'),
+        ),
+      ],
     );
   }
 }

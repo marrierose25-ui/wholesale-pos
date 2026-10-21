@@ -8,11 +8,7 @@ class ProductRepository {
   ProductRepository(this._db);
 
   Future<void> save(Product product) async {
-    await _db.insert(
-      'products',
-      product.toMap(),
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await _db.insert('products', product.toMap());
   }
 
   Future<Product?> getById(String id) async {

@@ -65,4 +65,28 @@ void main() {
 
     expect(cart.items.isEmpty, isTrue);
   });
+
+  test('Catalog items merge by product ID even if the name changes', () {
+    final cart = Cart();
+    cart.addItem(
+      CartItem(
+        id: '1',
+        productId: 'prod-1',
+        name: 'Flour 50kg',
+        unitPriceMinorUnits: 450000,
+      ),
+    );
+    cart.addItem(
+      CartItem(
+        id: '2',
+        productId: 'prod-1',
+        name: 'Flour (renamed)',
+        unitPriceMinorUnits: 460000,
+      ),
+    );
+
+    expect(cart.items.length, 1);
+    expect(cart.items.first.quantity, 2);
+    expect(cart.items.first.unitPriceMinorUnits, 450000);
+  });
 }

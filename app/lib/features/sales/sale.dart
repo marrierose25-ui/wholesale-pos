@@ -15,6 +15,9 @@ class Sale {
   final int changeMinorUnits;
   final String status;
   final String? voidReason;
+  final DateTime? voidedAt;
+  final String? voidedBy;
+  final String? voidedShiftId;
   final DateTime createdAt;
   final DateTime? syncedAt;
 
@@ -35,6 +38,9 @@ class Sale {
     required this.changeMinorUnits,
     this.status = 'COMPLETED',
     this.voidReason,
+    this.voidedAt,
+    this.voidedBy,
+    this.voidedShiftId,
     required this.createdAt,
     this.syncedAt,
     required this.items,
@@ -56,6 +62,9 @@ class Sale {
       'change_minor_units': changeMinorUnits,
       'status': status,
       'void_reason': voidReason,
+      'voided_at': voidedAt?.toIso8601String(),
+      'voided_by': voidedBy,
+      'voided_shift_id': voidedShiftId,
       'created_at': createdAt.toIso8601String(),
       'synced_at': syncedAt?.toIso8601String(),
     };

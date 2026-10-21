@@ -5,11 +5,13 @@ import '../../core/licensing/license_validator.dart';
 class ActivationScreen extends StatefulWidget {
   final VoidCallback onActivated;
   final String? errorMessage;
+  final Future<String> Function() hardwareIdProvider;
 
   const ActivationScreen({
     super.key,
     required this.onActivated,
     this.errorMessage,
+    this.hardwareIdProvider = LicenseValidator.getHardwareId,
   });
 
   @override
@@ -22,9 +24,7 @@ class _ActivationScreenState extends State<ActivationScreen> {
   @override
   void initState() {
     super.initState();
-    LicenseValidator.getHardwareId().then(
-      (id) => setState(() => _hardwareId = id),
-    );
+    widget.hardwareIdProvider().then((id) => setState(() => _hardwareId = id));
   }
 
   @override

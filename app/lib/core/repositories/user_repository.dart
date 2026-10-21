@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'dart:isolate';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
+import 'package:cryptography/cryptography.dart' as cryptography;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:uuid/uuid.dart';
 
@@ -9,89 +11,370 @@ import '../models/user.dart';
 
 class UserRepository {
   final Database _db;
-
   UserRepository(this._db);
+
+  static const int defaultIterations = 210000;
+  static const int minimumPasswordLength = 6;
+  static const Set<String> roles = {'OWNER', 'CASHIER'};
+
+  static const String _pbkdf2Prefix = 'pbkdf2-sha256\$v=1\$';
+  static const int _legacyIterations = 10000;
+  static const int _minimumIterations = 1000;
+  static const int _maximumIterations = 2000000;
 
   String _generateSalt() {
     final random = Random.secure();
-    final values = List<int>.generate(16, (i) => random.nextInt(256));
-    return base64Url.encode(values);
+    return base64Url.encode(List<int>.generate(16, (i) => random.nextInt(256)));
   }
 
-  // PBKDF2 implementation using SHA-256 (10,000 iterations)
-  String _hashPassword(String password, String salt) {
+  /// Derives a key with standard PBKDF2-HMAC-SHA256 on a background isolate so
+  /// the UI stays responsive during the 210k rounds.
+  static Future<String> _derive(String password, String salt, int iterations) {
+    return Isolate.run(() async {
+      final algorithm = cryptography.Pbkdf2(
+        macAlgorithm: cryptography.Hmac(cryptography.Sha256()),
+        iterations: iterations,
+        bits: 256,
+      );
+      final key = await algorithm.deriveKey(
+        secretKey: cryptography.SecretKey(utf8.encode(password)),
+        nonce: utf8.encode(salt),
+      );
+      return base64.encode(await key.extractBytes());
+    });
+  }
+
+  String _formatHash(int iterations, String derived) {
+    return 'pbkdf2-sha256\$v=1\$i=$iterations\$$derived';
+  }
+
+  Future<String> _hashPassword(String password, String salt) async {
+    final derived = await _derive(password, salt, defaultIterations);
+    return _formatHash(defaultIterations, derived);
+  }
+
+  /// Password format used by releases before schema 5: 10,000 rounds of
+  /// HMAC-SHA256 over the salt, stored as base64. Kept only to migrate
+  /// existing installations; new passwords always use [_hashPassword].
+  String _hashPasswordLegacy(String password, String salt) {
     final key = utf8.encode(password);
     final saltBytes = utf8.encode(salt);
-    var hmac = Hmac(sha256, key);
-    var bytes = hmac.convert(saltBytes).bytes;
-
-    for (int i = 0; i < 10000; i++) {
-      hmac = Hmac(sha256, key);
-      bytes = hmac.convert(bytes).bytes;
+    var bytes = Hmac(sha256, key).convert(saltBytes).bytes;
+    for (var i = 0; i < _legacyIterations; i++) {
+      bytes = Hmac(sha256, key).convert(bytes).bytes;
     }
     return base64.encode(bytes);
   }
 
-  Future<void> seedDefaultUser() async {
-    final result = await _db.rawQuery('SELECT COUNT(*) as count FROM users');
-    final count = result.first['count'] as int;
+  bool _constantTimeEquals(String left, String right) {
+    final leftBytes = utf8.encode(left);
+    final rightBytes = utf8.encode(right);
+    if (leftBytes.length != rightBytes.length) return false;
+    var difference = 0;
+    for (var i = 0; i < leftBytes.length; i++) {
+      difference |= leftBytes[i] ^ rightBytes[i];
+    }
+    return difference == 0;
+  }
 
-    if (count == 0) {
-      final salt = _generateSalt();
-      final defaultUser = User(
-        id: const Uuid().v4(),
-        username: 'owner',
-        passwordHash: _hashPassword('admin', salt),
-        salt: salt,
-        role: 'OWNER',
-      );
-      await _db.insert('users', defaultUser.toMap());
+  Future<bool> _verifyPassword(
+    String password,
+    String salt,
+    String storedHash,
+  ) async {
+    if (!storedHash.startsWith(_pbkdf2Prefix)) return false;
+    final parts = storedHash.split(r'$');
+    if (parts.length != 4 || parts[1] != 'v=1') return false;
+    if (!parts[2].startsWith('i=')) return false;
+    final iterations = int.tryParse(parts[2].substring(2));
+    if (iterations == null ||
+        iterations < _minimumIterations ||
+        iterations > _maximumIterations) {
+      return false;
+    }
+    final derived = await _derive(password, salt, iterations);
+    return _constantTimeEquals(_formatHash(iterations, derived), storedHash);
+  }
+
+  Future<bool> _verifyUserPassword(User user, String password) async {
+    if (user.passwordHash.startsWith(_pbkdf2Prefix)) {
+      return _verifyPassword(password, user.salt, user.passwordHash);
+    }
+    return _constantTimeEquals(
+      _hashPasswordLegacy(password, user.salt),
+      user.passwordHash,
+    );
+  }
+
+  Future<void> _upgradePasswordHash(User user, String password) async {
+    final salt = _generateSalt();
+    final hash = await _hashPassword(password, salt);
+    await _db.update(
+      'users',
+      {'password_hash': hash, 'salt': salt},
+      where: 'id = ?',
+      whereArgs: [user.id],
+    );
+  }
+
+  Future<void> _audit({
+    String? userId,
+    required String action,
+    required String details,
+  }) async {
+    try {
+      await _db.insert('audit_logs', {
+        'id': const Uuid().v4(),
+        'user_id': userId,
+        'action': action,
+        'details': details,
+        'created_at': DateTime.now().toIso8601String(),
+      });
+    } catch (_) {
+      // Auditing must never block authentication or account management.
     }
   }
 
-  Future<User?> authenticate(String username, String password) async {
-    final maps = await _db.query(
-      'users',
-      where: 'username = ? AND is_active = 1',
-      whereArgs: [username],
-      limit: 1,
+  static void _validatePassword(String password) {
+    if (password.length < minimumPasswordLength) {
+      throw Exception(
+        'Password must be at least $minimumPasswordLength characters.',
+      );
+    }
+  }
+
+  Future<bool> hasUsers() async {
+    final result = await _db.rawQuery('SELECT COUNT(*) as count FROM users');
+    return (result.first['count'] as int) > 0;
+  }
+
+  Future<User> createFirstOwner(String username, String password) async {
+    final name = username.trim();
+    if (name.isEmpty) {
+      throw Exception('Username cannot be empty.');
+    }
+    _validatePassword(password);
+
+    final salt = _generateSalt();
+    final hash = await _hashPassword(password, salt);
+    final user = User(
+      id: const Uuid().v4(),
+      username: name,
+      passwordHash: hash,
+      salt: salt,
+      role: 'OWNER',
     );
 
-    if (maps.isEmpty) return null;
+    await _db.transaction((txn) async {
+      final existing = await txn.rawQuery(
+        'SELECT COUNT(*) AS count FROM users',
+      );
+      if ((existing.first['count'] as int) > 0) {
+        throw Exception('An owner account already exists.');
+      }
+      await txn.insert('users', user.toMap());
+    });
+
+    await _audit(
+      userId: user.id,
+      action: 'OWNER_CREATED',
+      details: 'First owner account "$name" created.',
+    );
+    return user;
+  }
+
+  Future<User?> authenticate(String username, String password) async {
+    final name = username.trim();
+    final maps = await _db.query(
+      'users',
+      where: 'LOWER(username) = LOWER(?) AND is_active = 1',
+      whereArgs: [name],
+      limit: 1,
+    );
+    if (maps.isEmpty) {
+      await _audit(action: 'LOGIN_FAILED', details: 'Unknown username: $name');
+      return null;
+    }
 
     final user = User.fromMap(maps.first);
-    final expectedHash = _hashPassword(password, user.salt);
-
-    if (user.passwordHash == expectedHash) {
+    if (await _verifyUserPassword(user, password)) {
+      if (!user.passwordHash.startsWith(_pbkdf2Prefix)) {
+        await _upgradePasswordHash(user, password);
+        await _audit(
+          userId: user.id,
+          action: 'PASSWORD_UPGRADED',
+          details: 'Legacy password hash upgraded for "${user.username}".',
+        );
+      }
+      await _audit(
+        userId: user.id,
+        action: 'LOGIN_SUCCEEDED',
+        details: 'User "${user.username}" signed in.',
+      );
       return user;
     }
+
+    await _audit(
+      action: 'LOGIN_FAILED',
+      details: 'Wrong password for username: $name',
+    );
     return null;
   }
 
   Future<void> createUser(String username, String password, String role) async {
-    if (username.trim().isEmpty) throw Exception('Username cannot be empty.');
-    if (password.length < 4) {
-      throw Exception('Password must be at least 4 characters.');
+    final name = username.trim();
+    if (name.isEmpty) {
+      throw Exception('Username cannot be empty.');
     }
-
-    final existing = await _db.query(
-      'users',
-      where: 'username = ?',
-      whereArgs: [username.trim()],
-    );
-    if (existing.isNotEmpty) {
-      throw Exception('Username is already taken.');
+    _validatePassword(password);
+    if (!roles.contains(role)) {
+      throw Exception('Invalid role.');
     }
 
     final salt = _generateSalt();
-    final newUser = User(
+    final hash = await _hashPassword(password, salt);
+    final user = User(
       id: const Uuid().v4(),
-      username: username.trim(),
-      passwordHash: _hashPassword(password, salt),
+      username: name,
+      passwordHash: hash,
       salt: salt,
       role: role,
     );
-    await _db.insert('users', newUser.toMap());
+
+    await _db.transaction((txn) async {
+      final existing = await txn.query(
+        'users',
+        where: 'LOWER(username) = LOWER(?)',
+        whereArgs: [name],
+        limit: 1,
+      );
+      if (existing.isNotEmpty) {
+        throw Exception('Username is already taken.');
+      }
+      await txn.insert('users', user.toMap());
+    });
+
+    await _audit(
+      userId: user.id,
+      action: 'USER_CREATED',
+      details: 'User "$name" created with role $role.',
+    );
+  }
+
+  Future<void> changePassword({
+    required String userId,
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    _validatePassword(newPassword);
+    final maps = await _db.query(
+      'users',
+      where: 'id = ?',
+      whereArgs: [userId],
+      limit: 1,
+    );
+    if (maps.isEmpty) throw Exception('User not found.');
+    final user = User.fromMap(maps.first);
+    if (!await _verifyUserPassword(user, currentPassword)) {
+      throw Exception('Current password is incorrect.');
+    }
+    await _upgradePasswordHash(user, newPassword);
+    await _audit(
+      userId: user.id,
+      action: 'PASSWORD_CHANGED',
+      details: 'User "${user.username}" changed their password.',
+    );
+  }
+
+  Future<void> resetPassword({
+    required String targetUserId,
+    required String newPassword,
+    required String actingUserId,
+  }) async {
+    _validatePassword(newPassword);
+    final actors = await _db.query(
+      'users',
+      columns: ['role', 'is_active', 'username'],
+      where: 'id = ?',
+      whereArgs: [actingUserId],
+      limit: 1,
+    );
+    if (actors.isEmpty ||
+        actors.first['role'] != 'OWNER' ||
+        actors.first['is_active'] != 1) {
+      throw Exception('Only an active owner can reset a password.');
+    }
+    final targets = await _db.query(
+      'users',
+      where: 'id = ?',
+      whereArgs: [targetUserId],
+      limit: 1,
+    );
+    if (targets.isEmpty) throw Exception('User not found.');
+    final target = User.fromMap(targets.first);
+    await _upgradePasswordHash(target, newPassword);
+    await _audit(
+      userId: actingUserId,
+      action: 'PASSWORD_RESET',
+      details: 'Password reset for "${target.username}".',
+    );
+  }
+
+  Future<void> setUserActive({
+    required String targetUserId,
+    required bool active,
+    required String actingUserId,
+  }) async {
+    if (targetUserId == actingUserId && !active) {
+      throw Exception('You cannot deactivate your own account.');
+    }
+    final actors = await _db.query(
+      'users',
+      columns: ['role', 'is_active'],
+      where: 'id = ?',
+      whereArgs: [actingUserId],
+      limit: 1,
+    );
+    if (actors.isEmpty ||
+        actors.first['role'] != 'OWNER' ||
+        actors.first['is_active'] != 1) {
+      throw Exception('Only an active owner can change user status.');
+    }
+    final targets = await _db.query(
+      'users',
+      columns: ['username', 'role', 'is_active'],
+      where: 'id = ?',
+      whereArgs: [targetUserId],
+      limit: 1,
+    );
+    if (targets.isEmpty) throw Exception('User not found.');
+    final target = targets.first;
+
+    await _db.transaction((txn) async {
+      if (!active && target['role'] == 'OWNER') {
+        final owners = await txn.rawQuery(
+          "SELECT COUNT(*) AS count FROM users WHERE role = 'OWNER' AND is_active = 1",
+        );
+        if ((owners.first['count'] as int) <= 1) {
+          throw Exception('At least one active owner is required.');
+        }
+      }
+      await txn.update(
+        'users',
+        {'is_active': active ? 1 : 0},
+        where: 'id = ?',
+        whereArgs: [targetUserId],
+      );
+      await txn.insert('audit_logs', {
+        'id': const Uuid().v4(),
+        'user_id': actingUserId,
+        'action': active ? 'USER_ACTIVATED' : 'USER_DEACTIVATED',
+        'details':
+            'Account "${target['username']}" was '
+            '${active ? 'activated' : 'deactivated'}.',
+        'created_at': DateTime.now().toIso8601String(),
+      });
+    });
   }
 
   Future<List<User>> getAllUsers() async {

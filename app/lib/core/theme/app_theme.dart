@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 class AppTheme {
   static const Color background = Color(0xFFFAFAFA);
@@ -13,7 +12,7 @@ class AppTheme {
   static const Color success = Color(0xFF22C55E);
 
   static ThemeData light() {
-    final fontFamily = GoogleFonts.inter().fontFamily;
+    const fontFamily = 'Segoe UI';
 
     return ThemeData(
       useMaterial3: true,
@@ -105,7 +104,7 @@ class AppTheme {
   }
 
   static ThemeData dark() {
-    final fontFamily = GoogleFonts.inter().fontFamily;
+    const fontFamily = 'Segoe UI';
     const darkBackground = Color(0xFF09090B);
     const darkSurface = Color(0xFF18181B);
     const darkBorder = Color(0xFF27272A);

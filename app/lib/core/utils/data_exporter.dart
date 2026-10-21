@@ -4,9 +4,28 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:uuid/uuid.dart';
+
+import '../database/local_database.dart';
 
 class DataExporter {
-  static Future<String> exportToJson(Database db) async {
+  static Future<String> exportToJson(
+    Database db, {
+    required String requestingUserId,
+  }) async {
+    final user = await db.query(
+      'users',
+      columns: ['role', 'is_active'],
+      where: 'id = ?',
+      whereArgs: [requestingUserId],
+      limit: 1,
+    );
+    if (user.isEmpty ||
+        user.first['role'] != 'OWNER' ||
+        user.first['is_active'] != 1) {
+      throw Exception('Only an active owner can export data.');
+    }
+
     final users = await db.query('users');
     final products = await db.query('products');
     final sales = await db.query('sales');
@@ -14,10 +33,13 @@ class DataExporter {
     final shifts = await db.query('shifts');
     final cashMovements = await db.query('cash_movements');
     final auditLogs = await db.query('audit_logs');
+    final devices = await db.query('devices');
+    final counters = await db.query('counters');
+    final settings = await db.query('settings');
 
     final exportData = {
       'exported_at': DateTime.now().toIso8601String(),
-      'version': 4,
+      'version': LocalDatabase.schemaVersion,
       'users': users,
       'products': products,
       'sales': sales,
@@ -25,6 +47,9 @@ class DataExporter {
       'shifts': shifts,
       'cash_movements': cashMovements,
       'audit_logs': auditLogs,
+      'devices': devices,
+      'counters': counters,
+      'settings': settings,
     };
 
     final jsonString = const JsonEncoder.withIndent('  ').convert(exportData);
@@ -41,6 +66,14 @@ class DataExporter {
 
     final file = File(filePath);
     await file.writeAsString(jsonString);
+
+    await db.insert('audit_logs', {
+      'id': const Uuid().v4(),
+      'user_id': requestingUserId,
+      'action': 'BACKUP_EXPORTED',
+      'details': 'Backup written to $filePath',
+      'created_at': DateTime.now().toIso8601String(),
+    });
 
     return filePath;
   }

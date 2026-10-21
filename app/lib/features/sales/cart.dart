@@ -7,9 +7,10 @@ class Cart {
 
   void addItem(CartItem item) {
     final existingIndex = _items.indexWhere(
-      (i) =>
-          i.name == item.name &&
-          i.unitPriceMinorUnits == item.unitPriceMinorUnits,
+      (i) => i.productId != 'MANUAL'
+          ? i.productId == item.productId
+          : i.name == item.name &&
+                i.unitPriceMinorUnits == item.unitPriceMinorUnits,
     );
     if (existingIndex >= 0) {
       _items[existingIndex].quantity += item.quantity;

@@ -116,4 +116,42 @@ void main() {
     expect(fetchedSales.first.items.length, 1);
     expect(fetchedSales.first.items.first.productNameSnapshot, 'Flour');
   });
+
+  test('rejects a sale when its referenced shift is closed', () async {
+    await db.update(
+      'shifts',
+      {'status': 'CLOSED'},
+      where: 'id = ?',
+      whereArgs: ['shift-1'],
+    );
+    final now = DateTime.now();
+    final sale = Sale(
+      id: 'closed-shift-sale',
+      receiptNumber: 'REC-CLOSED',
+      cashierId: 'user-1',
+      deviceId: 'device-1',
+      shiftId: 'shift-1',
+      subtotalMinorUnits: 100,
+      discountMinorUnits: 0,
+      totalMinorUnits: 100,
+      amountPaidMinorUnits: 100,
+      changeMinorUnits: 0,
+      createdAt: now,
+      items: [
+        SaleItem(
+          id: 'closed-item',
+          saleId: 'closed-shift-sale',
+          productId: 'MANUAL',
+          productNameSnapshot: 'Manual item',
+          unitPriceSnapshotMinorUnits: 100,
+          quantity: 1,
+          lineTotalMinorUnits: 100,
+        ),
+      ],
+    );
+
+    await expectLater(repository.saveSale(sale), throwsException);
+    expect(await db.query('sales'), isEmpty);
+    expect(await db.query('audit_logs'), isEmpty);
+  });
 }

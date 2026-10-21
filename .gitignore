@@ -22,3 +22,10 @@ app/.flutter-plugins-dependencies
 # Databases
 *.db
 *.sqlite
+
+# Local licensing artifacts and private signing material
+app/license.key
+app/**/license.key
+*.private-key
+*.signing-key
+*.ed25519
