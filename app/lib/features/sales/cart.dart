@@ -2,10 +2,8 @@ import 'cart_item.dart';
 
 class Cart {
   final List<CartItem> _items = [];
-  int _discountPercent = 0;
 
   List<CartItem> get items => List.unmodifiable(_items);
-  int get discountPercent => _discountPercent;
 
   void addItem(CartItem item) {
     final existingIndex = _items.indexWhere(
@@ -35,27 +33,15 @@ class Cart {
     }
   }
 
-  void setDiscount(int percent) {
-    if (percent < 0) percent = 0;
-    if (percent > 100) percent = 100;
-    _discountPercent = percent;
-  }
-
   int get subtotalMinorUnits {
     return _items.fold(0, (sum, item) => sum + item.lineTotalMinorUnits);
   }
 
-  int get discountMinorUnits {
-    if (_discountPercent == 0) return 0;
-    return ((subtotalMinorUnits * _discountPercent) / 100).round();
-  }
+  int get discountMinorUnits => 0;
 
-  int get totalMinorUnits {
-    return subtotalMinorUnits - discountMinorUnits;
-  }
+  int get totalMinorUnits => subtotalMinorUnits;
 
   void clear() {
     _items.clear();
-    _discountPercent = 0;
   }
 }

@@ -276,7 +276,7 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
                             ),
                           ),
                           subtitle: Text(
-                            '${sale.createdAt.toString().split('.')[0]} • ${sale.paymentMethod}',
+                            '${sale.createdAt.toString().split('.')[0]} â€¢ ${sale.paymentMethod}',
                           ),
                           trailing: Text(
                             '${MoneyUtils.minorUnitsToString(sale.totalMinorUnits)} ETB',

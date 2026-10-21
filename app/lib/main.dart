@@ -31,6 +31,16 @@ void main() async {
 
   await userRepository.seedDefaultUser();
 
+  // Seed default device to satisfy foreign key constraints
+  final deviceResult = await db.query('devices', limit: 1);
+  if (deviceResult.isEmpty) {
+    await db.insert('devices', {
+      'id': 'device-1',
+      'name': 'Primary Register PC',
+      'platform': 'Windows',
+    });
+  }
+
   runApp(
     WholesalePosApp(
       db: db,
@@ -246,10 +256,12 @@ class _MainLayoutState extends State<MainLayout> {
       GlobalKey<RegisterScreenState>();
   final GlobalKey<DashboardScreenState> _dashboardKey =
       GlobalKey<DashboardScreenState>();
+  final GlobalKey<SalesScreenState> _salesKey = GlobalKey<SalesScreenState>();
 
   void _refreshDataScreens() {
     _registerKey.currentState?.loadData();
     _dashboardKey.currentState?.loadDashboard();
+    _salesKey.currentState?.loadShift();
   }
 
   @override
@@ -258,6 +270,7 @@ class _MainLayoutState extends State<MainLayout> {
 
     final screens = <Widget>[
       SalesScreen(
+        key: _salesKey,
         saleRepository: widget.saleRepository,
         shiftRepository: widget.shiftRepository,
         currentUser: widget.currentUser,
@@ -270,6 +283,7 @@ class _MainLayoutState extends State<MainLayout> {
       ),
       RegisterScreen(
         key: _registerKey,
+        onShiftUpdated: _refreshDataScreens,
         currentUser: widget.currentUser,
         shiftRepository: widget.shiftRepository,
         saleRepository: widget.saleRepository,

@@ -55,16 +55,6 @@ class ReceiptPdfGenerator {
                   ),
                 ],
               ),
-              if (sale.discountMinorUnits > 0)
-                pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                  children: [
-                    pw.Text('Discount:'),
-                    pw.Text(
-                      '- ${MoneyUtils.minorUnitsToString(sale.discountMinorUnits)} ETB',
-                    ),
-                  ],
-                ),
               pw.Row(
                 mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                 children: [

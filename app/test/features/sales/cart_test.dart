@@ -65,20 +65,4 @@ void main() {
 
     expect(cart.items.isEmpty, isTrue);
   });
-
-  test('Discount applies correctly', () {
-    final cart = Cart();
-    cart.addItem(
-      CartItem(
-        id: '1',
-        name: 'Flour',
-        unitPriceMinorUnits: 450000,
-        quantity: 1,
-      ),
-    ); // 4500.00
-    cart.setDiscount(10); // 10%
-
-    expect(cart.discountMinorUnits, 45000); // 450.00 ETB
-    expect(cart.totalMinorUnits, 405000); // 4050.00 ETB
-  });
 }

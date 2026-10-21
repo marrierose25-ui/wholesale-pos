@@ -4,7 +4,6 @@ import '../../core/models/user.dart';
 import '../../core/repositories/shift_repository.dart';
 import '../../core/repositories/sale_repository.dart';
 import '../../core/utils/money_utils.dart';
-import '../../core/theme/app_theme.dart';
 import '../sales/shift.dart';
 import '../sales/sale.dart';
 
@@ -12,12 +11,14 @@ class RegisterScreen extends StatefulWidget {
   final User currentUser;
   final ShiftRepository shiftRepository;
   final SaleRepository saleRepository;
+  final VoidCallback onShiftUpdated;
 
   const RegisterScreen({
     super.key,
     required this.currentUser,
     required this.shiftRepository,
     required this.saleRepository,
+    required this.onShiftUpdated,
   });
 
   @override
@@ -57,6 +58,8 @@ class RegisterScreenState extends State<RegisterScreen> {
         _activeShift = shift;
         _summary = summary;
         _voids = voids;
+        // If there are no voids, auto-verify so the register can be closed
+        if (voids.isEmpty) _voidsVerified = true;
       });
     } else {
       setState(() {
@@ -80,6 +83,7 @@ class RegisterScreenState extends State<RegisterScreen> {
       return;
     }
     await widget.shiftRepository.openShift(widget.currentUser.id, cash);
+    widget.onShiftUpdated();
     _openingCashController.clear();
     loadData();
   }
@@ -106,8 +110,87 @@ class RegisterScreenState extends State<RegisterScreen> {
     }
 
     await widget.shiftRepository.closeShift(_activeShift!, actualCash);
+    widget.onShiftUpdated();
     _actualCashController.clear();
     loadData();
+  }
+
+  void _showCashMovementDialog() {
+    final amountController = TextEditingController();
+    final reasonController = TextEditingController();
+    String type = 'WITHDRAWAL';
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            title: const Text('Add Cash Movement'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(
+                      value: 'WITHDRAWAL',
+                      label: Text('Withdrawal'),
+                      icon: Icon(Icons.arrow_upward),
+                    ),
+                    ButtonSegment(
+                      value: 'DEPOSIT',
+                      label: Text('Deposit'),
+                      icon: Icon(Icons.arrow_downward),
+                    ),
+                  ],
+                  selected: {type},
+                  onSelectionChanged: (val) =>
+                      setDialogState(() => type = val.first),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: amountController,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(labelText: 'Amount (ETB)'),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: reasonController,
+                  decoration: const InputDecoration(
+                    labelText: 'Reason / Reference',
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () async {
+                  final amount = MoneyUtils.stringToMinorUnits(
+                    amountController.text,
+                  );
+                  if (amount != null && amount > 0) {
+                    await widget.shiftRepository.addCashMovement(
+                      _activeShift!.id,
+                      type,
+                      amount,
+                      reasonController.text.trim(),
+                    );
+                    if (context.mounted) Navigator.pop(context);
+                    loadData();
+                  }
+                },
+                child: const Text('Save'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   @override
@@ -115,10 +198,16 @@ class RegisterScreenState extends State<RegisterScreen> {
     if (_isLoading) return const Center(child: CircularProgressIndicator());
 
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
         title: const Text('Cash Register'),
         actions: [
+          if (_activeShift != null)
+            IconButton(
+              icon: const Icon(Icons.add_card),
+              tooltip: 'Add Cash Movement',
+              onPressed: _showCashMovementDialog,
+            ),
           IconButton(icon: const Icon(Icons.refresh), onPressed: loadData),
           const SizedBox(width: 16),
         ],
@@ -149,7 +238,7 @@ class RegisterScreenState extends State<RegisterScreen> {
                 const SizedBox(height: 8),
                 const Text(
                   'Enter the starting cash in the drawer to begin your shift.',
-                  style: TextStyle(color: AppTheme.muted),
+                  style: TextStyle(color: Colors.grey),
                 ),
                 const SizedBox(height: 24),
                 TextField(
@@ -243,7 +332,7 @@ class RegisterScreenState extends State<RegisterScreen> {
                       const SizedBox(height: 8),
                       const Text(
                         'Count the physical cash in the drawer and enter the total below.',
-                        style: TextStyle(color: AppTheme.muted),
+                        style: TextStyle(color: Colors.grey),
                       ),
                       const SizedBox(height: 24),
                       TextField(
@@ -260,9 +349,11 @@ class RegisterScreenState extends State<RegisterScreen> {
                       Container(
                         padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
-                          color: AppTheme.background,
+                          color: Theme.of(context).scaffoldBackgroundColor,
                           borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: AppTheme.border),
+                          border: Border.all(
+                            color: Theme.of(context).dividerColor,
+                          ),
                         ),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -276,8 +367,8 @@ class RegisterScreenState extends State<RegisterScreen> {
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 color: discrepancy == 0
-                                    ? AppTheme.success
-                                    : AppTheme.danger,
+                                    ? Colors.green
+                                    : Colors.red,
                               ),
                             ),
                           ],
@@ -289,7 +380,7 @@ class RegisterScreenState extends State<RegisterScreen> {
                         child: ElevatedButton(
                           style: ElevatedButton.styleFrom(
                             backgroundColor: _voidsVerified
-                                ? AppTheme.danger
+                                ? Colors.red
                                 : Colors.grey,
                           ),
                           onPressed: _voidsVerified ? _closeRegister : null,
@@ -314,7 +405,7 @@ class RegisterScreenState extends State<RegisterScreen> {
                         children: [
                           Icon(
                             Icons.warning_amber_rounded,
-                            color: AppTheme.danger,
+                            color: Colors.red,
                             size: 20,
                           ),
                           SizedBox(width: 8),
@@ -330,7 +421,7 @@ class RegisterScreenState extends State<RegisterScreen> {
                       const SizedBox(height: 8),
                       const Text(
                         'Verify these voids before closing.',
-                        style: TextStyle(color: AppTheme.muted, fontSize: 13),
+                        style: TextStyle(color: Colors.grey, fontSize: 13),
                       ),
                       const Divider(height: 24),
                       if (_voids.isEmpty)
@@ -338,10 +429,7 @@ class RegisterScreenState extends State<RegisterScreen> {
                           padding: EdgeInsets.symmetric(vertical: 16),
                           child: Text(
                             'No voids during this shift.',
-                            style: TextStyle(
-                              color: AppTheme.muted,
-                              fontSize: 13,
-                            ),
+                            style: TextStyle(color: Colors.grey, fontSize: 13),
                           ),
                         )
                       else ...[
@@ -351,15 +439,18 @@ class RegisterScreenState extends State<RegisterScreen> {
                             child: Container(
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
-                                color: AppTheme.background,
+                                color: Theme.of(context)
+                                    .scaffoldBackgroundColor,
                                 borderRadius: BorderRadius.circular(6),
-                                border: Border.all(color: AppTheme.border),
+                                border: Border.all(
+                                  color: Theme.of(context).dividerColor,
+                                ),
                               ),
                               child: Row(
                                 children: [
                                   const Icon(
                                     Icons.cancel,
-                                    color: AppTheme.danger,
+                                    color: Colors.red,
                                     size: 16,
                                   ),
                                   const SizedBox(width: 8),
@@ -376,10 +467,10 @@ class RegisterScreenState extends State<RegisterScreen> {
                                           ),
                                         ),
                                         Text(
-                                          '${MoneyUtils.minorUnitsToString(v.totalMinorUnits)} ETB • ${v.paymentMethod}',
+                                          '${MoneyUtils.minorUnitsToString(v.totalMinorUnits)} ETB Ã¢â‚¬Â¢ ${v.paymentMethod}',
                                           style: const TextStyle(
                                             fontSize: 11,
-                                            color: AppTheme.muted,
+                                            color: Colors.grey,
                                           ),
                                         ),
                                       ],
@@ -428,8 +519,8 @@ class RegisterScreenState extends State<RegisterScreen> {
             children: [
               Text(
                 title,
-                style: const TextStyle(
-                  color: AppTheme.muted,
+                style: TextStyle(
+                  color: Theme.of(context).textTheme.bodySmall?.color,
                   fontSize: 12,
                   fontWeight: FontWeight.w500,
                 ),
@@ -440,7 +531,9 @@ class RegisterScreenState extends State<RegisterScreen> {
                 style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
-                  color: isPrimary ? AppTheme.primary : AppTheme.foreground,
+                  color: isPrimary
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.onSurface,
                 ),
               ),
             ],

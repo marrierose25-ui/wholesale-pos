@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../core/repositories/sale_repository.dart';
 import '../../core/utils/money_utils.dart';
-import '../../core/theme/app_theme.dart';
 import '../sales/sale.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -44,7 +43,7 @@ class DashboardScreenState extends State<DashboardScreen> {
     if (_isLoading) return const Center(child: CircularProgressIndicator());
 
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
         title: const Text('Dashboard'),
         actions: [
@@ -115,11 +114,16 @@ class DashboardScreenState extends State<DashboardScreen> {
                         ),
                         const Divider(height: 1),
                         if (_recentSales.isEmpty)
-                          const Padding(
-                            padding: EdgeInsets.all(24),
+                          Padding(
+                            padding: const EdgeInsets.all(24),
                             child: Text(
                               'No sales recorded yet.',
-                              style: TextStyle(color: AppTheme.muted),
+                              style: TextStyle(
+                                color: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.color,
+                              ),
                             ),
                           )
                         else
@@ -132,12 +136,12 @@ class DashboardScreenState extends State<DashboardScreen> {
                               leading: CircleAvatar(
                                 backgroundColor: sale.status == 'VOIDED'
                                     ? Colors.grey
-                                    : AppTheme.background,
+                                    : Theme.of(context).scaffoldBackgroundColor,
                                 child: Icon(
                                   Icons.receipt,
                                   color: sale.status == 'VOIDED'
                                       ? Colors.white
-                                      : AppTheme.foreground,
+                                      : Theme.of(context).colorScheme.onSurface,
                                   size: 20,
                                 ),
                               ),
@@ -149,7 +153,7 @@ class DashboardScreenState extends State<DashboardScreen> {
                                 ),
                               ),
                               subtitle: Text(
-                                '${sale.createdAt.toString().split('.')[0]} • ${sale.paymentMethod}',
+                                '${sale.createdAt.toString().split('.')[0]} â€¢ ${sale.paymentMethod}',
                                 style: const TextStyle(fontSize: 12),
                               ),
                               trailing: Text(
@@ -161,7 +165,7 @@ class DashboardScreenState extends State<DashboardScreen> {
                                       : null,
                                   color: sale.status == 'VOIDED'
                                       ? Colors.grey
-                                      : AppTheme.foreground,
+                                      : Theme.of(context).colorScheme.onSurface,
                                 ),
                               ),
                             ),
@@ -192,14 +196,14 @@ class DashboardScreenState extends State<DashboardScreen> {
                             children: [
                               Icon(
                                 Icons.circle,
-                                color: (_stats['expected_cash'] ?? 0) > 0
-                                    ? AppTheme.success
-                                    : AppTheme.danger,
+                                color: (_stats['is_shift_open'] ?? 0) == 1
+                                    ? Colors.green
+                                    : Colors.red,
                                 size: 12,
                               ),
                               const SizedBox(width: 8),
                               Text(
-                                (_stats['expected_cash'] ?? 0) > 0
+                                (_stats['is_shift_open'] ?? 0) == 1
                                     ? 'Register Open'
                                     : 'Register Closed',
                                 style: const TextStyle(
@@ -211,8 +215,11 @@ class DashboardScreenState extends State<DashboardScreen> {
                           const SizedBox(height: 8),
                           Text(
                             'Expected Cash: ${MoneyUtils.minorUnitsToString(_stats['expected_cash'] ?? 0)} ETB',
-                            style: const TextStyle(
-                              color: AppTheme.muted,
+                            style: TextStyle(
+                              color: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.color,
                               fontSize: 13,
                             ),
                           ),
@@ -238,8 +245,8 @@ class DashboardScreenState extends State<DashboardScreen> {
           children: [
             Text(
               title,
-              style: const TextStyle(
-                color: AppTheme.muted,
+              style: TextStyle(
+                color: Theme.of(context).textTheme.bodySmall?.color,
                 fontSize: 13,
                 fontWeight: FontWeight.w500,
               ),
@@ -250,7 +257,9 @@ class DashboardScreenState extends State<DashboardScreen> {
               style: TextStyle(
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
-                color: isPrimary ? AppTheme.primary : AppTheme.foreground,
+                color: isPrimary
+                    ? Theme.of(context).colorScheme.primary
+                    : Theme.of(context).colorScheme.onSurface,
               ),
             ),
           ],

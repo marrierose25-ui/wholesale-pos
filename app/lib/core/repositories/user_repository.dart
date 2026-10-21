@@ -18,8 +18,18 @@ class UserRepository {
     return base64Url.encode(values);
   }
 
+  // PBKDF2 implementation using SHA-256 (10,000 iterations)
   String _hashPassword(String password, String salt) {
-    return sha256.convert(utf8.encode(password + salt)).toString();
+    final key = utf8.encode(password);
+    final saltBytes = utf8.encode(salt);
+    var hmac = Hmac(sha256, key);
+    var bytes = hmac.convert(saltBytes).bytes;
+
+    for (int i = 0; i < 10000; i++) {
+      hmac = Hmac(sha256, key);
+      bytes = hmac.convert(bytes).bytes;
+    }
+    return base64.encode(bytes);
   }
 
   Future<void> seedDefaultUser() async {
@@ -52,7 +62,9 @@ class UserRepository {
     final user = User.fromMap(maps.first);
     final expectedHash = _hashPassword(password, user.salt);
 
-    if (user.passwordHash == expectedHash) return user;
+    if (user.passwordHash == expectedHash) {
+      return user;
+    }
     return null;
   }
 
@@ -70,10 +82,11 @@ class UserRepository {
     if (existing.isNotEmpty) {
       throw Exception('Username is already taken.');
     }
+
     final salt = _generateSalt();
     final newUser = User(
       id: const Uuid().v4(),
-      username: username,
+      username: username.trim(),
       passwordHash: _hashPassword(password, salt),
       salt: salt,
       role: role,

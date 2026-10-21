@@ -28,10 +28,10 @@ class SalesScreen extends StatefulWidget {
   });
 
   @override
-  State<SalesScreen> createState() => _SalesScreenState();
+  State<SalesScreen> createState() => SalesScreenState();
 }
 
-class _SalesScreenState extends State<SalesScreen> {
+class SalesScreenState extends State<SalesScreen> {
   final Cart _cart = Cart();
   bool _isProcessing = false;
   Shift? _activeShift;
@@ -44,10 +44,10 @@ class _SalesScreenState extends State<SalesScreen> {
   @override
   void initState() {
     super.initState();
-    _loadShift();
+    loadShift();
   }
 
-  Future<void> _loadShift() async {
+  Future<void> loadShift() async {
     final shift = await widget.shiftRepository.getActiveShift();
     if (mounted) setState(() => _activeShift = shift);
   }
@@ -98,38 +98,6 @@ class _SalesScreenState extends State<SalesScreen> {
     setState(() {
       _cart.updateQuantity(id, newQty);
     });
-  }
-
-  void _applyDiscount() {
-    if (_isProcessing) return;
-    final controller = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Apply Discount'),
-        content: TextField(
-          controller: controller,
-          keyboardType: TextInputType.number,
-          decoration: const InputDecoration(
-            labelText: 'Discount Percentage (%)',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final percent = int.tryParse(controller.text) ?? 0;
-              setState(() => _cart.setDiscount(percent));
-              Navigator.pop(context);
-            },
-            child: const Text('Apply'),
-          ),
-        ],
-      ),
-    );
   }
 
   Future<void> _checkout() async {
@@ -279,7 +247,7 @@ class _SalesScreenState extends State<SalesScreen> {
         shiftId: _activeShift!.id,
         paymentMethod: method,
         subtotalMinorUnits: _cart.subtotalMinorUnits,
-        discountMinorUnits: _cart.discountMinorUnits,
+        discountMinorUnits: 0,
         totalMinorUnits: _cart.totalMinorUnits,
         amountPaidMinorUnits: cashPaid,
         changeMinorUnits: changeMinorUnits,
@@ -489,10 +457,12 @@ class _SalesScreenState extends State<SalesScreen> {
               ),
               Expanded(
                 child: _cart.items.isEmpty
-                    ? const Center(
+                    ? Center(
                         child: Text(
                           'Cart is empty',
-                          style: TextStyle(color: AppTheme.muted),
+                          style: TextStyle(
+                            color: Theme.of(context).textTheme.bodySmall?.color,
+                          ),
                         ),
                       )
                     : ListView.separated(
@@ -518,8 +488,11 @@ class _SalesScreenState extends State<SalesScreen> {
                                     const SizedBox(height: 4),
                                     Text(
                                       '${MoneyUtils.minorUnitsToString(item.unitPriceMinorUnits)} ETB',
-                                      style: const TextStyle(
-                                        color: AppTheme.muted,
+                                      style: TextStyle(
+                                        color: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall
+                                            ?.color,
                                         fontSize: 12,
                                       ),
                                     ),
@@ -593,30 +566,16 @@ class _SalesScreenState extends State<SalesScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text(
+                        Text(
                           'Subtotal',
-                          style: TextStyle(color: AppTheme.muted, fontSize: 13),
+                          style: TextStyle(
+                            color: Theme.of(context).textTheme.bodySmall?.color,
+                            fontSize: 13,
+                          ),
                         ),
                         Text(
                           '${MoneyUtils.minorUnitsToString(_cart.subtotalMinorUnits)} ETB',
                           style: const TextStyle(fontSize: 13),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'Discount',
-                          style: TextStyle(color: AppTheme.muted, fontSize: 13),
-                        ),
-                        Text(
-                          '- ${MoneyUtils.minorUnitsToString(_cart.discountMinorUnits)} ETB',
-                          style: const TextStyle(
-                            color: AppTheme.danger,
-                            fontSize: 13,
-                          ),
                         ),
                       ],
                     ),
@@ -641,35 +600,23 @@ class _SalesScreenState extends State<SalesScreen> {
                       ],
                     ),
                     const SizedBox(height: 24),
-                    Row(
-                      children: [
-                        Expanded(
-                          flex: 1,
-                          child: OutlinedButton(
-                            onPressed: _isProcessing ? null : _applyDiscount,
-                            child: const Text('Discount'),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          flex: 2,
-                          child: ElevatedButton(
-                            onPressed: (_cart.items.isEmpty || _isProcessing)
-                                ? null
-                                : _checkout,
-                            child: _isProcessing
-                                ? const SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
-                                    ),
-                                  )
-                                : const Text('Checkout'),
-                          ),
-                        ),
-                      ],
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: (_cart.items.isEmpty || _isProcessing)
+                            ? null
+                            : _checkout,
+                        child: _isProcessing
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Text('Checkout'),
+                      ),
                     ),
                   ],
                 ),
