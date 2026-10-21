@@ -6,7 +6,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 class LocalDatabase {
   static const _databaseName = 'wholesale_pos.db';
-  static const _databaseVersion = 3;
+  static const _databaseVersion = 4;
 
   LocalDatabase._();
 
@@ -23,6 +23,7 @@ class LocalDatabase {
       path,
       options: OpenDatabaseOptions(
         version: _databaseVersion,
+        onConfigure: (db) async => await db.execute('PRAGMA foreign_keys = ON'),
         onCreate: _onCreate,
         onUpgrade: _onUpgrade,
       ),
@@ -38,6 +39,7 @@ class LocalDatabase {
       inMemoryDatabasePath,
       options: OpenDatabaseOptions(
         version: _databaseVersion,
+        onConfigure: (db) async => await db.execute('PRAGMA foreign_keys = ON'),
         onCreate: _onCreate,
       ),
     );
@@ -67,6 +69,23 @@ class LocalDatabase {
         "ALTER TABLE sales ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'CASH'",
       );
     }
+    if (oldVersion < 4) {
+      await db.execute(
+        "ALTER TABLE users ADD COLUMN salt TEXT NOT NULL DEFAULT ''",
+      );
+      await db.execute("ALTER TABLE sales ADD COLUMN shift_id TEXT");
+      await db.execute("ALTER TABLE sales ADD COLUMN void_reason TEXT");
+      await db.execute('''
+        CREATE TABLE cash_movements (
+          id TEXT PRIMARY KEY,
+          shift_id TEXT NOT NULL,
+          type TEXT NOT NULL,
+          amount_minor_units INTEGER NOT NULL,
+          reason TEXT,
+          created_at TEXT NOT NULL
+        )
+      ''');
+    }
   }
 
   static Future<void> _onCreate(Database db, int version) async {
@@ -77,6 +96,7 @@ class LocalDatabase {
         id TEXT PRIMARY KEY,
         username TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
+        salt TEXT NOT NULL,
         role TEXT NOT NULL,
         is_active INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL
@@ -108,11 +128,37 @@ class LocalDatabase {
     ''');
 
     batch.execute('''
+      CREATE TABLE shifts (
+        id TEXT PRIMARY KEY,
+        cashier_id TEXT NOT NULL,
+        opening_cash_minor_units INTEGER NOT NULL,
+        closing_cash_minor_units INTEGER,
+        expected_cash_minor_units INTEGER,
+        status TEXT NOT NULL,
+        opened_at TEXT NOT NULL,
+        closed_at TEXT
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE cash_movements (
+        id TEXT PRIMARY KEY,
+        shift_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        amount_minor_units INTEGER NOT NULL,
+        reason TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(shift_id) REFERENCES shifts(id)
+      )
+    ''');
+
+    batch.execute('''
       CREATE TABLE sales (
         id TEXT PRIMARY KEY,
         receipt_number TEXT UNIQUE NOT NULL,
         cashier_id TEXT NOT NULL,
         device_id TEXT NOT NULL,
+        shift_id TEXT NOT NULL,
         customer_name TEXT,
         payment_method TEXT NOT NULL DEFAULT 'CASH',
         subtotal_minor_units INTEGER NOT NULL,
@@ -121,10 +167,12 @@ class LocalDatabase {
         amount_paid_minor_units INTEGER NOT NULL,
         change_minor_units INTEGER NOT NULL,
         status TEXT NOT NULL,
+        void_reason TEXT,
         created_at TEXT NOT NULL,
         synced_at TEXT,
         FOREIGN KEY(cashier_id) REFERENCES users(id),
-        FOREIGN KEY(device_id) REFERENCES devices(id)
+        FOREIGN KEY(device_id) REFERENCES devices(id),
+        FOREIGN KEY(shift_id) REFERENCES shifts(id)
       )
     ''');
 
@@ -138,7 +186,7 @@ class LocalDatabase {
         quantity INTEGER NOT NULL,
         line_discount_minor_units INTEGER NOT NULL,
         line_total_minor_units INTEGER NOT NULL,
-        FOREIGN KEY(sale_id) REFERENCES sales(id)
+        FOREIGN KEY(sale_id) REFERENCES sales(id) ON DELETE CASCADE
       )
     ''');
 
@@ -149,19 +197,6 @@ class LocalDatabase {
         action TEXT NOT NULL,
         details TEXT,
         created_at TEXT NOT NULL
-      )
-    ''');
-
-    batch.execute('''
-      CREATE TABLE shifts (
-        id TEXT PRIMARY KEY,
-        cashier_id TEXT NOT NULL,
-        opening_cash_minor_units INTEGER NOT NULL,
-        closing_cash_minor_units INTEGER,
-        expected_cash_minor_units INTEGER,
-        status TEXT NOT NULL,
-        opened_at TEXT NOT NULL,
-        closed_at TEXT
       )
     ''');
 

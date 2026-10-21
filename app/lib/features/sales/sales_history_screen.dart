@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/models/user.dart';
 import '../../core/repositories/sale_repository.dart';
 import '../../core/utils/money_utils.dart';
+import '../../core/theme/app_theme.dart';
 import 'sale.dart';
 
 class SalesHistoryScreen extends StatefulWidget {
@@ -24,6 +25,8 @@ class SalesHistoryScreen extends StatefulWidget {
 class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
   List<Sale> _sales = [];
   bool _isLoading = true;
+  final _searchController = TextEditingController();
+  DateTimeRange? _selectedDateRange;
 
   @override
   void initState() {
@@ -33,11 +36,36 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
 
   Future<void> _loadSales() async {
     setState(() => _isLoading = true);
-    final sales = await widget.saleRepository.getAllSales();
+    final sales = await widget.saleRepository.getAllSales(
+      searchQuery: _searchController.text.trim().isEmpty
+          ? null
+          : _searchController.text.trim(),
+      startDate: _selectedDateRange?.start,
+      endDate: _selectedDateRange?.end,
+    );
     setState(() {
       _sales = sales;
       _isLoading = false;
     });
+  }
+
+  Future<void> _pickDateRange() async {
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2030),
+      initialDateRange: _selectedDateRange,
+    );
+    if (picked != null) {
+      setState(() => _selectedDateRange = picked);
+      _loadSales();
+    }
+  }
+
+  void _clearFilters() {
+    _searchController.clear();
+    setState(() => _selectedDateRange = null);
+    _loadSales();
   }
 
   Future<void> _voidSale(Sale sale) async {
@@ -54,7 +82,7 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
             child: const Text('Cancel'),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
             onPressed: () => Navigator.pop(context, true),
             child: const Text('Void Sale'),
           ),
@@ -67,16 +95,19 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
         sale.id,
         sale.receiptNumber,
         widget.currentUser.id,
+        'Voided from history',
       );
       if (mounted) {
-        Navigator.pop(context); // Close the receipt dialog
-        _loadSales(); // Refresh the list
+        Navigator.pop(context);
+        widget.onSaleVoided();
+        _loadSales();
       }
     }
   }
 
   void _showReceipt(Sale sale) {
     final isVoided = sale.status == 'VOIDED';
+    final isOwner = widget.currentUser.role == 'OWNER';
 
     showDialog(
       context: context,
@@ -97,6 +128,10 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text('Date: ${sale.createdAt.toString().split('.')[0]}'),
+              Text(
+                'Payment: ${sale.paymentMethod}',
+                style: const TextStyle(fontWeight: FontWeight.w500),
+              ),
               const Divider(),
               ...sale.items.map(
                 (item) => Padding(
@@ -120,27 +155,6 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('Subtotal:'),
-                  Text(
-                    '${MoneyUtils.minorUnitsToString(sale.subtotalMinorUnits)} ETB',
-                  ),
-                ],
-              ),
-              if (sale.discountMinorUnits > 0)
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('Discount:'),
-                    Text(
-                      '- ${MoneyUtils.minorUnitsToString(sale.discountMinorUnits)} ETB',
-                      style: const TextStyle(color: Colors.red),
-                    ),
-                  ],
-                ),
-              const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
                   const Text(
                     'TOTAL:',
                     style: TextStyle(fontWeight: FontWeight.bold),
@@ -155,12 +169,12 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
           ),
         ),
         actions: [
-          if (!isVoided)
+          if (isOwner && !isVoided)
             TextButton(
               onPressed: () => _voidSale(sale),
               child: const Text(
                 'Void Sale',
-                style: TextStyle(color: Colors.red),
+                style: TextStyle(color: AppTheme.danger),
               ),
             ),
           TextButton(
@@ -174,61 +188,115 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) return const Center(child: CircularProgressIndicator());
-
-    if (_sales.isEmpty) {
-      return const Center(child: Text('No sales recorded yet.'));
-    }
-
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Sales History'),
-        actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadSales),
-        ],
-      ),
-      body: ListView.builder(
-        itemCount: _sales.length,
-        itemBuilder: (context, index) {
-          final sale = _sales[index];
-          final isVoided = sale.status == 'VOIDED';
-          return ListTile(
-            leading: Icon(Icons.receipt, color: isVoided ? Colors.grey : null),
-            title: Text(
-              sale.receiptNumber,
-              style: TextStyle(
-                decoration: isVoided ? TextDecoration.lineThrough : null,
-                color: isVoided ? Colors.grey : null,
-              ),
-            ),
-            subtitle: Text(sale.createdAt.toString().split('.')[0]),
-            trailing: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.end,
+      backgroundColor: AppTheme.background,
+      appBar: AppBar(title: const Text('Sales History')),
+      body: Column(
+        children: [
+          // Filter Bar
+          Container(
+            padding: const EdgeInsets.all(16),
+            color: AppTheme.surface,
+            child: Row(
               children: [
-                Text(
-                  '${MoneyUtils.minorUnitsToString(sale.totalMinorUnits)} ETB',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                    decoration: isVoided ? TextDecoration.lineThrough : null,
-                    color: isVoided ? Colors.grey : null,
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: const InputDecoration(
+                      hintText: 'Search receipt number...',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                    onSubmitted: (_) => _loadSales(),
                   ),
                 ),
-                if (isVoided)
-                  const Text(
-                    'VOIDED',
-                    style: TextStyle(
-                      color: Colors.red,
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                    ),
+                const SizedBox(width: 16),
+                OutlinedButton.icon(
+                  onPressed: _pickDateRange,
+                  icon: const Icon(Icons.calendar_today, size: 16),
+                  label: Text(
+                    _selectedDateRange == null
+                        ? 'Filter by Date'
+                        : '${_selectedDateRange!.start.toString().split(' ')[0]} - ${_selectedDateRange!.end.toString().split(' ')[0]}',
                   ),
+                ),
+                if (_selectedDateRange != null ||
+                    _searchController.text.isNotEmpty) ...[
+                  const SizedBox(width: 16),
+                  TextButton(
+                    onPressed: _clearFilters,
+                    child: const Text('Clear Filters'),
+                  ),
+                ],
               ],
             ),
-            onTap: () => _showReceipt(sale),
-          );
-        },
+          ),
+
+          // Results
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _sales.isEmpty
+                ? const Center(
+                    child: Text(
+                      'No sales found.',
+                      style: TextStyle(color: AppTheme.muted),
+                    ),
+                  )
+                : ListView.builder(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: _sales.length,
+                    itemBuilder: (context, index) {
+                      final sale = _sales[index];
+                      final isVoided = sale.status == 'VOIDED';
+                      return Card(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: isVoided
+                                ? Colors.grey
+                                : AppTheme.background,
+                            child: Icon(
+                              Icons.receipt,
+                              color: isVoided
+                                  ? Colors.white
+                                  : AppTheme.foreground,
+                              size: 20,
+                            ),
+                          ),
+                          title: Text(
+                            sale.receiptNumber,
+                            style: TextStyle(
+                              decoration: isVoided
+                                  ? TextDecoration.lineThrough
+                                  : null,
+                              color: isVoided
+                                  ? Colors.grey
+                                  : AppTheme.foreground,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          subtitle: Text(
+                            '${sale.createdAt.toString().split('.')[0]} • ${sale.paymentMethod}',
+                          ),
+                          trailing: Text(
+                            '${MoneyUtils.minorUnitsToString(sale.totalMinorUnits)} ETB',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              decoration: isVoided
+                                  ? TextDecoration.lineThrough
+                                  : null,
+                              color: isVoided
+                                  ? Colors.grey
+                                  : AppTheme.foreground,
+                            ),
+                          ),
+                          onTap: () => _showReceipt(sale),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
       ),
     );
   }

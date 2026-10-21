@@ -20,6 +20,9 @@ class ShiftRepository {
   }
 
   Future<void> openShift(String cashierId, int openingCash) async {
+    final active = await getActiveShift();
+    if (active != null) throw Exception('A shift is already open');
+
     final shift = Shift(
       id: const Uuid().v4(),
       cashierId: cashierId,
@@ -30,43 +33,78 @@ class ShiftRepository {
     await _db.insert('shifts', shift.toMap());
   }
 
+  Future<void> addCashMovement(
+    String shiftId,
+    String type,
+    int amount,
+    String reason,
+  ) async {
+    await _db.insert('cash_movements', {
+      'id': const Uuid().v4(),
+      'shift_id': shiftId,
+      'type': type, // WITHDRAWAL, DEPOSIT, EXPENSE
+      'amount_minor_units': amount,
+      'reason': reason,
+      'created_at': DateTime.now().toIso8601String(),
+    });
+  }
+
   Future<Map<String, int>> getShiftSummary(Shift shift) async {
     final cashSales = await _db.rawQuery(
       '''
       SELECT SUM(total_minor_units) as total 
       FROM sales 
-      WHERE status = 'COMPLETED' AND payment_method = 'CASH' AND created_at >= ?
+      WHERE status = 'COMPLETED' AND payment_method = 'CASH' AND shift_id = ?
     ''',
-      [shift.openedAt.toIso8601String()],
+      [shift.id],
     );
 
     final bankSales = await _db.rawQuery(
       '''
       SELECT SUM(total_minor_units) as total 
       FROM sales 
-      WHERE status = 'COMPLETED' AND payment_method = 'BANK' AND created_at >= ?
+      WHERE status = 'COMPLETED' AND payment_method = 'BANK' AND shift_id = ?
     ''',
-      [shift.openedAt.toIso8601String()],
+      [shift.id],
     );
 
     final voids = await _db.rawQuery(
       '''
       SELECT SUM(total_minor_units) as total 
       FROM sales 
-      WHERE status = 'VOIDED' AND created_at >= ?
+      WHERE status = 'VOIDED' AND shift_id = ?
     ''',
-      [shift.openedAt.toIso8601String()],
+      [shift.id],
+    );
+
+    final cashMovements = await _db.rawQuery(
+      '''
+      SELECT 
+        SUM(CASE WHEN type = 'DEPOSIT' THEN amount_minor_units ELSE 0 END) as deposits,
+        SUM(CASE WHEN type IN ('WITHDRAWAL', 'EXPENSE') THEN amount_minor_units ELSE 0 END) as withdrawals
+      FROM cash_movements 
+      WHERE shift_id = ?
+    ''',
+      [shift.id],
     );
 
     final cashTotal = (cashSales.first['total'] as int?) ?? 0;
     final bankTotal = (bankSales.first['total'] as int?) ?? 0;
     final voidTotal = (voids.first['total'] as int?) ?? 0;
 
+    final deposits = (cashMovements.first['deposits'] as int?) ?? 0;
+    final withdrawals = (cashMovements.first['withdrawals'] as int?) ?? 0;
+
+    final expectedCash =
+        shift.openingCashMinorUnits + cashTotal + deposits - withdrawals;
+
     return {
       'cash_sales': cashTotal,
       'bank_sales': bankTotal,
       'voids': voidTotal,
-      'expected_cash': shift.openingCashMinorUnits + cashTotal,
+      'deposits': deposits,
+      'withdrawals': withdrawals,
+      'expected_cash': expectedCash,
     };
   }
 

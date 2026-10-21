@@ -12,6 +12,27 @@ void main() {
   setUp(() async {
     db = await LocalDatabase.openInMemory();
     repository = SaleRepository(db);
+
+    await db.insert('users', {
+      'id': 'cashier-1',
+      'username': 'test_cashier',
+      'password_hash': 'x',
+      'salt': 'x',
+      'role': 'CASHIER',
+      'created_at': DateTime.now().toIso8601String(),
+    });
+    await db.insert('devices', {
+      'id': 'device-1',
+      'name': 'PC',
+      'platform': 'Windows',
+    });
+    await db.insert('shifts', {
+      'id': 'shift-1',
+      'cashier_id': 'cashier-1',
+      'opening_cash_minor_units': 0,
+      'status': 'OPEN',
+      'opened_at': DateTime.now().toIso8601String(),
+    });
   });
 
   tearDown(() async {
@@ -23,12 +44,12 @@ void main() {
     () async {
       final now = DateTime.now();
 
-      // Create two sales
       final sale1 = Sale(
         id: 'sale-1',
         receiptNumber: 'REC-001',
         cashierId: 'cashier-1',
         deviceId: 'device-1',
+        shiftId: 'shift-1',
         subtotalMinorUnits: 5000,
         discountMinorUnits: 0,
         totalMinorUnits: 5000,
@@ -52,6 +73,7 @@ void main() {
         receiptNumber: 'REC-002',
         cashierId: 'cashier-1',
         deviceId: 'device-1',
+        shiftId: 'shift-1',
         subtotalMinorUnits: 3000,
         discountMinorUnits: 0,
         totalMinorUnits: 3000,
@@ -73,16 +95,6 @@ void main() {
 
       await repository.saveSale(sale1);
       await repository.saveSale(sale2);
-
-      // Insert user manually since foreign keys aren't strictly enforced on this test setup
-      await db.insert('users', {
-        'id': 'cashier-1',
-        'username': 'test_cashier',
-        'password_hash': 'hash',
-        'role': 'CASHIER',
-        'is_active': 1,
-        'created_at': now.toIso8601String(),
-      });
 
       final todayRevenue = await repository.getTodayRevenue();
       expect(todayRevenue, 8000);

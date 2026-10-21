@@ -2,6 +2,7 @@ class User {
   final String id;
   final String username;
   final String passwordHash;
+  final String salt;
   final String role;
   final bool isActive;
 
@@ -9,6 +10,7 @@ class User {
     required this.id,
     required this.username,
     required this.passwordHash,
+    required this.salt,
     required this.role,
     this.isActive = true,
   });
@@ -18,6 +20,7 @@ class User {
       'id': id,
       'username': username,
       'password_hash': passwordHash,
+      'salt': salt,
       'role': role,
       'is_active': isActive ? 1 : 0,
       'created_at': DateTime.now().toIso8601String(),
@@ -29,6 +32,7 @@ class User {
       id: map['id'] as String,
       username: map['username'] as String,
       passwordHash: map['password_hash'] as String,
+      salt: map['salt'] as String,
       role: map['role'] as String,
       isActive: (map['is_active'] as int) == 1,
     );

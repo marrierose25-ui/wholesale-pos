@@ -12,6 +12,27 @@ void main() {
   setUp(() async {
     db = await LocalDatabase.openInMemory();
     repository = SaleRepository(db);
+
+    await db.insert('users', {
+      'id': 'cashier-1',
+      'username': 'test',
+      'password_hash': 'x',
+      'salt': 'x',
+      'role': 'CASHIER',
+      'created_at': DateTime.now().toIso8601String(),
+    });
+    await db.insert('devices', {
+      'id': 'device-1',
+      'name': 'PC',
+      'platform': 'Windows',
+    });
+    await db.insert('shifts', {
+      'id': 'shift-1',
+      'cashier_id': 'cashier-1',
+      'opening_cash_minor_units': 0,
+      'status': 'OPEN',
+      'opened_at': DateTime.now().toIso8601String(),
+    });
   });
 
   tearDown(() async {
@@ -27,6 +48,7 @@ void main() {
         receiptNumber: 'REC-VOID',
         cashierId: 'cashier-1',
         deviceId: 'device-1',
+        shiftId: 'shift-1',
         subtotalMinorUnits: 5000,
         discountMinorUnits: 0,
         totalMinorUnits: 5000,
@@ -48,23 +70,23 @@ void main() {
 
       await repository.saveSale(sale);
 
-      // Check it's in reports initially
       expect(await repository.getTodayRevenue(), 5000);
 
-      // Void it
-      await repository.voidSale('sale-to-void', 'REC-VOID', 'owner-1');
+      await repository.voidSale(
+        'sale-to-void',
+        'REC-VOID',
+        'cashier-1',
+        'mistake',
+      );
 
-      // Check reports are now 0
       expect(await repository.getTodayRevenue(), 0);
 
-      // Check the sale still exists but is marked VOIDED
       final sales = await repository.getAllSales();
       expect(sales.length, 1);
       expect(sales.first.status, 'VOIDED');
 
-      // Check Audit Logs
       final logs = await repository.getAuditLogs();
-      expect(logs.length, 2); // SALE_COMPLETED and SALE_VOIDED
+      expect(logs.length, 2);
       expect(logs.first['action'], 'SALE_VOIDED');
     },
   );

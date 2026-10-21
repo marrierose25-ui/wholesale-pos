@@ -5,6 +5,7 @@ class Sale {
   final String receiptNumber;
   final String cashierId;
   final String deviceId;
+  final String shiftId;
   final String? customerName;
   final String paymentMethod;
   final int subtotalMinorUnits;
@@ -13,6 +14,7 @@ class Sale {
   final int amountPaidMinorUnits;
   final int changeMinorUnits;
   final String status;
+  final String? voidReason;
   final DateTime createdAt;
   final DateTime? syncedAt;
 
@@ -23,6 +25,7 @@ class Sale {
     required this.receiptNumber,
     required this.cashierId,
     required this.deviceId,
+    required this.shiftId,
     this.customerName,
     this.paymentMethod = 'CASH',
     required this.subtotalMinorUnits,
@@ -31,6 +34,7 @@ class Sale {
     required this.amountPaidMinorUnits,
     required this.changeMinorUnits,
     this.status = 'COMPLETED',
+    this.voidReason,
     required this.createdAt,
     this.syncedAt,
     required this.items,
@@ -42,6 +46,7 @@ class Sale {
       'receipt_number': receiptNumber,
       'cashier_id': cashierId,
       'device_id': deviceId,
+      'shift_id': shiftId,
       'customer_name': customerName,
       'payment_method': paymentMethod,
       'subtotal_minor_units': subtotalMinorUnits,
@@ -50,6 +55,7 @@ class Sale {
       'amount_paid_minor_units': amountPaidMinorUnits,
       'change_minor_units': changeMinorUnits,
       'status': status,
+      'void_reason': voidReason,
       'created_at': createdAt.toIso8601String(),
       'synced_at': syncedAt?.toIso8601String(),
     };

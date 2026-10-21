@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -11,8 +12,14 @@ class UserRepository {
 
   UserRepository(this._db);
 
-  String _hashPassword(String password) {
-    return sha256.convert(utf8.encode(password)).toString();
+  String _generateSalt() {
+    final random = Random.secure();
+    final values = List<int>.generate(16, (i) => random.nextInt(256));
+    return base64Url.encode(values);
+  }
+
+  String _hashPassword(String password, String salt) {
+    return sha256.convert(utf8.encode(password + salt)).toString();
   }
 
   Future<void> seedDefaultUser() async {
@@ -20,10 +27,12 @@ class UserRepository {
     final count = result.first['count'] as int;
 
     if (count == 0) {
+      final salt = _generateSalt();
       final defaultUser = User(
         id: const Uuid().v4(),
         username: 'owner',
-        passwordHash: _hashPassword('admin'),
+        passwordHash: _hashPassword('admin', salt),
+        salt: salt,
         role: 'OWNER',
       );
       await _db.insert('users', defaultUser.toMap());
@@ -33,20 +42,27 @@ class UserRepository {
   Future<User?> authenticate(String username, String password) async {
     final maps = await _db.query(
       'users',
-      where: 'username = ? AND password_hash = ? AND is_active = 1',
-      whereArgs: [username, _hashPassword(password)],
+      where: 'username = ? AND is_active = 1',
+      whereArgs: [username],
       limit: 1,
     );
 
     if (maps.isEmpty) return null;
-    return User.fromMap(maps.first);
+
+    final user = User.fromMap(maps.first);
+    final expectedHash = _hashPassword(password, user.salt);
+
+    if (user.passwordHash == expectedHash) return user;
+    return null;
   }
 
   Future<void> createUser(String username, String password, String role) async {
+    final salt = _generateSalt();
     final newUser = User(
       id: const Uuid().v4(),
       username: username,
-      passwordHash: _hashPassword(password),
+      passwordHash: _hashPassword(password, salt),
+      salt: salt,
       role: role,
     );
     await _db.insert('users', newUser.toMap());

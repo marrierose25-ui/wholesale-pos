@@ -42,7 +42,7 @@ void main() async {
   );
 }
 
-class WholesalePosApp extends StatelessWidget {
+class WholesalePosApp extends StatefulWidget {
   final Database db;
   final ProductRepository productRepository;
   final SaleRepository saleRepository;
@@ -59,17 +59,32 @@ class WholesalePosApp extends StatelessWidget {
   });
 
   @override
+  State<WholesalePosApp> createState() => _WholesalePosAppState();
+}
+
+class _WholesalePosAppState extends State<WholesalePosApp> {
+  ThemeMode _themeMode = ThemeMode.light;
+
+  void _toggleTheme(bool isDark) {
+    setState(() => _themeMode = isDark ? ThemeMode.dark : ThemeMode.light);
+  }
+
+  @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Wholesale POS',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
+      themeMode: _themeMode,
       home: LicenseWrapper(
-        db: db,
-        productRepository: productRepository,
-        saleRepository: saleRepository,
-        userRepository: userRepository,
-        shiftRepository: shiftRepository,
+        db: widget.db,
+        productRepository: widget.productRepository,
+        saleRepository: widget.saleRepository,
+        userRepository: widget.userRepository,
+        shiftRepository: widget.shiftRepository,
+        isDarkMode: _themeMode == ThemeMode.dark,
+        onToggleTheme: () => _toggleTheme(_themeMode == ThemeMode.light),
       ),
     );
   }
@@ -81,6 +96,8 @@ class LicenseWrapper extends StatefulWidget {
   final SaleRepository saleRepository;
   final UserRepository userRepository;
   final ShiftRepository shiftRepository;
+  final bool isDarkMode;
+  final VoidCallback onToggleTheme;
 
   const LicenseWrapper({
     super.key,
@@ -89,6 +106,8 @@ class LicenseWrapper extends StatefulWidget {
     required this.saleRepository,
     required this.userRepository,
     required this.shiftRepository,
+    required this.isDarkMode,
+    required this.onToggleTheme,
   });
 
   @override
@@ -137,6 +156,8 @@ class _LicenseWrapperState extends State<LicenseWrapper> {
       saleRepository: widget.saleRepository,
       userRepository: widget.userRepository,
       shiftRepository: widget.shiftRepository,
+      isDarkMode: widget.isDarkMode,
+      onToggleTheme: widget.onToggleTheme,
     );
   }
 }
@@ -147,6 +168,8 @@ class AuthWrapper extends StatefulWidget {
   final SaleRepository saleRepository;
   final UserRepository userRepository;
   final ShiftRepository shiftRepository;
+  final bool isDarkMode;
+  final VoidCallback onToggleTheme;
 
   const AuthWrapper({
     super.key,
@@ -155,6 +178,8 @@ class AuthWrapper extends StatefulWidget {
     required this.saleRepository,
     required this.userRepository,
     required this.shiftRepository,
+    required this.isDarkMode,
+    required this.onToggleTheme,
   });
 
   @override
@@ -181,6 +206,8 @@ class _AuthWrapperState extends State<AuthWrapper> {
       shiftRepository: widget.shiftRepository,
       currentUser: _currentUser!,
       onLogout: () => setState(() => _currentUser = null),
+      isDarkMode: widget.isDarkMode,
+      onToggleTheme: widget.onToggleTheme,
     );
   }
 }
@@ -193,6 +220,8 @@ class MainLayout extends StatefulWidget {
   final ShiftRepository shiftRepository;
   final User currentUser;
   final VoidCallback onLogout;
+  final bool isDarkMode;
+  final VoidCallback onToggleTheme;
 
   const MainLayout({
     super.key,
@@ -203,6 +232,8 @@ class MainLayout extends StatefulWidget {
     required this.shiftRepository,
     required this.currentUser,
     required this.onLogout,
+    required this.isDarkMode,
+    required this.onToggleTheme,
   });
 
   @override
@@ -228,6 +259,7 @@ class _MainLayoutState extends State<MainLayout> {
     final screens = <Widget>[
       SalesScreen(
         saleRepository: widget.saleRepository,
+        shiftRepository: widget.shiftRepository,
         currentUser: widget.currentUser,
         onSaleCompleted: _refreshDataScreens,
       ),
@@ -253,8 +285,8 @@ class _MainLayoutState extends State<MainLayout> {
         currentUser: widget.currentUser,
         db: widget.db,
         onLogout: widget.onLogout,
-        isDarkMode: false,
-        onToggleTheme: () {},
+        isDarkMode: widget.isDarkMode,
+        onToggleTheme: widget.onToggleTheme,
       ),
     ];
 
@@ -265,10 +297,13 @@ class _MainLayoutState extends State<MainLayout> {
         children: [
           Container(
             width: 250,
-            decoration: const BoxDecoration(
-              color: AppTheme.surface,
+            decoration: BoxDecoration(
+              color: Theme.of(context).cardColor,
               border: Border(
-                right: BorderSide(color: AppTheme.border, width: 1),
+                right: BorderSide(
+                  color: Theme.of(context).dividerColor,
+                  width: 1,
+                ),
               ),
             ),
             child: Column(
@@ -281,22 +316,23 @@ class _MainLayoutState extends State<MainLayout> {
                       Container(
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
-                          color: AppTheme.primary,
+                          color: Theme.of(context).colorScheme.primary,
                           borderRadius: BorderRadius.circular(6),
                         ),
-                        child: const Icon(
+                        child: Icon(
                           Icons.storefront,
-                          color: Colors.white,
+                          color: Theme.of(context).colorScheme.onPrimary,
                           size: 16,
                         ),
                       ),
                       const SizedBox(width: 12),
-                      const Text(
+                      Text(
                         'Wholesale POS',
                         style: TextStyle(
                           fontWeight: FontWeight.w600,
                           fontSize: 16,
                           letterSpacing: -0.5,
+                          color: Theme.of(context).colorScheme.onSurface,
                         ),
                       ),
                     ],
@@ -311,14 +347,17 @@ class _MainLayoutState extends State<MainLayout> {
                       _buildNavItem(1, Icons.history, 'History'),
                       _buildNavItem(2, Icons.point_of_sale, 'Register'),
                       if (isOwner) ...[
-                        const Padding(
-                          padding: EdgeInsets.fromLTRB(12, 24, 12, 8),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 24, 12, 8),
                           child: Text(
                             'ADMINISTRATION',
                             style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w600,
-                              color: AppTheme.muted,
+                              color: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.color,
                             ),
                           ),
                         ),
@@ -335,10 +374,13 @@ class _MainLayoutState extends State<MainLayout> {
                   onTap: () => setState(() => _selectedIndex = isOwner ? 6 : 3),
                   leading: CircleAvatar(
                     radius: 16,
-                    backgroundColor: AppTheme.primary,
+                    backgroundColor: Theme.of(context).colorScheme.primary,
                     child: Text(
                       widget.currentUser.username[0].toUpperCase(),
-                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onPrimary,
+                        fontSize: 12,
+                      ),
                     ),
                   ),
                   title: Text(
@@ -350,12 +392,15 @@ class _MainLayoutState extends State<MainLayout> {
                   ),
                   subtitle: Text(
                     widget.currentUser.role,
-                    style: const TextStyle(fontSize: 11, color: AppTheme.muted),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Theme.of(context).textTheme.bodySmall?.color,
+                    ),
                   ),
-                  trailing: const Icon(
+                  trailing: Icon(
                     Icons.settings,
                     size: 16,
-                    color: AppTheme.muted,
+                    color: Theme.of(context).textTheme.bodySmall?.color,
                   ),
                   contentPadding: const EdgeInsets.symmetric(
                     horizontal: 20,
@@ -384,16 +429,22 @@ class _MainLayoutState extends State<MainLayout> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
-            color: isSelected ? AppTheme.background : Colors.transparent,
+            color: isSelected
+                ? Theme.of(context).colorScheme.surface
+                : Colors.transparent,
             borderRadius: BorderRadius.circular(6),
-            border: isSelected ? Border.all(color: AppTheme.border) : null,
+            border: isSelected
+                ? Border.all(color: Theme.of(context).dividerColor)
+                : null,
           ),
           child: Row(
             children: [
               Icon(
                 icon,
                 size: 18,
-                color: isSelected ? AppTheme.foreground : AppTheme.muted,
+                color: isSelected
+                    ? Theme.of(context).colorScheme.onSurface
+                    : Theme.of(context).textTheme.bodySmall?.color,
               ),
               const SizedBox(width: 12),
               Text(
@@ -401,7 +452,9 @@ class _MainLayoutState extends State<MainLayout> {
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-                  color: isSelected ? AppTheme.foreground : AppTheme.muted,
+                  color: isSelected
+                      ? Theme.of(context).colorScheme.onSurface
+                      : Theme.of(context).textTheme.bodySmall?.color,
                 ),
               ),
             ],

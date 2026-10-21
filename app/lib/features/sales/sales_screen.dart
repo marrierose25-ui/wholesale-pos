@@ -3,6 +3,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/models/user.dart';
 import '../../core/repositories/sale_repository.dart';
+import '../../core/repositories/shift_repository.dart';
 import '../../core/utils/money_utils.dart';
 import '../../core/utils/receipt_pdf_generator.dart';
 import '../../core/theme/app_theme.dart';
@@ -10,15 +11,18 @@ import 'cart.dart';
 import 'cart_item.dart';
 import 'sale.dart';
 import 'sale_item.dart';
+import 'shift.dart';
 
 class SalesScreen extends StatefulWidget {
   final SaleRepository saleRepository;
+  final ShiftRepository shiftRepository;
   final User currentUser;
   final VoidCallback onSaleCompleted;
 
   const SalesScreen({
     super.key,
     required this.saleRepository,
+    required this.shiftRepository,
     required this.currentUser,
     required this.onSaleCompleted,
   });
@@ -30,11 +34,23 @@ class SalesScreen extends StatefulWidget {
 class _SalesScreenState extends State<SalesScreen> {
   final Cart _cart = Cart();
   bool _isProcessing = false;
+  Shift? _activeShift;
 
   final _nameController = TextEditingController();
   final _priceController = TextEditingController();
   final _qtyController = TextEditingController(text: '1');
   final _nameFocusNode = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadShift();
+  }
+
+  Future<void> _loadShift() async {
+    final shift = await widget.shiftRepository.getActiveShift();
+    if (mounted) setState(() => _activeShift = shift);
+  }
 
   void _addItem() {
     final name = _nameController.text.trim();
@@ -118,12 +134,19 @@ class _SalesScreenState extends State<SalesScreen> {
 
   Future<void> _checkout() async {
     if (_cart.items.isEmpty || _isProcessing) return;
+    if (_activeShift == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please open the register before making a sale.'),
+        ),
+      );
+      return;
+    }
 
     final paidController = TextEditingController();
     String paymentMethod = 'CASH';
     final totalStr = MoneyUtils.minorUnitsToString(_cart.totalMinorUnits);
 
-    // Auto-fill the total for bank transfers
     paidController.text = totalStr;
 
     final result = await showDialog<Map<String, dynamic>>(
@@ -253,6 +276,7 @@ class _SalesScreenState extends State<SalesScreen> {
         receiptNumber: receiptNumber,
         cashierId: widget.currentUser.id,
         deviceId: 'device-1',
+        shiftId: _activeShift!.id,
         paymentMethod: method,
         subtotalMinorUnits: _cart.subtotalMinorUnits,
         discountMinorUnits: _cart.discountMinorUnits,
@@ -324,11 +348,10 @@ class _SalesScreenState extends State<SalesScreen> {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        // Left Side: Manual Entry Form
         Expanded(
           flex: 7,
           child: Container(
-            color: AppTheme.background,
+            color: Theme.of(context).scaffoldBackgroundColor,
             padding: const EdgeInsets.all(24),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -411,20 +434,24 @@ class _SalesScreenState extends State<SalesScreen> {
           ),
         ),
 
-        // Right Side: Cart
         Container(
           width: 400,
-          decoration: const BoxDecoration(
-            color: AppTheme.surface,
-            border: Border(left: BorderSide(color: AppTheme.border, width: 1)),
+          decoration: BoxDecoration(
+            color: Theme.of(context).cardColor,
+            border: Border(
+              left: BorderSide(color: Theme.of(context).dividerColor, width: 1),
+            ),
           ),
           child: Column(
             children: [
               Container(
                 padding: const EdgeInsets.all(24),
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
                   border: Border(
-                    bottom: BorderSide(color: AppTheme.border, width: 1),
+                    bottom: BorderSide(
+                      color: Theme.of(context).dividerColor,
+                      width: 1,
+                    ),
                   ),
                 ),
                 child: Row(
@@ -443,15 +470,16 @@ class _SalesScreenState extends State<SalesScreen> {
                         vertical: 4,
                       ),
                       decoration: BoxDecoration(
-                        color: AppTheme.background,
+                        color: Theme.of(context).scaffoldBackgroundColor,
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: AppTheme.border),
+                        border: Border.all(
+                          color: Theme.of(context).dividerColor,
+                        ),
                       ),
                       child: Text(
                         '${_cart.items.length} items',
                         style: const TextStyle(
                           fontSize: 11,
-                          color: AppTheme.foreground,
                           fontWeight: FontWeight.w500,
                         ),
                       ),
@@ -509,7 +537,7 @@ class _SalesScreenState extends State<SalesScreen> {
                                       padding: const EdgeInsets.all(4),
                                       decoration: BoxDecoration(
                                         border: Border.all(
-                                          color: AppTheme.border,
+                                          color: Theme.of(context).dividerColor,
                                         ),
                                         borderRadius: BorderRadius.circular(4),
                                       ),
@@ -535,7 +563,7 @@ class _SalesScreenState extends State<SalesScreen> {
                                       padding: const EdgeInsets.all(4),
                                       decoration: BoxDecoration(
                                         border: Border.all(
-                                          color: AppTheme.border,
+                                          color: Theme.of(context).dividerColor,
                                         ),
                                         borderRadius: BorderRadius.circular(4),
                                       ),
@@ -551,10 +579,13 @@ class _SalesScreenState extends State<SalesScreen> {
               ),
               Container(
                 padding: const EdgeInsets.all(24),
-                decoration: const BoxDecoration(
-                  color: AppTheme.surface,
+                decoration: BoxDecoration(
+                  color: Theme.of(context).cardColor,
                   border: Border(
-                    top: BorderSide(color: AppTheme.border, width: 1),
+                    top: BorderSide(
+                      color: Theme.of(context).dividerColor,
+                      width: 1,
+                    ),
                   ),
                 ),
                 child: Column(

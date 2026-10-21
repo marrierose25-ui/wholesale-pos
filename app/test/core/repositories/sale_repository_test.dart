@@ -12,6 +12,28 @@ void main() {
   setUp(() async {
     db = await LocalDatabase.openInMemory();
     repository = SaleRepository(db);
+
+    // Insert foreign key dependencies
+    await db.insert('users', {
+      'id': 'user-1',
+      'username': 'test',
+      'password_hash': 'x',
+      'salt': 'x',
+      'role': 'OWNER',
+      'created_at': DateTime.now().toIso8601String(),
+    });
+    await db.insert('devices', {
+      'id': 'device-1',
+      'name': 'PC',
+      'platform': 'Windows',
+    });
+    await db.insert('shifts', {
+      'id': 'shift-1',
+      'cashier_id': 'user-1',
+      'opening_cash_minor_units': 0,
+      'status': 'OPEN',
+      'opened_at': DateTime.now().toIso8601String(),
+    });
   });
 
   tearDown(() async {
@@ -27,6 +49,7 @@ void main() {
       receiptNumber: 'REC-001',
       cashierId: 'user-1',
       deviceId: 'device-1',
+      shiftId: 'shift-1',
       subtotalMinorUnits: 5000,
       discountMinorUnits: 0,
       totalMinorUnits: 5000,
@@ -65,6 +88,7 @@ void main() {
       receiptNumber: 'REC-002',
       cashierId: 'user-1',
       deviceId: 'device-1',
+      shiftId: 'shift-1',
       subtotalMinorUnits: 1500,
       discountMinorUnits: 0,
       totalMinorUnits: 1500,

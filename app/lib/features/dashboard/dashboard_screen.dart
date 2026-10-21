@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../../core/repositories/sale_repository.dart';
 import '../../core/utils/money_utils.dart';
+import '../../core/theme/app_theme.dart';
+import '../sales/sale.dart';
 
 class DashboardScreen extends StatefulWidget {
   final SaleRepository saleRepository;
@@ -13,9 +15,8 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class DashboardScreenState extends State<DashboardScreen> {
-  int _todayRevenue = 0;
-  List<Map<String, dynamic>> _productSummary = [];
-  List<Map<String, dynamic>> _cashierSummary = [];
+  Map<String, int> _stats = {};
+  List<Sale> _recentSales = [];
   bool _isLoading = true;
 
   @override
@@ -27,14 +28,13 @@ class DashboardScreenState extends State<DashboardScreen> {
   Future<void> loadDashboard() async {
     setState(() => _isLoading = true);
 
-    final revenue = await widget.saleRepository.getTodayRevenue();
-    final products = await widget.saleRepository.getProductSalesSummary();
-    final cashiers = await widget.saleRepository.getCashierPerformance();
+    final stats = await widget.saleRepository.getDashboardStats();
+    final allSales = await widget.saleRepository.getAllSales();
+    final recent = allSales.take(5).toList();
 
     setState(() {
-      _todayRevenue = revenue;
-      _productSummary = products;
-      _cashierSummary = cashiers;
+      _stats = stats;
+      _recentSales = recent;
       _isLoading = false;
     });
   }
@@ -44,10 +44,12 @@ class DashboardScreenState extends State<DashboardScreen> {
     if (_isLoading) return const Center(child: CircularProgressIndicator());
 
     return Scaffold(
+      backgroundColor: AppTheme.background,
       appBar: AppBar(
         title: const Text('Dashboard'),
         actions: [
           IconButton(icon: const Icon(Icons.refresh), onPressed: loadDashboard),
+          const SizedBox(width: 16),
         ],
       ),
       body: SingleChildScrollView(
@@ -55,104 +57,200 @@ class DashboardScreenState extends State<DashboardScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Today's Revenue Card
-            Card(
-              color: Colors.blue[50],
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.attach_money,
-                      size: 48,
-                      color: Colors.blue,
-                    ),
-                    const SizedBox(width: 16),
-                    Column(
+            // Top Stat Cards
+            Row(
+              children: [
+                Expanded(
+                  child: _buildStatCard(
+                    'Today\'s Revenue',
+                    _stats['today_revenue'] ?? 0,
+                    isPrimary: true,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: _buildStatCard(
+                    'Cash Collected',
+                    _stats['today_cash'] ?? 0,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: _buildStatCard(
+                    'Digital Payments',
+                    _stats['today_bank'] ?? 0,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: _buildStatCard(
+                    'Register Expected Cash',
+                    _stats['expected_cash'] ?? 0,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 32),
+
+            // Bottom Section
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Left: Recent Transactions
+                Expanded(
+                  flex: 2,
+                  child: Card(
+                    child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
-                          'Today\'s Revenue',
-                          style: TextStyle(fontSize: 16, color: Colors.grey),
-                        ),
-                        Text(
-                          '${MoneyUtils.minorUnitsToString(_todayRevenue)} ETB',
-                          style: const TextStyle(
-                            fontSize: 32,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.blue,
+                        const Padding(
+                          padding: EdgeInsets.all(24),
+                          child: Text(
+                            'Recent Transactions',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                         ),
+                        const Divider(height: 1),
+                        if (_recentSales.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.all(24),
+                            child: Text(
+                              'No sales recorded yet.',
+                              style: TextStyle(color: AppTheme.muted),
+                            ),
+                          )
+                        else
+                          ..._recentSales.map(
+                            (sale) => ListTile(
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 24,
+                                vertical: 8,
+                              ),
+                              leading: CircleAvatar(
+                                backgroundColor: sale.status == 'VOIDED'
+                                    ? Colors.grey
+                                    : AppTheme.background,
+                                child: Icon(
+                                  Icons.receipt,
+                                  color: sale.status == 'VOIDED'
+                                      ? Colors.white
+                                      : AppTheme.foreground,
+                                  size: 20,
+                                ),
+                              ),
+                              title: Text(
+                                sale.receiptNumber,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w500,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              subtitle: Text(
+                                '${sale.createdAt.toString().split('.')[0]} • ${sale.paymentMethod}',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                              trailing: Text(
+                                '${MoneyUtils.minorUnitsToString(sale.totalMinorUnits)} ETB',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  decoration: sale.status == 'VOIDED'
+                                      ? TextDecoration.lineThrough
+                                      : null,
+                                  color: sale.status == 'VOIDED'
+                                      ? Colors.grey
+                                      : AppTheme.foreground,
+                                ),
+                              ),
+                            ),
+                          ),
                       ],
                     ),
-                  ],
+                  ),
                 ),
+                const SizedBox(width: 24),
+                // Right: Quick Actions / Info
+                Expanded(
+                  flex: 1,
+                  child: Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Register Status',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.circle,
+                                color: (_stats['expected_cash'] ?? 0) > 0
+                                    ? AppTheme.success
+                                    : AppTheme.danger,
+                                size: 12,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                (_stats['expected_cash'] ?? 0) > 0
+                                    ? 'Register Open'
+                                    : 'Register Closed',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Expected Cash: ${MoneyUtils.minorUnitsToString(_stats['expected_cash'] ?? 0)} ETB',
+                            style: const TextStyle(
+                              color: AppTheme.muted,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatCard(String title, int amount, {bool isPrimary = false}) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: const TextStyle(
+                color: AppTheme.muted,
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
               ),
             ),
-            const SizedBox(height: 32),
-
-            // Product Sales Summary
+            const SizedBox(height: 12),
             Text(
-              'Product Sales Summary',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 8),
-            Card(
-              child: SizedBox(
-                width: double.infinity,
-                child: DataTable(
-                  columns: const [
-                    DataColumn(label: Text('Product')),
-                    DataColumn(label: Text('Qty Sold'), numeric: true),
-                    DataColumn(label: Text('Revenue'), numeric: true),
-                  ],
-                  rows: _productSummary.map((row) {
-                    return DataRow(
-                      cells: [
-                        DataCell(Text(row['product_name_snapshot'] as String)),
-                        DataCell(Text(row['total_qty'].toString())),
-                        DataCell(
-                          Text(
-                            '${MoneyUtils.minorUnitsToString(row['total_revenue'] as int)} ETB',
-                          ),
-                        ),
-                      ],
-                    );
-                  }).toList(),
-                ),
-              ),
-            ),
-            const SizedBox(height: 32),
-
-            // Cashier Performance
-            Text(
-              'Cashier Performance',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 8),
-            Card(
-              child: SizedBox(
-                width: double.infinity,
-                child: DataTable(
-                  columns: const [
-                    DataColumn(label: Text('Cashier')),
-                    DataColumn(label: Text('Total Sales'), numeric: true),
-                    DataColumn(label: Text('Revenue'), numeric: true),
-                  ],
-                  rows: _cashierSummary.map((row) {
-                    return DataRow(
-                      cells: [
-                        DataCell(Text(row['username'] as String)),
-                        DataCell(Text(row['total_sales'].toString())),
-                        DataCell(
-                          Text(
-                            '${MoneyUtils.minorUnitsToString(row['total_revenue'] as int)} ETB',
-                          ),
-                        ),
-                      ],
-                    );
-                  }).toList(),
-                ),
+              '${MoneyUtils.minorUnitsToString(amount)} ETB',
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: isPrimary ? AppTheme.primary : AppTheme.foreground,
               ),
             ),
           ],

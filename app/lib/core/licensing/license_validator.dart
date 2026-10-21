@@ -1,13 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:crypto/crypto.dart';
+import 'package:cryptography/cryptography.dart';
 
 class LicenseValidator {
-  // Secret key for HMAC signing
-  static final _secretKey = utf8.encode(
-    'my-super-secret-key-for-wholesale-pos-2026',
-  );
+  static final _publicKeyHex =
+      'b94dc2d903a1e3850e7d88fc42b427350e3ff8211a54a71c681c42a2f4541b4e';
 
   static Future<String> getHardwareId() async {
     try {
@@ -34,50 +32,50 @@ class LicenseValidator {
         final exeDir = File(Platform.resolvedExecutable).parent.path;
         file = File('$exeDir/license.key');
         if (!await file.exists()) {
-          return {
-            'error':
-                'license.key not found in app folder or executable folder.',
-          };
+          return {'error': 'license.key not found.'};
         }
       }
 
       final contents = await file.readAsString();
       final parts = contents.split('.');
       if (parts.length != 2) {
-        return {'error': 'Invalid license.key format'};
+        return {'error': 'Invalid format'};
       }
 
       final payloadJson = utf8.decode(base64Url.decode(parts[0]));
       final signatureBytes = base64Url.decode(parts[1]);
 
-      final hmac = Hmac(sha256, _secretKey);
-      final digest = hmac.convert(utf8.encode(payloadJson));
-      final expectedSignature = digest.bytes;
+      final publicKey = SimplePublicKey(
+        hexToBytes(_publicKeyHex),
+        type: KeyPairType.ed25519,
+      );
+      final signature = Signature(signatureBytes, publicKey: publicKey);
 
-      // Constant time comparison
-      if (expectedSignature.length != signatureBytes.length) {
-        return {'error': 'Invalid signature length'};
-      }
-      int diff = 0;
-      for (int i = 0; i < expectedSignature.length; i++) {
-        diff |= expectedSignature[i] ^ signatureBytes[i];
-      }
-      if (diff != 0) {
-        return {'error': 'Cryptographic signature is invalid.'};
+      final isValid = await Ed25519().verify(
+        utf8.encode(payloadJson),
+        signature: signature,
+      );
+      if (!isValid) {
+        return {'error': 'Invalid signature.'};
       }
 
       final payload = jsonDecode(payloadJson);
       final hwId = await getHardwareId();
 
       if (payload['hardware_id'] != hwId) {
-        return {
-          'error':
-              'License is for ${payload['hardware_id']}, but this PC is $hwId',
-        };
+        return {'error': 'License is for a different device.'};
       }
       return payload;
     } catch (e) {
-      return {'error': 'Validation exception: $e'};
+      return {'error': 'Error: $e'};
     }
+  }
+
+  static List<int> hexToBytes(String hex) {
+    final result = <int>[];
+    for (int i = 0; i < hex.length; i += 2) {
+      result.add(int.parse(hex.substring(i, i + 2), radix: 16));
+    }
+    return result;
   }
 }

@@ -181,6 +181,9 @@ class RegisterScreenState extends State<RegisterScreen> {
     final expectedCash = _summary!['expected_cash']!;
     final cashSales = _summary!['cash_sales']!;
     final bankSales = _summary!['bank_sales']!;
+    final deposits = _summary!['deposits']!;
+    final withdrawals = _summary!['withdrawals']!;
+
     final actualCash =
         MoneyUtils.stringToMinorUnits(_actualCashController.text) ?? 0;
     final discrepancy = actualCash - expectedCash;
@@ -188,38 +191,33 @@ class RegisterScreenState extends State<RegisterScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Stat Cards Grid
-        Row(
+        Wrap(
+          spacing: 16,
+          runSpacing: 16,
           children: [
-            Expanded(
-              child: _buildStatCard(
-                'Opening Cash',
-                MoneyUtils.minorUnitsToString(
-                  _activeShift!.openingCashMinorUnits,
-                ),
+            _buildStatCard(
+              'Opening Cash',
+              MoneyUtils.minorUnitsToString(
+                _activeShift!.openingCashMinorUnits,
               ),
             ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: _buildStatCard(
-                'Cash Sales',
-                MoneyUtils.minorUnitsToString(cashSales),
-              ),
+            _buildStatCard(
+              'Cash Sales',
+              MoneyUtils.minorUnitsToString(cashSales),
             ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: _buildStatCard(
-                'Bank Sales',
-                MoneyUtils.minorUnitsToString(bankSales),
-              ),
+            _buildStatCard(
+              'Bank Sales',
+              MoneyUtils.minorUnitsToString(bankSales),
             ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: _buildStatCard(
-                'Expected Cash',
-                MoneyUtils.minorUnitsToString(expectedCash),
-                isPrimary: true,
-              ),
+            _buildStatCard(
+              'Withdrawals',
+              MoneyUtils.minorUnitsToString(withdrawals),
+            ),
+            _buildStatCard('Deposits', MoneyUtils.minorUnitsToString(deposits)),
+            _buildStatCard(
+              'Expected Cash',
+              MoneyUtils.minorUnitsToString(expectedCash),
+              isPrimary: true,
             ),
           ],
         ),
@@ -227,7 +225,6 @@ class RegisterScreenState extends State<RegisterScreen> {
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Left: Close Register Form
             Expanded(
               flex: 2,
               child: Card(
@@ -305,7 +302,6 @@ class RegisterScreenState extends State<RegisterScreen> {
               ),
             ),
             const SizedBox(width: 24),
-            // Right: Void Verification Panel
             Expanded(
               flex: 1,
               child: Card(
@@ -422,30 +418,33 @@ class RegisterScreenState extends State<RegisterScreen> {
   }
 
   Widget _buildStatCard(String title, String amount, {bool isPrimary = false}) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              title,
-              style: const TextStyle(
-                color: AppTheme.muted,
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
+    return SizedBox(
+      width: 180,
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  color: AppTheme.muted,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              '$amount ETB',
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: isPrimary ? AppTheme.primary : AppTheme.foreground,
+              const SizedBox(height: 8),
+              Text(
+                '$amount ETB',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: isPrimary ? AppTheme.primary : AppTheme.foreground,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
