@@ -2,9 +2,13 @@ import 'package:flutter/material.dart';
 
 import '../../core/models/product.dart';
 import '../../core/repositories/product_repository.dart';
+import '../../core/theme/app_theme.dart';
 import '../../core/utils/money_utils.dart';
 import 'add_product_dialog.dart';
 
+/// Owner screen for managing saved names. Saved names are optional
+/// suggestions on the POS screen — the catalog is never required to make a
+/// sale. Deactivated names are kept so they can be brought back later.
 class ProductListScreen extends StatefulWidget {
   final ProductRepository repository;
 
@@ -15,56 +19,122 @@ class ProductListScreen extends StatefulWidget {
 }
 
 class _ProductListScreenState extends State<ProductListScreen> {
-  List<Product> _products = [];
+  List<Product> _activeNames = [];
+  List<Product> _inactiveNames = [];
   bool _isLoading = true;
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    _loadProducts();
+    _loadNames();
   }
 
-  Future<void> _loadProducts() async {
+  Future<void> _loadNames() async {
     setState(() {
       _isLoading = true;
       _error = null;
     });
     try {
-      final products = await widget.repository.getAllActive();
+      final active = await widget.repository.getAllActive();
+      final inactive = await widget.repository.getAllInactive();
       if (!mounted) return;
       setState(() {
-        _products = products;
+        _activeNames = active;
+        _inactiveNames = inactive;
         _isLoading = false;
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _error = 'Could not load products.';
+        _error = 'Could not load saved names.';
       });
     }
   }
 
-  Future<void> _saveProduct(Product product) async {
-    await widget.repository.save(product);
-    await _loadProducts();
+  void _showError(Object e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(e.toString().replaceAll('Exception: ', ''))),
+    );
   }
 
   Future<void> _showAddDialog() async {
-    await showDialog<void>(
+    final product = await showDialog<Product>(
       context: context,
-      builder: (context) => AddProductDialog(onSave: _saveProduct),
+      builder: (context) => const SavedNameDialog(),
     );
+    if (product == null) return;
+    try {
+      await widget.repository.save(product);
+      await _loadNames();
+    } catch (e) {
+      if (mounted) _showError(e);
+    }
+  }
+
+  Future<void> _showEditDialog(Product product) async {
+    final updated = await showDialog<Product>(
+      context: context,
+      builder: (context) => SavedNameDialog(initial: product),
+    );
+    if (updated == null) return;
+    try {
+      await widget.repository.update(updated);
+      await _loadNames();
+    } catch (e) {
+      if (mounted) _showError(e);
+    }
+  }
+
+  Future<void> _deactivate(Product product) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Deactivate Name?'),
+        content: Text(
+          '"${product.name}" will stop appearing as a suggestion on the POS '
+          'screen. Existing sales keep their recorded names.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Deactivate'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await widget.repository.deactivate(product.id);
+      await _loadNames();
+    } catch (e) {
+      if (mounted) _showError(e);
+    }
+  }
+
+  Future<void> _reactivate(Product product) async {
+    try {
+      await widget.repository.reactivate(product.id);
+      await _loadNames();
+    } catch (e) {
+      if (mounted) _showError(e);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        title: const Text('Product Catalog'),
+        title: const Text('Saved Names'),
         actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadProducts),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadNames),
+          const SizedBox(width: 16),
         ],
       ),
       body: _isLoading
@@ -76,56 +146,138 @@ class _ProductListScreenState extends State<ProductListScreen> {
                 children: [
                   Text(_error!),
                   const SizedBox(height: 8),
-                  TextButton(
-                    onPressed: _loadProducts,
-                    child: const Text('Retry'),
-                  ),
+                  TextButton(onPressed: _loadNames, child: const Text('Retry')),
                 ],
               ),
             )
-          : _products.isEmpty
-          ? Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.inventory_2_outlined, size: 48),
-                  const SizedBox(height: 16),
-                  const Text('No products yet.'),
-                  const SizedBox(height: 12),
-                  FilledButton.icon(
-                    onPressed: _showAddDialog,
-                    icon: const Icon(Icons.add),
-                    label: const Text('Add Product'),
-                  ),
-                ],
-              ),
-            )
-          : ListView.separated(
-              itemCount: _products.length,
-              separatorBuilder: (context, index) => const Divider(height: 1),
-              itemBuilder: (context, index) {
-                final product = _products[index];
-                final category = product.category;
-                return ListTile(
-                  title: Text(product.name),
-                  subtitle: Text(
-                    '${product.code} • ${product.unit}'
-                    '${category == null || category.isEmpty ? '' : ' • $category'}',
-                  ),
-                  trailing: Text(
-                    '${MoneyUtils.minorUnitsToString(product.sellingPriceMinorUnits)} ETB',
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
+          : ListView(
+              padding: const EdgeInsets.all(24),
+              children: [
+                Card(
+                  margin: EdgeInsets.zero,
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.info_outline, size: 16),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Saved names are optional shortcuts for the POS '
+                            'screen — tapping one pre-fills the name and '
+                            'default price. Cashiers can always type any '
+                            'product name without saving it here.',
+                            style: TextStyle(
+                              color: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.color,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                );
-              },
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  'ACTIVE NAMES',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: Theme.of(context).textTheme.bodySmall?.color,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                if (_activeNames.isEmpty)
+                  Card(
+                    margin: EdgeInsets.zero,
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Center(
+                        child: Text(
+                          'No saved names yet. Sales never require them — '
+                          'add one only if you want a shortcut.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Theme.of(context).textTheme.bodySmall?.color,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  ..._activeNames.map(_buildActiveTile),
+                if (_inactiveNames.isNotEmpty) ...[
+                  const SizedBox(height: 24),
+                  Text(
+                    'DEACTIVATED',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: Theme.of(context).textTheme.bodySmall?.color,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ..._inactiveNames.map(_buildInactiveTile),
+                ],
+              ],
             ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _showAddDialog,
         icon: const Icon(Icons.add),
-        label: const Text('Add Product'),
+        label: const Text('Add Name'),
+      ),
+    );
+  }
+
+  Widget _buildActiveTile(Product product) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        leading: const Icon(Icons.label_outline),
+        title: Text(
+          product.name,
+          style: const TextStyle(fontWeight: FontWeight.w500),
+        ),
+        subtitle: Text(
+          product.sellingPriceMinorUnits > 0
+              ? 'Default: ${MoneyUtils.formatBr(product.sellingPriceMinorUnits)}'
+              : 'No default price',
+          style: const TextStyle(fontSize: 12),
+        ),
+        trailing: PopupMenuButton<String>(
+          onSelected: (value) {
+            if (value == 'edit') _showEditDialog(product);
+            if (value == 'deactivate') _deactivate(product);
+          },
+          itemBuilder: (context) => const [
+            PopupMenuItem(value: 'edit', child: Text('Edit')),
+            PopupMenuItem(value: 'deactivate', child: Text('Deactivate')),
+          ],
+        ),
+        onTap: () => _showEditDialog(product),
+      ),
+    );
+  }
+
+  Widget _buildInactiveTile(Product product) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        dense: true,
+        leading: Icon(Icons.label_outline, color: AppTheme.muted),
+        title: Text(
+          product.name,
+          style: TextStyle(color: Theme.of(context).textTheme.bodySmall?.color),
+        ),
+        trailing: TextButton.icon(
+          onPressed: () => _reactivate(product),
+          icon: const Icon(Icons.restore, size: 16),
+          label: const Text('Restore'),
+        ),
       ),
     );
   }

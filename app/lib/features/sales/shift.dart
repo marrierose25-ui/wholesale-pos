@@ -8,6 +8,10 @@ class Shift {
   final DateTime openedAt;
   final DateTime? closedAt;
 
+  /// Username of the cashier who ran the shift. Hydrated from the users table
+  /// for the register-history view only; never persisted on the shift row.
+  final String? cashierName;
+
   Shift({
     required this.id,
     required this.cashierId,
@@ -17,7 +21,17 @@ class Shift {
     required this.status,
     required this.openedAt,
     this.closedAt,
+    this.cashierName,
   });
+
+  /// Counted cash minus the expected cash at close time. Null while the shift
+  /// is still open (no closing figure recorded yet).
+  int? get discrepancy {
+    if (closingCashMinorUnits == null || expectedCashMinorUnits == null) {
+      return null;
+    }
+    return closingCashMinorUnits! - expectedCashMinorUnits!;
+  }
 
   Map<String, dynamic> toMap() {
     return {
@@ -44,6 +58,7 @@ class Shift {
       closedAt: map['closed_at'] != null
           ? DateTime.parse(map['closed_at'] as String)
           : null,
+      cashierName: map['cashier_name'] as String?,
     );
   }
 }

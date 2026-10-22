@@ -1,0 +1,327 @@
+import 'package:flutter/material.dart';
+
+import '../../core/models/user.dart';
+import '../../core/repositories/finance_repository.dart';
+import '../../core/theme/app_theme.dart';
+import '../../core/utils/money_utils.dart';
+import 'finance_person_screen.dart';
+
+/// Owner-only overview of people tracked in the private money area. Cashier
+/// access is blocked in [FinanceRepository] at the data layer, not just here.
+class FinanceOverviewScreen extends StatefulWidget {
+  final FinanceRepository financeRepository;
+  final User currentUser;
+
+  const FinanceOverviewScreen({
+    super.key,
+    required this.financeRepository,
+    required this.currentUser,
+  });
+
+  @override
+  State<FinanceOverviewScreen> createState() => _FinanceOverviewScreenState();
+}
+
+class _FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
+  List<Map<String, dynamic>> _summaries = [];
+  bool _isLoading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    try {
+      final summaries = await widget.financeRepository.getCategorySummaries(
+        widget.currentUser.id,
+      );
+      if (!mounted) return;
+      setState(() {
+        _summaries = summaries;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = e.toString().replaceAll('Exception: ', '');
+      });
+    }
+  }
+
+  Future<void> _showAddPersonDialog() async {
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => const _NameDialog(title: 'Add Person'),
+    );
+    if (name == null || name.trim().isEmpty) return;
+    try {
+      await widget.financeRepository.createCategory(
+        ownerId: widget.currentUser.id,
+        name: name,
+      );
+      await _load();
+    } catch (e) {
+      if (mounted) _showError(e);
+    }
+  }
+
+  Future<void> _showRenameDialog(Map<String, dynamic> summary) async {
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => _NameDialog(
+        title: 'Rename Person',
+        initial: summary['name'] as String,
+      ),
+    );
+    if (name == null || name.trim().isEmpty) return;
+    try {
+      await widget.financeRepository.renameCategory(
+        ownerId: widget.currentUser.id,
+        categoryId: summary['id'] as String,
+        newName: name,
+      );
+      await _load();
+    } catch (e) {
+      if (mounted) _showError(e);
+    }
+  }
+
+  void _showError(Object e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(e.toString().replaceAll('Exception: ', ''))),
+    );
+  }
+
+  Future<void> _openPerson(Map<String, dynamic> summary) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => FinancePersonScreen(
+          financeRepository: widget.financeRepository,
+          currentUser: widget.currentUser,
+          categoryId: summary['id'] as String,
+          personName: summary['name'] as String,
+        ),
+      ),
+    );
+    _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final totalPending = _summaries.fold<int>(
+      0,
+      (sum, row) => sum + (row['pending_total'] as int? ?? 0),
+    );
+
+    return Scaffold(
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      appBar: AppBar(
+        title: const Text('Money Tracking'),
+        actions: [
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
+          const SizedBox(width: 16),
+        ],
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _error != null
+          ? Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_error!),
+                  const SizedBox(height: 8),
+                  TextButton(onPressed: _load, child: const Text('Retry')),
+                ],
+              ),
+            )
+          : ListView(
+              padding: const EdgeInsets.all(24),
+              children: [
+                Card(
+                  margin: EdgeInsets.zero,
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.lock_outline, size: 16),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Private area — visible only to you. Manual '
+                                'records of money taken from banks or other '
+                                'sources, organized by person.',
+                                style: TextStyle(
+                                  color: Theme.of(context)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.color,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          'Pending Across Everyone',
+                          style: TextStyle(
+                            color: Theme.of(context).textTheme.bodySmall?.color,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          MoneyUtils.formatBr(totalPending),
+                          style: TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.bold,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                if (_summaries.isEmpty)
+                  Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(32),
+                      child: Text(
+                        'No people yet. Add the names you want to track '
+                        'money for.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Theme.of(context).textTheme.bodySmall?.color,
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  ..._summaries.map(_buildPersonTile),
+              ],
+            ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _showAddPersonDialog,
+        icon: const Icon(Icons.person_add),
+        label: const Text('Add Person'),
+      ),
+    );
+  }
+
+  Widget _buildPersonTile(Map<String, dynamic> summary) {
+    final name = summary['name'] as String;
+    final pendingCount = summary['pending_count'] as int? ?? 0;
+    final pendingTotal = summary['pending_total'] as int? ?? 0;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: Theme.of(context).colorScheme.primary,
+          child: Text(
+            name.isEmpty ? '?' : name[0].toUpperCase(),
+            style: const TextStyle(color: Colors.white, fontSize: 14),
+          ),
+        ),
+        title: Text(name, style: const TextStyle(fontWeight: FontWeight.w500)),
+        subtitle: Text(
+          pendingCount == 0
+              ? 'No pending entries'
+              : '$pendingCount pending • ${MoneyUtils.formatBr(pendingTotal)}',
+        ),
+        trailing: PopupMenuButton<String>(
+          onSelected: (value) {
+            if (value == 'rename') _showRenameDialog(summary);
+          },
+          itemBuilder: (context) => const [
+            PopupMenuItem(value: 'rename', child: Text('Rename')),
+          ],
+        ),
+        onTap: () => _openPerson(summary),
+      ),
+    );
+  }
+}
+
+class _NameDialog extends StatefulWidget {
+  final String title;
+  final String? initial;
+
+  const _NameDialog({required this.title, this.initial});
+
+  @override
+  State<_NameDialog> createState() => _NameDialogState();
+}
+
+class _NameDialogState extends State<_NameDialog> {
+  late final TextEditingController _controller;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initial ?? '');
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final name = _controller.text.trim();
+    if (name.isEmpty) {
+      setState(() => _error = 'A name is required.');
+      return;
+    }
+    Navigator.of(context).pop(name);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            decoration: InputDecoration(labelText: 'Name', errorText: _error),
+            onSubmitted: (_) => _submit(),
+          ),
+          if (widget.title == 'Rename Person')
+            const Padding(
+              padding: EdgeInsets.only(top: 12),
+              child: Text(
+                'Renaming keeps all existing entries and history.',
+                style: TextStyle(fontSize: 12, color: AppTheme.muted),
+              ),
+            ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Save')),
+      ],
+    );
+  }
+}

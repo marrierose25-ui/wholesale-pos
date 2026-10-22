@@ -4,6 +4,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'core/database/local_database.dart';
 import 'core/licensing/license_validator.dart';
 import 'core/models/user.dart';
+import 'core/repositories/finance_repository.dart';
 import 'core/repositories/product_repository.dart';
 import 'core/repositories/sale_repository.dart';
 import 'core/repositories/shift_repository.dart';
@@ -12,6 +13,7 @@ import 'core/theme/app_theme.dart';
 import 'features/audit/audit_log_screen.dart';
 import 'features/auth/login_screen.dart';
 import 'features/dashboard/dashboard_screen.dart';
+import 'features/finance/finance_overview_screen.dart';
 import 'features/licensing/activation_screen.dart';
 import 'features/products/product_list_screen.dart';
 import 'features/register/register_screen.dart';
@@ -29,6 +31,7 @@ Future<void> main() async {
   final saleRepository = SaleRepository(db);
   final userRepository = UserRepository(db);
   final shiftRepository = ShiftRepository(db);
+  final financeRepository = FinanceRepository(db);
 
   final deviceId = await LocalDatabase.registerCurrentDevice(db);
   final themeSetting = await LocalDatabase.getSetting(
@@ -43,6 +46,7 @@ Future<void> main() async {
       saleRepository: saleRepository,
       userRepository: userRepository,
       shiftRepository: shiftRepository,
+      financeRepository: financeRepository,
       deviceId: deviceId,
       initialDarkMode: themeSetting == 'dark',
     ),
@@ -55,6 +59,7 @@ class WholesalePosApp extends StatefulWidget {
   final SaleRepository saleRepository;
   final UserRepository userRepository;
   final ShiftRepository shiftRepository;
+  final FinanceRepository financeRepository;
   final String deviceId;
   final bool initialDarkMode;
 
@@ -65,6 +70,7 @@ class WholesalePosApp extends StatefulWidget {
     required this.saleRepository,
     required this.userRepository,
     required this.shiftRepository,
+    required this.financeRepository,
     required this.deviceId,
     required this.initialDarkMode,
   });
@@ -105,6 +111,7 @@ class _WholesalePosAppState extends State<WholesalePosApp> {
         saleRepository: widget.saleRepository,
         userRepository: widget.userRepository,
         shiftRepository: widget.shiftRepository,
+        financeRepository: widget.financeRepository,
         deviceId: widget.deviceId,
         isDarkMode: _themeMode == ThemeMode.dark,
         onToggleTheme: () => _toggleTheme(_themeMode == ThemeMode.light),
@@ -119,6 +126,7 @@ class LicenseWrapper extends StatefulWidget {
   final SaleRepository saleRepository;
   final UserRepository userRepository;
   final ShiftRepository shiftRepository;
+  final FinanceRepository financeRepository;
   final String deviceId;
   final bool isDarkMode;
   final VoidCallback onToggleTheme;
@@ -130,6 +138,7 @@ class LicenseWrapper extends StatefulWidget {
     required this.saleRepository,
     required this.userRepository,
     required this.shiftRepository,
+    required this.financeRepository,
     required this.deviceId,
     required this.isDarkMode,
     required this.onToggleTheme,
@@ -182,6 +191,7 @@ class _LicenseWrapperState extends State<LicenseWrapper> {
       saleRepository: widget.saleRepository,
       userRepository: widget.userRepository,
       shiftRepository: widget.shiftRepository,
+      financeRepository: widget.financeRepository,
       deviceId: widget.deviceId,
       isDarkMode: widget.isDarkMode,
       onToggleTheme: widget.onToggleTheme,
@@ -195,6 +205,7 @@ class AuthWrapper extends StatefulWidget {
   final SaleRepository saleRepository;
   final UserRepository userRepository;
   final ShiftRepository shiftRepository;
+  final FinanceRepository financeRepository;
   final String deviceId;
   final bool isDarkMode;
   final VoidCallback onToggleTheme;
@@ -206,6 +217,7 @@ class AuthWrapper extends StatefulWidget {
     required this.saleRepository,
     required this.userRepository,
     required this.shiftRepository,
+    required this.financeRepository,
     required this.deviceId,
     required this.isDarkMode,
     required this.onToggleTheme,
@@ -233,6 +245,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
       saleRepository: widget.saleRepository,
       userRepository: widget.userRepository,
       shiftRepository: widget.shiftRepository,
+      financeRepository: widget.financeRepository,
       deviceId: widget.deviceId,
       currentUser: _currentUser!,
       onLogout: () => setState(() => _currentUser = null),
@@ -248,6 +261,7 @@ class MainLayout extends StatefulWidget {
   final SaleRepository saleRepository;
   final UserRepository userRepository;
   final ShiftRepository shiftRepository;
+  final FinanceRepository financeRepository;
   final String deviceId;
   final User currentUser;
   final VoidCallback onLogout;
@@ -261,6 +275,7 @@ class MainLayout extends StatefulWidget {
     required this.saleRepository,
     required this.userRepository,
     required this.shiftRepository,
+    required this.financeRepository,
     required this.deviceId,
     required this.currentUser,
     required this.onLogout,
@@ -329,6 +344,11 @@ class _MainLayoutState extends State<MainLayout> {
           currentUser: widget.currentUser,
         ),
       if (isOwner) AuditLogScreen(saleRepository: widget.saleRepository),
+      if (isOwner)
+        FinanceOverviewScreen(
+          financeRepository: widget.financeRepository,
+          currentUser: widget.currentUser,
+        ),
       SettingsScreen(
         currentUser: widget.currentUser,
         db: widget.db,
@@ -416,11 +436,16 @@ class _MainLayoutState extends State<MainLayout> {
                                 ),
                               ),
                             ),
-                            _buildNavItem(3, Icons.inventory_2, 'Products'),
+                            _buildNavItem(3, Icons.label, 'Saved Names'),
                             _buildNavItem(4, Icons.dashboard, 'Dashboard'),
                             _buildNavItem(5, Icons.bar_chart, 'Reports'),
                             _buildNavItem(6, Icons.people, 'Users'),
                             _buildNavItem(7, Icons.security, 'Audit Logs'),
+                            _buildNavItem(
+                              8,
+                              Icons.account_balance_wallet,
+                              'Money Tracking',
+                            ),
                           ],
                         ],
                       ),

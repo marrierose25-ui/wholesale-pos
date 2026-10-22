@@ -15,10 +15,18 @@ void main() {
 
     await db.insert('users', {
       'id': 'owner-1',
-      'username': 'test',
+      'username': 'owner',
       'password_hash': 'x',
       'salt': 'x',
       'role': 'OWNER',
+      'created_at': DateTime.now().toIso8601String(),
+    });
+    await db.insert('users', {
+      'id': 'cashier-1',
+      'username': 'cashier',
+      'password_hash': 'x',
+      'salt': 'x',
+      'role': 'CASHIER',
       'created_at': DateTime.now().toIso8601String(),
     });
     await db.insert('devices', {
@@ -39,13 +47,11 @@ void main() {
     await db.close();
   });
 
-  test(
-    'Voiding a sale updates status and removes from revenue reports',
-    () async {
-      final now = DateTime.now();
-      final sale = Sale(
-        id: 'sale-to-void',
-        receiptNumber: 'REC-VOID',
+  Future<void> seedSale(String id) async {
+    await repository.saveSale(
+      Sale(
+        id: id,
+        receiptNumber: 'REC-$id',
         cashierId: 'owner-1',
         deviceId: 'device-1',
         shiftId: 'shift-1',
@@ -54,40 +60,83 @@ void main() {
         totalMinorUnits: 5000,
         amountPaidMinorUnits: 5000,
         changeMinorUnits: 0,
-        createdAt: now,
+        createdAt: DateTime.now(),
         items: [
           SaleItem(
-            id: 'item-v',
-            saleId: 'sale-to-void',
-            productId: 'prod-1',
+            id: 'item-$id',
+            saleId: id,
+            productId: 'MANUAL',
             productNameSnapshot: 'Sugar',
             unitPriceSnapshotMinorUnits: 5000,
-            quantity: 1,
+            quantityText: '1',
+            billingQuantityMilliunits: 1000,
             lineTotalMinorUnits: 5000,
           ),
         ],
-      );
+      ),
+    );
+  }
 
-      await repository.saveSale(sale);
+  test(
+    'Voiding a sale excludes it from revenue but keeps the record',
+    () async {
+      await seedSale('sale-to-void');
 
-      expect(await repository.getTodayRevenue(), 5000);
+      final before = await repository.getDashboardStats();
+      expect(before['revenue'], 5000);
+      expect(before['sales_count'], 1);
 
-      await repository.voidSale(
-        'sale-to-void',
-        'REC-VOID',
-        'owner-1',
-        'mistake',
-      );
+      await repository.voidSale('sale-to-void', 'owner-1', 'mistake');
 
-      expect(await repository.getTodayRevenue(), 0);
+      final after = await repository.getDashboardStats();
+      expect(after['revenue'], 0);
+      expect(after['sales_count'], 0);
+      expect(after['average_sale'], 0);
 
-      final sales = await repository.getAllSales();
+      // History keeps the record forever; nothing is deleted.
+      final sales = await repository.getSales();
       expect(sales.length, 1);
       expect(sales.first.status, 'VOIDED');
+      expect(sales.first.voidReason, 'mistake');
+      expect(sales.first.voidedBy, 'owner-1');
 
       final logs = await repository.getAuditLogs();
       expect(logs.length, 2);
       expect(logs.first['action'], 'SALE_VOIDED');
+      // The audit detail references the amount, not a receipt number.
+      expect(logs.first['details'].contains('50.00 Br'), isTrue);
+      expect(logs.first['details'].contains('REC-'), isFalse);
     },
   );
+
+  test('Voiding the same sale twice is rejected', () async {
+    await seedSale('sale-twice');
+    await repository.voidSale('sale-twice', 'owner-1', 'mistake');
+
+    await expectLater(
+      repository.voidSale('sale-twice', 'owner-1', 'other reason'),
+      throwsException,
+    );
+  });
+
+  test('A cashier cannot void sales', () async {
+    await seedSale('sale-cashier');
+
+    await expectLater(
+      repository.voidSale('sale-cashier', 'cashier-1', 'cashier attempt'),
+      throwsException,
+    );
+
+    final sales = await repository.getSales();
+    expect(sales.first.status, 'COMPLETED');
+  });
+
+  test('A void reason is required', () async {
+    await seedSale('sale-noreason');
+
+    await expectLater(
+      repository.voidSale('sale-noreason', 'owner-1', '   '),
+      throwsException,
+    );
+  });
 }

@@ -21,6 +21,15 @@ class Sale {
   final DateTime createdAt;
   final DateTime? syncedAt;
 
+  /// Username of the cashier who recorded the sale. Hydrated from the users
+  /// table for display only; never persisted on the sale row itself.
+  final String? cashierName;
+
+  /// True when a cashier has filed a not-yet-actioned void request against this
+  /// sale. Hydrated from `void_requests` for display only; never persisted on
+  /// the sale row itself.
+  final bool hasPendingVoidRequest;
+
   final List<SaleItem> items;
 
   Sale({
@@ -43,6 +52,8 @@ class Sale {
     this.voidedShiftId,
     required this.createdAt,
     this.syncedAt,
+    this.cashierName,
+    this.hasPendingVoidRequest = false,
     required this.items,
   });
 

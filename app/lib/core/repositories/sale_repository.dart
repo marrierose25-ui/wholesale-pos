@@ -4,12 +4,23 @@ import 'package:uuid/uuid.dart';
 import '../../features/sales/sale.dart';
 import '../../features/sales/sale_item.dart';
 import '../../features/sales/shift.dart';
+import '../../features/sales/void_request.dart';
+import '../utils/date_range.dart';
+import '../utils/money_utils.dart';
 import 'shift_repository.dart';
 
 class SaleRepository {
   final Database _db;
 
   SaleRepository(this._db);
+
+  /// Escapes LIKE wildcards so user search text matches literally.
+  static String escapeLike(String value) {
+    return value
+        .replaceAll('\\', '\\\\')
+        .replaceAll('%', '\\%')
+        .replaceAll('_', '\\_');
+  }
 
   Future<void> saveSale(Sale sale) async {
     await _db.transaction((txn) async {
@@ -35,17 +46,7 @@ class SaleRepository {
       }
       var itemSubtotal = 0;
       for (final item in sale.items) {
-        if (item.productNameSnapshot.trim().isEmpty ||
-            item.quantity <= 0 ||
-            item.unitPriceSnapshotMinorUnits < 0 ||
-            item.lineDiscountMinorUnits < 0 ||
-            item.lineDiscountMinorUnits >
-                item.unitPriceSnapshotMinorUnits * item.quantity ||
-            item.lineTotalMinorUnits !=
-                item.unitPriceSnapshotMinorUnits * item.quantity -
-                    item.lineDiscountMinorUnits) {
-          throw Exception('Sale contains an invalid line item.');
-        }
+        _validateLineItem(item);
         itemSubtotal += item.lineTotalMinorUnits;
       }
       if (itemSubtotal != sale.subtotalMinorUnits ||
@@ -69,15 +70,57 @@ class SaleRepository {
         'user_id': sale.cashierId,
         'action': 'SALE_COMPLETED',
         'details':
-            'Receipt: ${sale.receiptNumber}, Total: ${sale.totalMinorUnits}',
+            'Total: ${MoneyUtils.formatBr(sale.totalMinorUnits)}, '
+            'Lines: ${sale.items.length}',
         'created_at': DateTime.now().toIso8601String(),
       });
     });
   }
 
+  /// A line item is valid when either
+  /// (a) it has a numeric billing quantity and its total is exactly
+  ///     price x quantity minus the line discount, or
+  /// (b) it has no billing quantity and the total was entered manually,
+  ///     in which case the quantity is only a description.
+  /// Descriptive quantities are never interpreted as numbers.
+  static void _validateLineItem(SaleItem item) {
+    if (item.productNameSnapshot.trim().isEmpty ||
+        item.quantityText.trim().isEmpty ||
+        item.unitPriceSnapshotMinorUnits < 0 ||
+        item.lineDiscountMinorUnits < 0 ||
+        item.lineTotalMinorUnits < 0) {
+      throw Exception('Sale contains an invalid line item.');
+    }
+
+    final milliunits = item.billingQuantityMilliunits;
+    if (milliunits != null) {
+      if (milliunits < 0) {
+        throw Exception('Sale contains an invalid line item.');
+      }
+      final base = MoneyUtils.tryLineTotalMinorUnits(
+        item.unitPriceSnapshotMinorUnits,
+        milliunits,
+      );
+      if (base == null) {
+        throw Exception('A line item total is too large.');
+      }
+      if (item.lineDiscountMinorUnits > base ||
+          item.lineTotalMinorUnits != base - item.lineDiscountMinorUnits) {
+        throw Exception(
+          'A line total does not match its unit price and quantity.',
+        );
+      }
+    } else if (item.lineTotalMinorUnits == 0) {
+      // Manual totals must be positive; a zero line adds nothing and is
+      // almost certainly a mistake.
+      throw Exception('A manually entered line amount is required.');
+    }
+  }
+
   /// Reserves the next sequential receipt number for today, e.g.
   /// `REC-20261021-0007`. Numbers are allocated in a transaction so a retail
-  /// audit can follow them in order.
+  /// audit can follow them in order. They are internal identifiers only and
+  /// are never shown in the sales-history interface.
   Future<String> nextReceiptNumber() async {
     final now = DateTime.now();
     final day =
@@ -105,12 +148,7 @@ class SaleRepository {
     return 'REC-$day-${next.toString().padLeft(4, '0')}';
   }
 
-  Future<void> voidSale(
-    String saleId,
-    String receiptNumber,
-    String userId,
-    String reason,
-  ) async {
+  Future<void> voidSale(String saleId, String userId, String reason) async {
     if (reason.trim().isEmpty || reason.trim().length > 240) {
       throw Exception('A void reason of 1 to 240 characters is required.');
     }
@@ -164,56 +202,94 @@ class SaleRepository {
         throw Exception('Sale is no longer voidable');
       }
 
+      // A direct owner void also settles any pending cashier request for the
+      // same sale so it stops showing up in the approval queue.
+      await txn.update(
+        'void_requests',
+        {
+          'status': VoidRequest.statusApproved,
+          'decided_by': userId,
+          'decided_at': DateTime.now().toIso8601String(),
+        },
+        where: "sale_id = ? AND status = ?",
+        whereArgs: [saleId, VoidRequest.statusPending],
+      );
+
+      final voidedTotal = saleMaps.first['total_minor_units'] as int? ?? 0;
       await txn.insert('audit_logs', {
         'id': const Uuid().v4(),
         'user_id': userId,
         'action': 'SALE_VOIDED',
-        'details': 'Receipt: $receiptNumber, Reason: $reason',
+        'details':
+            'Sale of ${MoneyUtils.formatBr(voidedTotal)} voided. '
+            'Reason: ${reason.trim()}',
         'created_at': DateTime.now().toIso8601String(),
       });
     });
   }
 
-  Future<List<Sale>> getAllSales({
+  /// Queries historical sales. Search matches product names, quantity
+  /// descriptions, notes, customer name, cashier username, and void reason —
+  /// never receipt numbers. [period] and [status] are optional filters.
+  Future<List<Sale>> getSales({
     String? searchQuery,
-    DateTime? startDate,
-    DateTime? endDate,
+    DateRange? period,
+    String? status,
     int? limit,
   }) async {
-    String whereClause = '';
-    final List<dynamic> whereArgs = [];
+    final where = <String>[];
+    final args = <dynamic>[];
 
-    if (searchQuery != null && searchQuery.isNotEmpty) {
-      whereClause = 'receipt_number LIKE ?';
-      whereArgs.add('%$searchQuery%');
+    if (period != null) {
+      where.add('sales.created_at >= ? AND sales.created_at < ?');
+      args.add(period.start.toIso8601String());
+      args.add(period.end.toIso8601String());
+    }
+    if (status != null && status.isNotEmpty && status != 'ALL') {
+      where.add('sales.status = ?');
+      args.add(status);
     }
 
-    if (startDate != null && endDate != null) {
-      if (whereClause.isNotEmpty) whereClause += ' AND ';
-      // Add one day to endDate to make it inclusive.
-      final end = endDate.add(const Duration(days: 1));
-      whereClause += 'created_at >= ? AND created_at < ?';
-      whereArgs.add(startDate.toIso8601String());
-      whereArgs.add(end.toIso8601String());
-    } else if (startDate != null) {
-      if (whereClause.isNotEmpty) whereClause += ' AND ';
-      whereClause += 'created_at >= ?';
-      whereArgs.add(startDate.toIso8601String());
+    final query = searchQuery?.trim();
+    if (query != null && query.isNotEmpty) {
+      final pattern = '%${escapeLike(query.toLowerCase())}%';
+      const escape = r" ESCAPE '\'";
+      where.add('''
+        (LOWER(COALESCE(sales.customer_name, '')) LIKE ?$escape
+         OR LOWER(COALESCE(sales.void_reason, '')) LIKE ?$escape
+         OR LOWER(users.username) LIKE ?$escape
+         OR EXISTS (
+              SELECT 1 FROM sale_items si
+              WHERE si.sale_id = sales.id
+                AND (LOWER(si.product_name_snapshot) LIKE ?$escape
+                 OR LOWER(si.quantity_text) LIKE ?$escape
+                 OR LOWER(COALESCE(si.notes, '')) LIKE ?$escape)))
+      ''');
+      args.addAll(List.filled(6, pattern));
     }
 
-    final saleMaps = await _db.query(
-      'sales',
-      where: whereClause.isNotEmpty ? whereClause : null,
-      whereArgs: whereArgs.isNotEmpty ? whereArgs : null,
-      orderBy: 'created_at DESC',
-      limit: limit,
-    );
+    final sql = StringBuffer('''
+      SELECT sales.*, users.username AS cashier_name,
+        EXISTS (
+          SELECT 1 FROM void_requests vr
+          WHERE vr.sale_id = sales.id AND vr.status = 'PENDING'
+        ) AS has_pending_void_request
+      FROM sales
+      LEFT JOIN users ON sales.cashier_id = users.id
+    ''');
+    if (where.isNotEmpty) sql.write(' WHERE ${where.join(' AND ')}');
+    sql.write(' ORDER BY sales.created_at DESC');
+    if (limit != null) {
+      sql.write(' LIMIT ?');
+      args.add(limit);
+    }
 
+    final saleMaps = await _db.rawQuery(sql.toString(), args);
     return _hydrate(saleMaps);
   }
 
   Future<List<Sale>> getRecentSales({int limit = 5}) {
-    return getAllSales(limit: limit);
+    return getSales(limit: limit);
   }
 
   /// Voids that must be reviewed at shift close. Mirrors the cash calculation
@@ -228,6 +304,274 @@ class SaleRepository {
       orderBy: 'created_at DESC',
     );
     return _hydrate(saleMaps);
+  }
+
+  /// A cashier (or owner) flags a completed sale for voiding. The sale is left
+  /// `COMPLETED` until an owner approves the request, so revenue and the drawer
+  /// are unchanged in the meantime.
+  Future<void> requestVoid(String saleId, String userId, String reason) async {
+    if (reason.trim().isEmpty || reason.trim().length > 240) {
+      throw Exception('A void reason of 1 to 240 characters is required.');
+    }
+    await _db.transaction((txn) async {
+      final saleMaps = await txn.query(
+        'sales',
+        columns: ['status'],
+        where: 'id = ?',
+        whereArgs: [saleId],
+        limit: 1,
+      );
+      if (saleMaps.isEmpty) throw Exception('Sale not found');
+      if (saleMaps.first['status'] != 'COMPLETED') {
+        throw Exception('Only a completed sale can be flagged for voiding.');
+      }
+      final users = await txn.query(
+        'users',
+        columns: ['is_active'],
+        where: 'id = ?',
+        whereArgs: [userId],
+        limit: 1,
+      );
+      if (users.isEmpty || users.first['is_active'] != 1) {
+        throw Exception('An active user is required.');
+      }
+      final pending = await txn.query(
+        'void_requests',
+        columns: ['id'],
+        where: "sale_id = ? AND status = 'PENDING'",
+        whereArgs: [saleId],
+        limit: 1,
+      );
+      if (pending.isNotEmpty) {
+        throw Exception('A void request is already pending for this sale.');
+      }
+      await txn.insert('void_requests', {
+        'id': const Uuid().v4(),
+        'sale_id': saleId,
+        'requested_by': userId,
+        'reason': reason.trim(),
+        'status': VoidRequest.statusPending,
+        'created_at': DateTime.now().toIso8601String(),
+      });
+      await txn.insert('audit_logs', {
+        'id': const Uuid().v4(),
+        'user_id': userId,
+        'action': 'VOID_REQUESTED',
+        'details': 'Void requested for sale $saleId. Reason: ${reason.trim()}',
+        'created_at': DateTime.now().toIso8601String(),
+      });
+    });
+  }
+
+  /// Pending void requests, newest first, each with the targeted sale hydrated
+  /// for display. Owner-only surface, but readable by any caller.
+  Future<List<VoidRequest>> getPendingVoidRequests() async {
+    final rows = await _db.rawQuery(
+      '''
+      SELECT vr.*, users.username AS requester_name
+      FROM void_requests vr
+      LEFT JOIN users ON vr.requested_by = users.id
+      WHERE vr.status = ?
+      ORDER BY vr.created_at DESC
+    ''',
+      [VoidRequest.statusPending],
+    );
+    if (rows.isEmpty) return [];
+    final sales = await _salesByIds(
+      rows.map((row) => row['sale_id'] as String).toList(),
+    );
+    final byId = {for (final sale in sales) sale.id: sale};
+    return rows
+        .map(
+          (row) => VoidRequest(
+            id: row['id'] as String,
+            saleId: row['sale_id'] as String,
+            requestedBy: row['requested_by'] as String,
+            requesterName: row['requester_name'] as String?,
+            reason: row['reason'] as String,
+            status: row['status'] as String,
+            createdAt: DateTime.parse(row['created_at'] as String),
+            decidedBy: row['decided_by'] as String?,
+            decidedAt: row['decided_at'] == null
+                ? null
+                : DateTime.parse(row['decided_at'] as String),
+            sale: byId[row['sale_id'] as String],
+          ),
+        )
+        .toList();
+  }
+
+  /// Owner approves a pending request: the sale is voided exactly as a direct
+  /// owner void would be, then the request is closed out.
+  Future<void> approveVoidRequest(String requestId, String ownerId) async {
+    await _db.transaction((txn) async {
+      final owner = await txn.query(
+        'users',
+        columns: ['role', 'is_active'],
+        where: 'id = ?',
+        whereArgs: [ownerId],
+        limit: 1,
+      );
+      if (owner.isEmpty ||
+          owner.first['role'] != 'OWNER' ||
+          owner.first['is_active'] != 1) {
+        throw Exception('Only an active owner can approve a void request.');
+      }
+      final requests = await txn.query(
+        'void_requests',
+        where: 'id = ?',
+        whereArgs: [requestId],
+        limit: 1,
+      );
+      if (requests.isEmpty) throw Exception('Void request not found');
+      if (requests.first['status'] != VoidRequest.statusPending) {
+        throw Exception('This void request has already been decided.');
+      }
+      final saleId = requests.first['sale_id'] as String;
+      final reason = requests.first['reason'] as String;
+
+      final saleMaps = await txn.query(
+        'sales',
+        where: 'id = ?',
+        whereArgs: [saleId],
+      );
+      if (saleMaps.isEmpty) throw Exception('Sale not found');
+      if (saleMaps.first['status'] == 'VOIDED') {
+        throw Exception('Sale is already voided');
+      }
+      final activeShifts = await txn.query(
+        'shifts',
+        columns: ['id'],
+        where: "status = 'OPEN'",
+        limit: 1,
+      );
+      final now = DateTime.now().toIso8601String();
+      final updated = await txn.update(
+        'sales',
+        {
+          'status': 'VOIDED',
+          'void_reason': reason,
+          'voided_at': now,
+          'voided_by': ownerId,
+          'voided_shift_id': activeShifts.isEmpty
+              ? null
+              : activeShifts.first['id'],
+        },
+        where: "id = ? AND status != 'VOIDED'",
+        whereArgs: [saleId],
+      );
+      if (updated != 1) throw Exception('Sale is no longer voidable');
+
+      await txn.update(
+        'void_requests',
+        {
+          'status': VoidRequest.statusApproved,
+          'decided_by': ownerId,
+          'decided_at': now,
+        },
+        where: 'id = ?',
+        whereArgs: [requestId],
+      );
+
+      final voidedTotal = saleMaps.first['total_minor_units'] as int? ?? 0;
+      await txn.insert('audit_logs', {
+        'id': const Uuid().v4(),
+        'user_id': ownerId,
+        'action': 'SALE_VOIDED',
+        'details':
+            'Sale of ${MoneyUtils.formatBr(voidedTotal)} voided via request. '
+            'Reason: $reason',
+        'created_at': now,
+      });
+      await txn.insert('audit_logs', {
+        'id': const Uuid().v4(),
+        'user_id': ownerId,
+        'action': 'VOID_REQUEST_APPROVED',
+        'details': 'Void request $requestId approved for sale $saleId.',
+        'created_at': now,
+      });
+    });
+  }
+
+  /// Owner rejects a pending request; the sale is left untouched.
+  Future<void> rejectVoidRequest(String requestId, String ownerId) async {
+    await _db.transaction((txn) async {
+      final owner = await txn.query(
+        'users',
+        columns: ['role', 'is_active'],
+        where: 'id = ?',
+        whereArgs: [ownerId],
+        limit: 1,
+      );
+      if (owner.isEmpty ||
+          owner.first['role'] != 'OWNER' ||
+          owner.first['is_active'] != 1) {
+        throw Exception('Only an active owner can reject a void request.');
+      }
+      final requests = await txn.query(
+        'void_requests',
+        where: 'id = ?',
+        whereArgs: [requestId],
+        limit: 1,
+      );
+      if (requests.isEmpty) throw Exception('Void request not found');
+      if (requests.first['status'] != VoidRequest.statusPending) {
+        throw Exception('This void request has already been decided.');
+      }
+      await txn.update(
+        'void_requests',
+        {
+          'status': VoidRequest.statusRejected,
+          'decided_by': ownerId,
+          'decided_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [requestId],
+      );
+      await txn.insert('audit_logs', {
+        'id': const Uuid().v4(),
+        'user_id': ownerId,
+        'action': 'VOID_REQUEST_REJECTED',
+        'details':
+            'Void request $requestId rejected. '
+            'Reason given: ${requests.first['reason']}',
+        'created_at': DateTime.now().toIso8601String(),
+      });
+    });
+  }
+
+  /// Loads sales by id (with cashier name and pending-request flag hydrated).
+  Future<List<Sale>> _salesByIds(List<String> ids) async {
+    if (ids.isEmpty) return [];
+    final placeholders = List.filled(ids.length, '?').join(',');
+    final maps = await _db.rawQuery('''
+      SELECT sales.*, users.username AS cashier_name,
+        EXISTS (
+          SELECT 1 FROM void_requests vr
+          WHERE vr.sale_id = sales.id AND vr.status = 'PENDING'
+        ) AS has_pending_void_request
+      FROM sales
+      LEFT JOIN users ON sales.cashier_id = users.id
+      WHERE sales.id IN ($placeholders)
+    ''', ids);
+    return _hydrate(maps);
+  }
+
+  /// Completed revenue and sale count per calendar day across [period],
+  /// ordered oldest to newest, for the dashboard trend chart.
+  Future<List<Map<String, dynamic>>> getRevenueTrend(DateRange period) async {
+    return _db.rawQuery(
+      '''
+      SELECT substr(created_at, 1, 10) AS day,
+        COUNT(*) AS count,
+        COALESCE(SUM(total_minor_units), 0) AS total
+      FROM sales
+      WHERE status = 'COMPLETED' AND created_at >= ? AND created_at < ?
+      GROUP BY day
+      ORDER BY day ASC
+    ''',
+      [period.start.toIso8601String(), period.end.toIso8601String()],
+    );
   }
 
   Future<List<Sale>> _hydrate(List<Map<String, Object?>> saleMaps) async {
@@ -280,28 +624,55 @@ class SaleRepository {
         syncedAt: map['synced_at'] != null
             ? DateTime.parse(map['synced_at'] as String)
             : null,
+        cashierName: map['cashier_name'] as String?,
+        hasPendingVoidRequest:
+            (map['has_pending_void_request'] as int? ?? 0) == 1,
         items: itemsBySale[saleId] ?? const [],
       );
     }).toList();
   }
 
-  Future<Map<String, int>> getDashboardStats() async {
-    final today = DateTime.now().toIso8601String().split('T')[0];
+  /// Revenue figures for the dashboard. Voided sales are always excluded.
+  /// Defaults to today so the dashboard resets at local midnight purely by
+  /// date filtering — records are never deleted.
+  Future<Map<String, int>> getDashboardStats({DateRange? period}) async {
+    final range = period ?? DateRange.today();
+    final rangeArgs = [
+      range.start.toIso8601String(),
+      range.end.toIso8601String(),
+    ];
+    const completed =
+        "created_at >= ? AND created_at < ? AND status = 'COMPLETED'";
 
-    final revenueResult = await _db.rawQuery(
-      "SELECT SUM(total_minor_units) as total FROM sales WHERE date(created_at) = ? AND status = 'COMPLETED'",
-      [today],
-    );
+    final revenueRow = await _db.rawQuery('''
+      SELECT COUNT(*) AS count, COALESCE(SUM(total_minor_units), 0) AS total
+      FROM sales WHERE $completed
+    ''', rangeArgs);
 
-    final cashResult = await _db.rawQuery(
-      "SELECT SUM(total_minor_units) as total FROM sales WHERE date(created_at) = ? AND status = 'COMPLETED' AND payment_method = 'CASH'",
-      [today],
-    );
+    final cashRow = await _db.rawQuery('''
+      SELECT COALESCE(SUM(total_minor_units), 0) AS total
+      FROM sales WHERE $completed AND payment_method = 'CASH'
+    ''', rangeArgs);
 
-    final bankResult = await _db.rawQuery(
-      "SELECT SUM(total_minor_units) as total FROM sales WHERE date(created_at) = ? AND status = 'COMPLETED' AND payment_method = 'BANK'",
-      [today],
-    );
+    final bankRow = await _db.rawQuery('''
+      SELECT COALESCE(SUM(total_minor_units), 0) AS total
+      FROM sales WHERE $completed AND payment_method = 'BANK'
+    ''', rangeArgs);
+
+    // Sales rung up in the period that were later voided.
+    final voidRow = await _db.rawQuery('''
+      SELECT COUNT(*) AS count FROM sales
+      WHERE status = 'VOIDED' AND created_at >= ? AND created_at < ?
+    ''', rangeArgs);
+
+    // Cashier void requests still awaiting an owner's decision.
+    final pendingRow = await _db.rawQuery('''
+      SELECT COUNT(*) AS count
+      FROM void_requests vr
+      JOIN sales s ON vr.sale_id = s.id
+      WHERE vr.status = 'PENDING'
+        AND s.created_at >= ? AND s.created_at < ?
+    ''', rangeArgs);
 
     final shiftResult = await _db.query(
       'shifts',
@@ -316,12 +687,19 @@ class SaleRepository {
       expectedCash = summary['expected_cash']!;
     }
 
+    final salesCount = revenueRow.first['count'] as int;
+    final revenue = revenueRow.first['total'] as int;
+
     return {
-      'today_revenue': (revenueResult.first['total'] as int?) ?? 0,
-      'today_cash': (cashResult.first['total'] as int?) ?? 0,
-      'today_bank': (bankResult.first['total'] as int?) ?? 0,
+      'revenue': revenue,
+      'sales_count': salesCount,
+      'cash_revenue': cashRow.first['total'] as int,
+      'bank_revenue': bankRow.first['total'] as int,
+      'average_sale': salesCount == 0 ? 0 : revenue ~/ salesCount,
       'expected_cash': expectedCash,
       'is_shift_open': shiftResult.isEmpty ? 0 : 1,
+      'void_count': voidRow.first['count'] as int,
+      'pending_void_requests': pendingRow.first['count'] as int,
     };
   }
 
@@ -340,28 +718,50 @@ class SaleRepository {
 
   Future<int> getTodayRevenue() async {
     final stats = await getDashboardStats();
-    return stats['today_revenue']!;
+    return stats['revenue']!;
   }
 
-  Future<List<Map<String, dynamic>>> getProductSalesSummary() async {
+  /// Revenue by entered product name for the reports screen. Quantities are
+  /// summed in milliunits; lines with manual totals contribute revenue but no
+  /// numeric quantity.
+  Future<List<Map<String, dynamic>>> getProductSalesSummary({
+    DateRange? period,
+  }) async {
+    final rangeArgs = period == null
+        ? <dynamic>[]
+        : [period.start.toIso8601String(), period.end.toIso8601String()];
+    final rangeClause = period == null
+        ? ''
+        : ' AND sales.created_at >= ? AND sales.created_at < ?';
     return _db.rawQuery('''
-      SELECT product_name_snapshot, SUM(quantity) as total_qty, SUM(line_total_minor_units) as total_revenue
-      FROM sale_items
-      JOIN sales ON sale_items.sale_id = sales.id
-      WHERE sales.status = 'COMPLETED'
-      GROUP BY product_id, product_name_snapshot
+      SELECT si.product_name_snapshot,
+        COALESCE(SUM(si.billing_quantity_milliunits), 0) AS total_qty_milliunits,
+        COUNT(*) AS line_count,
+        SUM(si.line_total_minor_units) AS total_revenue
+      FROM sale_items si
+      JOIN sales ON si.sale_id = sales.id
+      WHERE sales.status = 'COMPLETED'$rangeClause
+      GROUP BY si.product_name_snapshot
       ORDER BY total_revenue DESC
-    ''');
+    ''', rangeArgs);
   }
 
-  Future<List<Map<String, dynamic>>> getCashierPerformance() async {
+  Future<List<Map<String, dynamic>>> getCashierPerformance({
+    DateRange? period,
+  }) async {
+    final rangeArgs = period == null
+        ? <dynamic>[]
+        : [period.start.toIso8601String(), period.end.toIso8601String()];
+    final rangeClause = period == null
+        ? ''
+        : ' AND sales.created_at >= ? AND sales.created_at < ?';
     return _db.rawQuery('''
-      SELECT users.username, COUNT(sales.id) as total_sales, SUM(sales.total_minor_units) as total_revenue
+      SELECT users.username, COUNT(sales.id) AS total_sales, COALESCE(SUM(sales.total_minor_units), 0) AS total_revenue
       FROM sales
       JOIN users ON sales.cashier_id = users.id
-      WHERE sales.status = 'COMPLETED'
+      WHERE sales.status = 'COMPLETED'$rangeClause
       GROUP BY users.id, users.username
       ORDER BY total_revenue DESC
-    ''');
+    ''', rangeArgs);
   }
 }

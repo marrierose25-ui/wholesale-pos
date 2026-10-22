@@ -7,7 +7,7 @@ import 'package:uuid/uuid.dart';
 
 class LocalDatabase {
   static const String databaseName = 'wholesale_pos.db';
-  static const int schemaVersion = 6;
+  static const int schemaVersion = 8;
   static const String deviceIdFileName = 'device_id.txt';
   static const String themeSettingKey = 'theme_mode';
 
@@ -206,6 +206,97 @@ class LocalDatabase {
       ''');
       await _createIndexesAndTriggers(db);
     }
+    if (oldVersion < 7) {
+      await _rebuildSaleItemsWithFlexibleQuantities(db);
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS finance_categories (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      ''');
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS finance_entries (
+          id TEXT PRIMARY KEY,
+          category_id TEXT NOT NULL,
+          source TEXT NOT NULL,
+          amount_minor_units INTEGER NOT NULL,
+          description TEXT,
+          status TEXT NOT NULL DEFAULT 'PENDING',
+          entry_date TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          created_by TEXT NOT NULL,
+          completed_at TEXT,
+          completed_by TEXT,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(category_id) REFERENCES finance_categories(id),
+          FOREIGN KEY(created_by) REFERENCES users(id),
+          FOREIGN KEY(completed_by) REFERENCES users(id)
+        )
+      ''');
+      await _createIndexesAndTriggers(db);
+    }
+    if (oldVersion < 8) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS void_requests (
+          id TEXT PRIMARY KEY,
+          sale_id TEXT NOT NULL,
+          requested_by TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'PENDING',
+          created_at TEXT NOT NULL,
+          decided_by TEXT,
+          decided_at TEXT,
+          FOREIGN KEY(sale_id) REFERENCES sales(id),
+          FOREIGN KEY(requested_by) REFERENCES users(id),
+          FOREIGN KEY(decided_by) REFERENCES users(id)
+        )
+      ''');
+      await _createIndexesAndTriggers(db);
+    }
+  }
+
+  /// Schema 6 stored quantities as plain integers. Schema 7 keeps the exact
+  /// text the cashier typed ("2 boxes and 1 piece") plus a separate numeric
+  /// billing quantity in milliunits, so descriptive entries are never forced
+  /// into a number. Existing rows keep their values: the integer quantity is
+  /// copied into both new columns.
+  static Future<void> _rebuildSaleItemsWithFlexibleQuantities(
+    Database db,
+  ) async {
+    final columns = await db.rawQuery('PRAGMA table_info(sale_items)');
+    if (columns.any((column) => column['name'] == 'quantity_text')) return;
+
+    await db.execute('''
+      CREATE TABLE sale_items_v7 (
+        id TEXT PRIMARY KEY,
+        sale_id TEXT NOT NULL,
+        product_id TEXT NOT NULL,
+        product_name_snapshot TEXT NOT NULL,
+        unit_price_snapshot_minor_units INTEGER NOT NULL,
+        quantity_text TEXT NOT NULL,
+        billing_quantity_milliunits INTEGER,
+        line_discount_minor_units INTEGER NOT NULL DEFAULT 0,
+        line_total_minor_units INTEGER NOT NULL,
+        notes TEXT,
+        FOREIGN KEY(sale_id) REFERENCES sales(id) ON DELETE CASCADE
+      )
+    ''');
+    await db.execute('''
+      INSERT INTO sale_items_v7
+        (id, sale_id, product_id, product_name_snapshot,
+         unit_price_snapshot_minor_units, quantity_text,
+         billing_quantity_milliunits, line_discount_minor_units,
+         line_total_minor_units, notes)
+      SELECT id, sale_id, product_id, product_name_snapshot,
+         unit_price_snapshot_minor_units, CAST(quantity AS TEXT),
+         quantity * 1000, line_discount_minor_units,
+         line_total_minor_units, NULL
+      FROM sale_items
+    ''');
+    await db.execute('DROP TABLE sale_items');
+    await db.execute('ALTER TABLE sale_items_v7 RENAME TO sale_items');
   }
 
   /// Schema 5 added `user_id` with ALTER TABLE, which SQLite cannot attach a
@@ -265,6 +356,26 @@ class LocalDatabase {
     );
     await db.execute(
       'CREATE INDEX IF NOT EXISTS cash_movements_shift_id ON cash_movements(shift_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS finance_entries_category_id '
+      'ON finance_entries(category_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS finance_entries_status '
+      'ON finance_entries(status)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS finance_entries_entry_date '
+      'ON finance_entries(entry_date)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS void_requests_sale_id '
+      'ON void_requests(sale_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS void_requests_status '
+      'ON void_requests(status)',
     );
     await db.execute('''
       CREATE TRIGGER IF NOT EXISTS prevent_second_open_shift_insert
@@ -380,10 +491,57 @@ class LocalDatabase {
         product_id TEXT NOT NULL,
         product_name_snapshot TEXT NOT NULL,
         unit_price_snapshot_minor_units INTEGER NOT NULL,
-        quantity INTEGER NOT NULL,
-        line_discount_minor_units INTEGER NOT NULL,
+        quantity_text TEXT NOT NULL,
+        billing_quantity_milliunits INTEGER,
+        line_discount_minor_units INTEGER NOT NULL DEFAULT 0,
         line_total_minor_units INTEGER NOT NULL,
+        notes TEXT,
         FOREIGN KEY(sale_id) REFERENCES sales(id) ON DELETE CASCADE
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE finance_categories (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE finance_entries (
+        id TEXT PRIMARY KEY,
+        category_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        amount_minor_units INTEGER NOT NULL,
+        description TEXT,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        entry_date TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        completed_at TEXT,
+        completed_by TEXT,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(category_id) REFERENCES finance_categories(id),
+        FOREIGN KEY(created_by) REFERENCES users(id),
+        FOREIGN KEY(completed_by) REFERENCES users(id)
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE void_requests (
+        id TEXT PRIMARY KEY,
+        sale_id TEXT NOT NULL,
+        requested_by TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        created_at TEXT NOT NULL,
+        decided_by TEXT,
+        decided_at TEXT,
+        FOREIGN KEY(sale_id) REFERENCES sales(id),
+        FOREIGN KEY(requested_by) REFERENCES users(id),
+        FOREIGN KEY(decided_by) REFERENCES users(id)
       )
     ''');
 

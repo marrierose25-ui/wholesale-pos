@@ -7,6 +7,8 @@ import '../../core/theme/app_theme.dart';
 import '../../core/utils/money_utils.dart';
 import '../sales/sale.dart';
 import '../sales/shift.dart';
+import '../sales/void_request.dart';
+import 'shift_history_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   final User currentUser;
@@ -30,6 +32,7 @@ class RegisterScreenState extends State<RegisterScreen> {
   Shift? _activeShift;
   Map<String, int>? _summary;
   List<Sale> _voids = [];
+  List<VoidRequest> _pendingRequests = [];
   bool _isLoading = true;
   bool _isProcessing = false;
   bool _voidsVerified = false;
@@ -75,6 +78,10 @@ class RegisterScreenState extends State<RegisterScreen> {
       final voids = await widget.saleRepository.getVoidedSalesForShift(
         shift.id,
       );
+      final isOwner = widget.currentUser.role == 'OWNER';
+      final pending = isOwner
+          ? await widget.saleRepository.getPendingVoidRequests()
+          : <VoidRequest>[];
 
       final oldVoidIds = _voids.map((sale) => sale.id).toSet();
       final newVoidIds = voids.map((sale) => sale.id).toSet();
@@ -88,6 +95,7 @@ class RegisterScreenState extends State<RegisterScreen> {
         _activeShift = shift;
         _summary = summary;
         _voids = voids;
+        _pendingRequests = pending;
         if (voids.isEmpty) _voidsVerified = true;
         _isLoading = false;
       });
@@ -186,6 +194,57 @@ class RegisterScreenState extends State<RegisterScreen> {
     }
   }
 
+  Future<void> _approveVoidRequest(VoidRequest request) async {
+    final amount = request.sale == null
+        ? ''
+        : ' of ${MoneyUtils.formatBr(request.sale!.totalMinorUnits)}';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Approve void?'),
+        content: Text(
+          'This will void the sale$amount and remove it from revenue. '
+          'The cashier${request.requesterName == null ? '' : ' (${request.requesterName})'} '
+          'asked because: ${request.reason}',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Approve void'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await widget.saleRepository.approveVoidRequest(
+        request.id,
+        widget.currentUser.id,
+      );
+      widget.onShiftUpdated();
+      await loadData();
+    } catch (e) {
+      if (mounted) _showMessage(e.toString().replaceAll('Exception: ', ''));
+    }
+  }
+
+  Future<void> _rejectVoidRequest(VoidRequest request) async {
+    try {
+      await widget.saleRepository.rejectVoidRequest(
+        request.id,
+        widget.currentUser.id,
+      );
+      await loadData();
+    } catch (e) {
+      if (mounted) _showMessage(e.toString().replaceAll('Exception: ', ''));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) return const Center(child: CircularProgressIndicator());
@@ -207,6 +266,18 @@ class RegisterScreenState extends State<RegisterScreen> {
       appBar: AppBar(
         title: const Text('Cash Register'),
         actions: [
+          if (widget.currentUser.role == 'OWNER')
+            IconButton(
+              icon: const Icon(Icons.receipt_long),
+              tooltip: 'Register History',
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => ShiftHistoryScreen(
+                    shiftRepository: widget.shiftRepository,
+                  ),
+                ),
+              ),
+            ),
           if (_activeShift != null)
             IconButton(
               icon: const Icon(Icons.add_card),
@@ -252,7 +323,7 @@ class RegisterScreenState extends State<RegisterScreen> {
                     decimal: true,
                   ),
                   decoration: const InputDecoration(
-                    labelText: 'Starting Cash (ETB)',
+                    labelText: 'Starting Cash (Br)',
                   ),
                   onSubmitted: (_) => _openRegister(),
                 ),
@@ -287,6 +358,7 @@ class RegisterScreenState extends State<RegisterScreen> {
     final bankSales = _summary!['bank_sales']!;
     final deposits = _summary!['deposits']!;
     final withdrawals = _summary!['withdrawals']!;
+    final cashRefunds = _summary!['cash_refunds'] ?? 0;
 
     final actualCash =
         MoneyUtils.stringToMinorUnits(_actualCashController.text) ?? 0;
@@ -299,32 +371,27 @@ class RegisterScreenState extends State<RegisterScreen> {
           spacing: 16,
           runSpacing: 16,
           children: [
-            _buildStatCard(
-              'Opening Cash',
-              MoneyUtils.minorUnitsToString(
-                _activeShift!.openingCashMinorUnits,
-              ),
-            ),
-            _buildStatCard(
-              'Cash Sales',
-              MoneyUtils.minorUnitsToString(cashSales),
-            ),
-            _buildStatCard(
-              'Bank Sales',
-              MoneyUtils.minorUnitsToString(bankSales),
-            ),
-            _buildStatCard(
-              'Withdrawals',
-              MoneyUtils.minorUnitsToString(withdrawals),
-            ),
-            _buildStatCard('Deposits', MoneyUtils.minorUnitsToString(deposits)),
-            _buildStatCard(
-              'Expected Cash',
-              MoneyUtils.minorUnitsToString(expectedCash),
-              isPrimary: true,
-            ),
+            _buildStatCard('Opening Cash', _activeShift!.openingCashMinorUnits),
+            _buildStatCard('Cash Sales', cashSales),
+            _buildStatCard('Bank Sales', bankSales),
+            _buildStatCard('Withdrawals', withdrawals),
+            _buildStatCard('Deposits', deposits),
+            _buildStatCard('Expected Cash', expectedCash, isPrimary: true),
           ],
         ),
+        const SizedBox(height: 24),
+        _buildExpectedCashBreakdown(
+          opening: _activeShift!.openingCashMinorUnits,
+          cashSales: cashSales,
+          deposits: deposits,
+          withdrawals: withdrawals,
+          cashRefunds: cashRefunds,
+          expectedCash: expectedCash,
+        ),
+        if (_pendingRequests.isNotEmpty) ...[
+          const SizedBox(height: 24),
+          _buildPendingRequestsCard(),
+        ],
         const SizedBox(height: 24),
         LayoutBuilder(
           builder: (context, constraints) {
@@ -346,6 +413,185 @@ class RegisterScreenState extends State<RegisterScreen> {
           },
         ),
       ],
+    );
+  }
+
+  Widget _buildExpectedCashBreakdown({
+    required int opening,
+    required int cashSales,
+    required int deposits,
+    required int withdrawals,
+    required int cashRefunds,
+    required int expectedCash,
+  }) {
+    Widget line(String label, int amount, {bool emphasize = false}) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                color: emphasize ? null : AppTheme.muted,
+                fontWeight: emphasize ? FontWeight.bold : null,
+              ),
+            ),
+            Text(
+              MoneyUtils.formatBr(amount),
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: emphasize ? FontWeight.bold : null,
+                color: emphasize ? Theme.of(context).colorScheme.primary : null,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'How Expected Cash is calculated',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 12),
+            line('Opening Cash', opening),
+            line('+ Cash Sales', cashSales),
+            line('+ Deposits', deposits),
+            line('- Withdrawals', -withdrawals),
+            line('- Cash refunds for other-shift sales', -cashRefunds),
+            const Divider(height: 20),
+            line('= Expected Cash', expectedCash, emphasize: true),
+            const SizedBox(height: 8),
+            const Text(
+              'A sale voided within this same shift nets to zero and is not '
+              'subtracted again; only refunds for sales from other shifts '
+              'reduce the drawer.',
+              style: TextStyle(fontSize: 11, color: AppTheme.muted),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPendingRequestsCard() {
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(
+                  Icons.pending_actions,
+                  color: AppTheme.warning,
+                  size: 20,
+                ),
+                const SizedBox(width: 8),
+                const Text(
+                  'Pending Void Requests',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                ),
+                const Spacer(),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppTheme.warning,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    '${_pendingRequests.length}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Cashier void requests awaiting your decision.',
+              style: TextStyle(color: AppTheme.muted, fontSize: 13),
+            ),
+            const Divider(height: 24),
+            ..._pendingRequests.map(
+              (request) => Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).scaffoldBackgroundColor,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: Theme.of(context).dividerColor),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        request.sale == null
+                            ? 'Sale ${request.saleId}'
+                            : '${MoneyUtils.formatBr(request.sale!.totalMinorUnits)}'
+                                  ' • ${request.sale!.paymentMethod}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Requested by ${request.requesterName ?? 'unknown'}'
+                        ' • ${_formatTime(request.createdAt)}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: AppTheme.muted,
+                        ),
+                      ),
+                      Text(
+                        'Reason: ${request.reason}',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () => _rejectVoidRequest(request),
+                            child: const Text('Reject'),
+                          ),
+                          const SizedBox(width: 8),
+                          FilledButton(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: AppTheme.danger,
+                            ),
+                            onPressed: () => _approveVoidRequest(request),
+                            child: const Text('Approve void'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -373,7 +619,7 @@ class RegisterScreenState extends State<RegisterScreen> {
                 decimal: true,
               ),
               decoration: const InputDecoration(
-                labelText: 'Actual Cash in Drawer (ETB)',
+                labelText: 'Actual Cash in Drawer (Br)',
               ),
               onChanged: (_) => setState(() {}),
               onSubmitted: (_) => _closeRegister(),
@@ -394,7 +640,7 @@ class RegisterScreenState extends State<RegisterScreen> {
                     style: TextStyle(fontWeight: FontWeight.w500),
                   ),
                   Text(
-                    '${MoneyUtils.minorUnitsToString(discrepancy)} ETB',
+                    MoneyUtils.formatBr(discrepancy),
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
                       color: discrepancy == 0
@@ -493,20 +739,30 @@ class RegisterScreenState extends State<RegisterScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                voidedSale.receiptNumber,
+                                '${MoneyUtils.formatBr(voidedSale.totalMinorUnits)}'
+                                ' • ${voidedSale.paymentMethod}',
                                 style: const TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w500,
                                 ),
                               ),
-                              Text(
-                                '${MoneyUtils.minorUnitsToString(voidedSale.totalMinorUnits)} ETB'
-                                ' • ${voidedSale.paymentMethod}',
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  color: AppTheme.muted,
+                              if (voidedSale.voidReason != null &&
+                                  voidedSale.voidReason!.trim().isNotEmpty)
+                                Text(
+                                  'Reason: ${voidedSale.voidReason}',
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: AppTheme.muted,
+                                  ),
                                 ),
-                              ),
+                              if (voidedSale.voidedAt != null)
+                                Text(
+                                  'Voided at ${_formatTime(voidedSale.voidedAt!)}',
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: AppTheme.muted,
+                                  ),
+                                ),
                             ],
                           ),
                         ),
@@ -534,7 +790,16 @@ class RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  Widget _buildStatCard(String title, String amount, {bool isPrimary = false}) {
+  String _formatTime(DateTime time) {
+    return '${time.hour.toString().padLeft(2, '0')}:'
+        '${time.minute.toString().padLeft(2, '0')}';
+  }
+
+  Widget _buildStatCard(
+    String title,
+    int amountMinorUnits, {
+    bool isPrimary = false,
+  }) {
     return SizedBox(
       width: 180,
       child: Card(
@@ -554,7 +819,7 @@ class RegisterScreenState extends State<RegisterScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                '$amount ETB',
+                MoneyUtils.formatBr(amountMinorUnits),
                 style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
@@ -635,7 +900,7 @@ class _CashMovementDialogState extends State<_CashMovementDialog> {
             controller: _amountController,
             autofocus: true,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(labelText: 'Amount (ETB)'),
+            decoration: const InputDecoration(labelText: 'Amount (Br)'),
           ),
           const SizedBox(height: 8),
           TextField(

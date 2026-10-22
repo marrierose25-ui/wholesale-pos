@@ -2,6 +2,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../features/sales/shift.dart';
+import '../utils/date_range.dart';
 
 class ShiftRepository {
   final Database _db;
@@ -17,6 +18,38 @@ class ShiftRepository {
     );
     if (maps.isEmpty) return null;
     return Shift.fromMap(maps.first);
+  }
+
+  /// Past and present register sessions, newest first, each carrying the
+  /// cashier username for display. Filter by the day the shift was *opened*
+  /// ([period], a half-open local range) and/or [status] (`OPEN`/`CLOSED`).
+  /// Closed shifts keep their stored expected/counted figures even if sales are
+  /// later voided, so the historical reconciliation is never rewritten.
+  Future<List<Shift>> getShiftHistory({
+    DateRange? period,
+    String? status,
+  }) async {
+    final clauses = <String>[];
+    final args = <Object?>[];
+    if (period != null) {
+      clauses.add('shifts.opened_at >= ? AND shifts.opened_at < ?');
+      args
+        ..add(period.start.toIso8601String())
+        ..add(period.end.toIso8601String());
+    }
+    if (status != null) {
+      clauses.add('shifts.status = ?');
+      args.add(status);
+    }
+    final where = clauses.isEmpty ? '' : ' WHERE ${clauses.join(' AND ')}';
+    final maps = await _db.rawQuery('''
+      SELECT shifts.*, users.username AS cashier_name
+      FROM shifts
+      LEFT JOIN users ON shifts.cashier_id = users.id
+      $where
+      ORDER BY shifts.opened_at DESC
+    ''', args);
+    return maps.map(Shift.fromMap).toList();
   }
 
   Future<void> openShift(String cashierId, int openingCash) async {
@@ -145,12 +178,13 @@ class ShiftRepository {
     final deposits = (cashMovements.first['deposits'] as int?) ?? 0;
     final withdrawals = (cashMovements.first['withdrawals'] as int?) ?? 0;
 
+    final cashRefunds = await _cashRefundsForShift(shift.id);
     final expectedCash =
         shift.openingCashMinorUnits +
         cashTotal +
         deposits -
         withdrawals -
-        await _cashRefundsForShift(shift.id);
+        cashRefunds;
 
     return {
       'cash_sales': cashTotal,
@@ -158,16 +192,22 @@ class ShiftRepository {
       'voids': voidTotal,
       'deposits': deposits,
       'withdrawals': withdrawals,
+      'cash_refunds': cashRefunds,
       'expected_cash': expectedCash,
     };
   }
 
+  /// Cash that genuinely leaves *this* drawer because of a void: a sale that
+  /// was rung up in a different shift but refunded while this one was open.
+  /// A sale rung up and voided in the same shift nets to zero (its incoming
+  /// cash was never counted in `cash_sales`, so it must not be subtracted
+  /// again), which is why `shift_id <> voided_shift_id` is required here.
   Future<int> _cashRefundsForShift(String shiftId) async {
     final rows = await _db.rawQuery(
       '''
       SELECT COALESCE(SUM(total_minor_units), 0) AS total FROM sales
       WHERE status = 'VOIDED' AND payment_method = 'CASH'
-        AND (voided_shift_id = ? OR (voided_shift_id IS NULL AND shift_id = ?))
+        AND voided_shift_id = ? AND shift_id <> ?
     ''',
       [shiftId, shiftId],
     );
@@ -197,8 +237,10 @@ class ShiftRepository {
         "SELECT COALESCE(SUM(CASE WHEN type = 'DEPOSIT' THEN amount_minor_units ELSE -amount_minor_units END), 0) AS total FROM cash_movements WHERE shift_id = ?",
         [shift.id],
       );
+      // Only cross-shift cash refunds reduce this drawer; see
+      // [_cashRefundsForShift] for the same-shift netting rule.
       final cashVoids = await txn.rawQuery(
-        "SELECT COALESCE(SUM(total_minor_units), 0) AS total FROM sales WHERE status = 'VOIDED' AND payment_method = 'CASH' AND (voided_shift_id = ? OR (voided_shift_id IS NULL AND shift_id = ?))",
+        "SELECT COALESCE(SUM(total_minor_units), 0) AS total FROM sales WHERE status = 'VOIDED' AND payment_method = 'CASH' AND voided_shift_id = ? AND shift_id <> ?",
         [shift.id, shift.id],
       );
       final expected =

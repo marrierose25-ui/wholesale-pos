@@ -5,33 +5,21 @@ class Cart {
 
   List<CartItem> get items => List.unmodifiable(_items);
 
+  /// Adds a line exactly as entered. Lines are never merged because each one
+  /// keeps its own quantity description ("2 boxes" stays separate from
+  /// "1 kunital") and possibly its own manual amount.
   void addItem(CartItem item) {
-    final existingIndex = _items.indexWhere(
-      (i) => i.productId != 'MANUAL'
-          ? i.productId == item.productId
-          : i.name == item.name &&
-                i.unitPriceMinorUnits == item.unitPriceMinorUnits,
-    );
-    if (existingIndex >= 0) {
-      _items[existingIndex].quantity += item.quantity;
-    } else {
-      _items.add(item);
-    }
+    _items.add(item);
   }
 
   void removeItem(String id) {
     _items.removeWhere((i) => i.id == id);
   }
 
-  void updateQuantity(String id, int newQuantity) {
-    if (newQuantity <= 0) {
-      removeItem(id);
-      return;
-    }
-    final index = _items.indexWhere((i) => i.id == id);
-    if (index >= 0) {
-      _items[index].quantity = newQuantity;
-    }
+  /// Replaces a line in place, keeping its position in the order.
+  void replaceItem(CartItem item) {
+    final index = _items.indexWhere((i) => i.id == item.id);
+    if (index >= 0) _items[index] = item;
   }
 
   int get subtotalMinorUnits {

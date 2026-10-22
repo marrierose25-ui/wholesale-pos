@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/repositories/sale_repository.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/date_range.dart';
 import '../../core/utils/money_utils.dart';
 
 class ReportsScreen extends StatefulWidget {
@@ -19,10 +20,21 @@ class ReportsScreenState extends State<ReportsScreen> {
   bool _isLoading = true;
   String? _error;
 
+  ReportPeriod _period = ReportPeriod.thisMonth;
+  DateTimeRange? _customRange;
+
   @override
   void initState() {
     super.initState();
     loadReports();
+  }
+
+  DateRange? get _activeRange {
+    if (_period == ReportPeriod.custom) {
+      if (_customRange == null) return null;
+      return DateRange.custom(_customRange!.start, _customRange!.end);
+    }
+    return _period.toDateRange();
   }
 
   Future<void> loadReports() async {
@@ -32,8 +44,8 @@ class ReportsScreenState extends State<ReportsScreen> {
     });
     try {
       final results = await Future.wait([
-        widget.saleRepository.getProductSalesSummary(),
-        widget.saleRepository.getCashierPerformance(),
+        widget.saleRepository.getProductSalesSummary(period: _activeRange),
+        widget.saleRepository.getCashierPerformance(period: _activeRange),
       ]);
       if (!mounted) return;
       setState(() {
@@ -48,6 +60,38 @@ class ReportsScreenState extends State<ReportsScreen> {
         _error = e.toString().replaceAll('Exception: ', '');
       });
     }
+  }
+
+  Future<void> _pickCustomRange() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(now.year + 1, 12, 31),
+      initialDateRange:
+          _customRange ??
+          DateTimeRange(
+            start: DateTime(
+              now.year,
+              now.month,
+              now.day,
+            ).subtract(const Duration(days: 6)),
+            end: DateTime(now.year, now.month, now.day),
+          ),
+    );
+    if (picked != null) {
+      setState(() {
+        _period = ReportPeriod.custom;
+        _customRange = picked;
+      });
+      loadReports();
+    }
+  }
+
+  String _formatDate(DateTime date) {
+    return '${date.year.toString().padLeft(4, '0')}-'
+        '${date.month.toString().padLeft(2, '0')}-'
+        '${date.day.toString().padLeft(2, '0')}';
   }
 
   @override
@@ -77,30 +121,84 @@ class ReportsScreenState extends State<ReportsScreen> {
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final productsCard = _buildProductsCard();
-            final cashiersCard = _buildCashiersCard();
-            if (constraints.maxWidth < 1000) {
-              return Column(
-                children: [
-                  productsCard,
-                  const SizedBox(height: 24),
-                  cashiersCard,
-                ],
-              );
-            }
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(child: productsCard),
-                const SizedBox(width: 24),
-                Expanded(child: cashiersCard),
-              ],
-            );
-          },
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildPeriodBar(),
+            const SizedBox(height: 8),
+            Text(
+              'Revenue figures come from completed sales only. Voided sales '
+              'are excluded.',
+              style: TextStyle(
+                color: Theme.of(context).textTheme.bodySmall?.color,
+                fontSize: 12,
+              ),
+            ),
+            const SizedBox(height: 24),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final productsCard = _buildProductsCard();
+                final cashiersCard = _buildCashiersCard();
+                if (constraints.maxWidth < 1000) {
+                  return Column(
+                    children: [
+                      productsCard,
+                      const SizedBox(height: 24),
+                      cashiersCard,
+                    ],
+                  );
+                }
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: productsCard),
+                    const SizedBox(width: 24),
+                    Expanded(child: cashiersCard),
+                  ],
+                );
+              },
+            ),
+          ],
         ),
       ),
+    );
+  }
+
+  Widget _buildPeriodBar() {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        ...ReportPeriod.values
+            .where((p) => p != ReportPeriod.custom)
+            .map(
+              (period) => ChoiceChip(
+                label: Text(period.label),
+                selected: _period == period,
+                onSelected: (_) {
+                  setState(() => _period = period);
+                  loadReports();
+                },
+              ),
+            ),
+        ActionChip(
+          avatar: Icon(
+            Icons.date_range,
+            size: 16,
+            color: _period == ReportPeriod.custom
+                ? Colors.white
+                : AppTheme.foreground,
+          ),
+          label: Text(
+            _period == ReportPeriod.custom && _customRange != null
+                ? '${_formatDate(_customRange!.start)} - '
+                      '${_formatDate(_customRange!.end)}'
+                : 'Custom',
+          ),
+          onPressed: _pickCustomRange,
+        ),
+      ],
     );
   }
 
@@ -133,7 +231,7 @@ class ReportsScreenState extends State<ReportsScreen> {
             const Padding(
               padding: EdgeInsets.all(24),
               child: Text(
-                'No completed sales yet.',
+                'No completed sales in this period.',
                 style: TextStyle(color: AppTheme.muted, fontSize: 13),
               ),
             )
@@ -149,13 +247,21 @@ class ReportsScreenState extends State<ReportsScreen> {
                 ],
                 rows: _products.map((row) {
                   final revenue = (row['total_revenue'] as int?) ?? 0;
+                  final qtyMilliunits =
+                      (row['total_qty_milliunits'] as int?) ?? 0;
+                  final lineCount = (row['line_count'] as int?) ?? 0;
+                  final manualLines = qtyMilliunits == 0 && lineCount > 0;
                   return DataRow(
                     cells: [
                       DataCell(Text(row['product_name_snapshot'] as String)),
-                      DataCell(Text('${row['total_qty'] ?? 0}')),
                       DataCell(
-                        Text('${MoneyUtils.minorUnitsToString(revenue)} ETB'),
+                        Text(
+                          manualLines
+                              ? '—'
+                              : MoneyUtils.milliunitsToString(qtyMilliunits),
+                        ),
                       ),
+                      DataCell(Text(MoneyUtils.formatBr(revenue))),
                     ],
                   );
                 }).toList(),
@@ -195,7 +301,7 @@ class ReportsScreenState extends State<ReportsScreen> {
             const Padding(
               padding: EdgeInsets.all(24),
               child: Text(
-                'No completed sales yet.',
+                'No completed sales in this period.',
                 style: TextStyle(color: AppTheme.muted, fontSize: 13),
               ),
             )
@@ -215,9 +321,7 @@ class ReportsScreenState extends State<ReportsScreen> {
                     cells: [
                       DataCell(Text(row['username'] as String)),
                       DataCell(Text('${row['total_sales'] ?? 0}')),
-                      DataCell(
-                        Text('${MoneyUtils.minorUnitsToString(revenue)} ETB'),
-                      ),
+                      DataCell(Text(MoneyUtils.formatBr(revenue))),
                     ],
                   );
                 }).toList(),

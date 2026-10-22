@@ -16,7 +16,7 @@ void main() {
     // Insert foreign key dependencies
     await db.insert('users', {
       'id': 'user-1',
-      'username': 'test',
+      'username': 'abebe',
       'password_hash': 'x',
       'salt': 'x',
       'role': 'OWNER',
@@ -40,81 +40,147 @@ void main() {
     await db.close();
   });
 
-  test('Saves a complete sale with items transactionally', () async {
-    final now = DateTime.now();
-    final saleId = 'sale-1';
-
-    final sale = Sale(
-      id: saleId,
-      receiptNumber: 'REC-001',
+  Sale buildSale({
+    required String id,
+    required String receiptNumber,
+    required List<SaleItem> items,
+    String? customerName,
+    int totalMinorUnits = 5000,
+  }) {
+    return Sale(
+      id: id,
+      receiptNumber: receiptNumber,
       cashierId: 'user-1',
       deviceId: 'device-1',
       shiftId: 'shift-1',
-      subtotalMinorUnits: 5000,
+      customerName: customerName,
+      subtotalMinorUnits: totalMinorUnits,
       discountMinorUnits: 0,
+      totalMinorUnits: totalMinorUnits,
+      amountPaidMinorUnits: totalMinorUnits,
+      changeMinorUnits: 0,
+      createdAt: DateTime.now(),
+      items: items,
+    );
+  }
+
+  test(
+    'Saves a complete sale with numeric quantity lines transactionally',
+    () async {
+      final sale = buildSale(
+        id: 'sale-1',
+        receiptNumber: 'REC-001',
+        totalMinorUnits: 5000,
+        items: [
+          SaleItem(
+            id: 'item-1',
+            saleId: 'sale-1',
+            productId: 'prod-1',
+            productNameSnapshot: 'Sugar',
+            unitPriceSnapshotMinorUnits: 5000,
+            quantityText: '1',
+            billingQuantityMilliunits: 1000,
+            lineTotalMinorUnits: 5000,
+          ),
+        ],
+      );
+
+      await repository.saveSale(sale);
+
+      final sales = await db.query('sales');
+      expect(sales.length, 1);
+
+      final items = await db.query('sale_items');
+      expect(items.length, 1);
+      expect(items.first['quantity_text'], '1');
+      expect(items.first['billing_quantity_milliunits'], 1000);
+
+      final logs = await db.query('audit_logs');
+      expect(logs.length, 1);
+    },
+  );
+
+  test(
+    'Saves a descriptive quantity with a manually entered line amount',
+    () async {
+      // "2 boxes and 1 piece" cannot be a number; the total was typed by hand
+      // and the billing quantity is stored as NULL, never guessed.
+      final sale = buildSale(
+        id: 'sale-2',
+        receiptNumber: 'REC-002',
+        totalMinorUnits: 137500,
+        customerName: 'Kebede Trading',
+        items: [
+          SaleItem(
+            id: 'item-2',
+            saleId: 'sale-2',
+            productId: 'MANUAL',
+            productNameSnapshot: 'Berbere',
+            unitPriceSnapshotMinorUnits: 25000,
+            quantityText: '2 boxes and 1 piece',
+            billingQuantityMilliunits: null,
+            lineTotalMinorUnits: 137500,
+            notes: 'mixed boxes',
+          ),
+        ],
+      );
+
+      await repository.saveSale(sale);
+
+      final items = await db.query('sale_items');
+      expect(items.single['quantity_text'], '2 boxes and 1 piece');
+      expect(items.single['billing_quantity_milliunits'], isNull);
+      expect(items.single['notes'], 'mixed boxes');
+    },
+  );
+
+  test('Rejects a line total that does not match price and quantity', () async {
+    // The cashier described "2 boxes" but the total is for a single box.
+    // The repository must refuse rather than silently misinterpret.
+    final sale = buildSale(
+      id: 'sale-3',
+      receiptNumber: 'REC-003',
       totalMinorUnits: 5000,
-      amountPaidMinorUnits: 10000,
-      changeMinorUnits: 5000,
-      createdAt: now,
       items: [
         SaleItem(
-          id: 'item-1',
-          saleId: saleId,
+          id: 'item-3',
+          saleId: 'sale-3',
           productId: 'prod-1',
           productNameSnapshot: 'Sugar',
           unitPriceSnapshotMinorUnits: 5000,
-          quantity: 1,
-          lineTotalMinorUnits: 5000,
+          quantityText: '2 boxes',
+          billingQuantityMilliunits: 2000,
+          lineTotalMinorUnits: 5000, // correct value would be 10000
         ),
       ],
     );
 
-    await repository.saveSale(sale);
-
-    final sales = await db.query('sales');
-    expect(sales.length, 1);
-
-    final items = await db.query('sale_items');
-    expect(items.length, 1);
-
-    final logs = await db.query('audit_logs');
-    expect(logs.length, 1);
+    await expectLater(repository.saveSale(sale), throwsException);
+    expect(await db.query('sales'), isEmpty);
+    expect(await db.query('sale_items'), isEmpty);
   });
 
-  test('getAllSales returns saved sales with items', () async {
-    final now = DateTime.now();
-    final sale = Sale(
-      id: 'sale-2',
-      receiptNumber: 'REC-002',
-      cashierId: 'user-1',
-      deviceId: 'device-1',
-      shiftId: 'shift-1',
-      subtotalMinorUnits: 1500,
-      discountMinorUnits: 0,
-      totalMinorUnits: 1500,
-      amountPaidMinorUnits: 2000,
-      changeMinorUnits: 500,
-      createdAt: now,
+  test('Rejects a manual line amount of zero', () async {
+    final sale = buildSale(
+      id: 'sale-4',
+      receiptNumber: 'REC-004',
+      totalMinorUnits: 0,
       items: [
         SaleItem(
-          id: 'item-2',
-          saleId: 'sale-2',
-          productId: 'prod-2',
-          productNameSnapshot: 'Flour',
-          unitPriceSnapshotMinorUnits: 1500,
-          quantity: 1,
-          lineTotalMinorUnits: 1500,
+          id: 'item-4',
+          saleId: 'sale-4',
+          productId: 'MANUAL',
+          productNameSnapshot: 'Sugar',
+          unitPriceSnapshotMinorUnits: 5000,
+          quantityText: 'some bags',
+          billingQuantityMilliunits: null,
+          lineTotalMinorUnits: 0,
         ),
       ],
     );
 
-    await repository.saveSale(sale);
-    final fetchedSales = await repository.getAllSales();
-
-    expect(fetchedSales.length, 1);
-    expect(fetchedSales.first.receiptNumber, 'REC-002');
-    expect(fetchedSales.first.items.length, 1);
-    expect(fetchedSales.first.items.first.productNameSnapshot, 'Flour');
+    await expectLater(repository.saveSale(sale), throwsException);
+    expect(await db.query('sales'), isEmpty);
   });
 
   test('rejects a sale when its referenced shift is closed', () async {
@@ -124,19 +190,10 @@ void main() {
       where: 'id = ?',
       whereArgs: ['shift-1'],
     );
-    final now = DateTime.now();
-    final sale = Sale(
+    final sale = buildSale(
       id: 'closed-shift-sale',
       receiptNumber: 'REC-CLOSED',
-      cashierId: 'user-1',
-      deviceId: 'device-1',
-      shiftId: 'shift-1',
-      subtotalMinorUnits: 100,
-      discountMinorUnits: 0,
       totalMinorUnits: 100,
-      amountPaidMinorUnits: 100,
-      changeMinorUnits: 0,
-      createdAt: now,
       items: [
         SaleItem(
           id: 'closed-item',
@@ -144,7 +201,8 @@ void main() {
           productId: 'MANUAL',
           productNameSnapshot: 'Manual item',
           unitPriceSnapshotMinorUnits: 100,
-          quantity: 1,
+          quantityText: '1',
+          billingQuantityMilliunits: 1000,
           lineTotalMinorUnits: 100,
         ),
       ],
@@ -153,5 +211,106 @@ void main() {
     await expectLater(repository.saveSale(sale), throwsException);
     expect(await db.query('sales'), isEmpty);
     expect(await db.query('audit_logs'), isEmpty);
+  });
+
+  group('getSales search', () {
+    late String sugarSaleId;
+    late String flourSaleId;
+
+    setUp(() async {
+      sugarSaleId = 'sale-sugar';
+      flourSaleId = 'sale-flour';
+      await repository.saveSale(
+        buildSale(
+          id: sugarSaleId,
+          receiptNumber: 'REC-SUGAR',
+          totalMinorUnits: 5000,
+          customerName: 'Kebede Trading',
+          items: [
+            SaleItem(
+              id: 'item-sugar',
+              saleId: sugarSaleId,
+              productId: 'MANUAL',
+              productNameSnapshot: 'Sugar 50kg',
+              unitPriceSnapshotMinorUnits: 5000,
+              quantityText: '1 bag',
+              billingQuantityMilliunits: 1000,
+              lineTotalMinorUnits: 5000,
+              notes: 'deliver tomorrow',
+            ),
+          ],
+        ),
+      );
+      await repository.saveSale(
+        buildSale(
+          id: flourSaleId,
+          receiptNumber: 'REC-FLOUR',
+          totalMinorUnits: 1500,
+          items: [
+            SaleItem(
+              id: 'item-flour',
+              saleId: flourSaleId,
+              productId: 'MANUAL',
+              productNameSnapshot: 'Flour',
+              unitPriceSnapshotMinorUnits: 1500,
+              quantityText: '1',
+              billingQuantityMilliunits: 1000,
+              lineTotalMinorUnits: 1500,
+            ),
+          ],
+        ),
+      );
+    });
+
+    test('finds sales by product name', () async {
+      final sales = await repository.getSales(searchQuery: 'sugar');
+      expect(sales.length, 1);
+      expect(sales.first.id, sugarSaleId);
+      expect(sales.first.items.first.productNameSnapshot, 'Sugar 50kg');
+    });
+
+    test('finds sales by customer name', () async {
+      final sales = await repository.getSales(searchQuery: 'kebede');
+      expect(sales.length, 1);
+      expect(sales.first.id, sugarSaleId);
+    });
+
+    test('finds sales by cashier username', () async {
+      final sales = await repository.getSales(searchQuery: 'abebe');
+      expect(sales.length, 2);
+    });
+
+    test('finds sales by quantity text and notes', () async {
+      expect((await repository.getSales(searchQuery: 'bag')).map((s) => s.id), [
+        sugarSaleId,
+      ]);
+      expect(
+        (await repository.getSales(searchQuery: 'deliver')).map((s) => s.id),
+        [sugarSaleId],
+      );
+    });
+
+    test('never matches receipt numbers', () async {
+      // Receipt numbers are internal identifiers; searching them must find
+      // nothing even though they exist on the rows.
+      expect(await repository.getSales(searchQuery: 'REC-SUGAR'), isEmpty);
+      expect(await repository.getSales(searchQuery: 'rec'), isEmpty);
+    });
+
+    test('LIKE wildcards in the query match literally', () async {
+      expect(await repository.getSales(searchQuery: '%'), isEmpty);
+      expect(await repository.getSales(searchQuery: '_'), isEmpty);
+      expect(await repository.getSales(searchQuery: 'S_gar'), isEmpty);
+    });
+
+    test('filters by status', () async {
+      await repository.voidSale(sugarSaleId, 'user-1', 'wrong entry');
+      final voided = await repository.getSales(status: 'VOIDED');
+      expect(voided.length, 1);
+      expect(voided.first.id, sugarSaleId);
+      final completed = await repository.getSales(status: 'COMPLETED');
+      expect(completed.length, 1);
+      expect(completed.first.id, flourSaleId);
+    });
   });
 }

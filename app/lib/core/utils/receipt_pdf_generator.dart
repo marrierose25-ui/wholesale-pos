@@ -27,21 +27,34 @@ class ReceiptPdfGenerator {
               ),
               pw.Center(child: pw.Text('Sales Receipt')),
               pw.SizedBox(height: 10),
-              pw.Text('Receipt: ${sale.receiptNumber}'),
               pw.Text('Date: ${sale.createdAt.toString().split('.')[0]}'),
+              if (sale.customerName != null &&
+                  sale.customerName!.trim().isNotEmpty)
+                pw.Text('Customer: ${sale.customerName}'),
               pw.Divider(),
               ...sale.items.map(
-                (item) => pw.Row(
-                  mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                (item) => pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
-                    pw.Expanded(
-                      child: pw.Text(
-                        '${item.quantity}x ${item.productNameSnapshot}',
-                      ),
+                    pw.Row(
+                      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                      children: [
+                        pw.Expanded(child: pw.Text(item.productNameSnapshot)),
+                        pw.Text(MoneyUtils.formatBr(item.lineTotalMinorUnits)),
+                      ],
                     ),
                     pw.Text(
-                      '${MoneyUtils.minorUnitsToString(item.lineTotalMinorUnits)} ETB',
+                      '${item.quantityText} @ '
+                      '${MoneyUtils.formatBr(item.unitPriceSnapshotMinorUnits)}'
+                      ' each',
+                      style: const pw.TextStyle(fontSize: 8),
                     ),
+                    if (item.notes != null && item.notes!.trim().isNotEmpty)
+                      pw.Text(
+                        'Note: ${item.notes}',
+                        style: const pw.TextStyle(fontSize: 8),
+                      ),
+                    pw.SizedBox(height: 4),
                   ],
                 ),
               ),
@@ -50,9 +63,7 @@ class ReceiptPdfGenerator {
                 mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                 children: [
                   pw.Text('Subtotal:'),
-                  pw.Text(
-                    '${MoneyUtils.minorUnitsToString(sale.subtotalMinorUnits)} ETB',
-                  ),
+                  pw.Text(MoneyUtils.formatBr(sale.subtotalMinorUnits)),
                 ],
               ),
               pw.Row(
@@ -63,7 +74,7 @@ class ReceiptPdfGenerator {
                     style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
                   ),
                   pw.Text(
-                    '${MoneyUtils.minorUnitsToString(sale.totalMinorUnits)} ETB',
+                    MoneyUtils.formatBr(sale.totalMinorUnits),
                     style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
                   ),
                 ],
@@ -72,19 +83,17 @@ class ReceiptPdfGenerator {
               pw.Row(
                 mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                 children: [
-                  pw.Text('Cash Paid:'),
                   pw.Text(
-                    '${MoneyUtils.minorUnitsToString(sale.amountPaidMinorUnits)} ETB',
+                    '${sale.paymentMethod == 'CASH' ? 'Cash' : 'Bank'} Paid:',
                   ),
+                  pw.Text(MoneyUtils.formatBr(sale.amountPaidMinorUnits)),
                 ],
               ),
               pw.Row(
                 mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                 children: [
                   pw.Text('Change:'),
-                  pw.Text(
-                    '${MoneyUtils.minorUnitsToString(sale.changeMinorUnits)} ETB',
-                  ),
+                  pw.Text(MoneyUtils.formatBr(sale.changeMinorUnits)),
                 ],
               ),
               pw.SizedBox(height: 20),

@@ -30,12 +30,15 @@ class DataExporter {
     final products = await db.query('products');
     final sales = await db.query('sales');
     final saleItems = await db.query('sale_items');
+    final voidRequests = await db.query('void_requests');
     final shifts = await db.query('shifts');
     final cashMovements = await db.query('cash_movements');
     final auditLogs = await db.query('audit_logs');
     final devices = await db.query('devices');
     final counters = await db.query('counters');
     final settings = await db.query('settings');
+    final financeCategories = await db.query('finance_categories');
+    final financeEntries = await db.query('finance_entries');
 
     final exportData = {
       'exported_at': DateTime.now().toIso8601String(),
@@ -44,12 +47,15 @@ class DataExporter {
       'products': products,
       'sales': sales,
       'sale_items': saleItems,
+      'void_requests': voidRequests,
       'shifts': shifts,
       'cash_movements': cashMovements,
       'audit_logs': auditLogs,
       'devices': devices,
       'counters': counters,
       'settings': settings,
+      'finance_categories': financeCategories,
+      'finance_entries': financeEntries,
     };
 
     final jsonString = const JsonEncoder.withIndent('  ').convert(exportData);
