@@ -242,12 +242,9 @@ class _AddUserDialogState extends State<_AddUserDialog> {
       setState(() => _error = 'Enter a username.');
       return;
     }
-    if (password.length < UserRepository.minimumPasswordLength) {
-      setState(
-        () => _error =
-            'Password must be at least '
-            '${UserRepository.minimumPasswordLength} characters.',
-      );
+    final min = UserRepository.minPasswordLengthFor(_role);
+    if (password.length < min) {
+      setState(() => _error = 'Password must be at least $min characters.');
       return;
     }
     if (password != _confirmController.text) {
@@ -369,14 +366,8 @@ class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
 
   Future<void> _submit() async {
     final password = _passwordController.text;
-    if (password.length < UserRepository.minimumPasswordLength) {
-      setState(
-        () => _error =
-            'Password must be at least '
-            '${UserRepository.minimumPasswordLength} characters.',
-      );
-      return;
-    }
+    // Length is validated by the repository against the target user's role
+    // (owner vs cashier), so the exact requirement is enforced server-side.
     if (password != _confirmController.text) {
       setState(() => _error = 'Passwords do not match.');
       return;

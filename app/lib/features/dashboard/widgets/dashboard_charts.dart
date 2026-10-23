@@ -93,19 +93,25 @@ class RevenueTrendChart extends StatelessWidget {
     );
     final effectiveMax = maxTotal == 0 ? 1 : maxTotal;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          height: 150,
-          child: Row(
+    return SizedBox(
+      height: 150,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // Cap bar width so a single/few data points render as slim bars
+          // (not a full-width slab), and give each bar a light track behind it.
+          final slotWidth = constraints.maxWidth / shown.length;
+          final barWidth = (slotWidth * 0.6).clamp(6.0, 26.0);
+          const plotHeight = 108.0;
+          final trackColor = Theme.of(context).colorScheme.onSurface
+              .withValues(alpha: 0.05);
+          return Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: shown.map((p) {
               final ratio = (p.totalMinorUnits / effectiveMax).clamp(0.0, 1.0);
-              final barHeight = (ratio * 108).clamp(4.0, 108.0);
+              final barHeight = (ratio * plotHeight).clamp(3.0, plotHeight);
               return Expanded(
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                  padding: const EdgeInsets.symmetric(horizontal: 2),
                   child: Tooltip(
                     message:
                         '${p.day}  •  ${MoneyUtils.formatBr(p.totalMinorUnits)}'
@@ -113,13 +119,31 @@ class RevenueTrendChart extends StatelessWidget {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
-                        Container(
-                          height: barHeight,
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.primary,
-                            borderRadius: const BorderRadius.vertical(
-                              top: Radius.circular(3),
-                            ),
+                        SizedBox(
+                          width: barWidth,
+                          height: plotHeight,
+                          child: Stack(
+                            alignment: Alignment.bottomCenter,
+                            children: [
+                              Positioned.fill(
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    color: trackColor,
+                                    borderRadius: BorderRadius.circular(3),
+                                  ),
+                                ),
+                              ),
+                              Container(
+                                width: barWidth,
+                                height: barHeight,
+                                decoration: BoxDecoration(
+                                  color: Theme.of(context).colorScheme.primary,
+                                  borderRadius: const BorderRadius.vertical(
+                                    top: Radius.circular(3),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                         const SizedBox(height: 6),
@@ -137,9 +161,9 @@ class RevenueTrendChart extends StatelessWidget {
                 ),
               );
             }).toList(),
-          ),
-        ),
-      ],
+          );
+        },
+      ),
     );
   }
 

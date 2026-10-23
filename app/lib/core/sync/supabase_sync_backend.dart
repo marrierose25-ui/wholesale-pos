@@ -1,0 +1,145 @@
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
+
+import 'sync_backend.dart';
+import 'sync_outbox_entry.dart';
+
+/// Pushes the local outbox to a Supabase (PostgREST) project.
+///
+/// Every entry is applied as an idempotent UPSERT keyed on `id`, so a retry
+/// after a dropped connection can never double-count a sale. SQLite stays the
+/// source of truth; this only mirrors the data upward for remote reporting.
+///
+/// It is a "sink" for exactly the entities the till enqueues: sale (plus its
+/// items), shift, cash movement and void request. Reference rows (users,
+/// devices, products) are deliberately NOT synced — no credentials ever leave
+/// the PC — which is why the cloud mirror has no foreign keys.
+class SupabaseSyncBackend implements SyncBackend {
+  /// Supabase rejects its secret API keys when the request looks like it came
+  /// from a browser (User-Agent heuristic). A plain server-style UA avoids the
+  /// "Forbidden use of secret API key in browser" 401.
+  static const String _userAgent = 'WholesalePOS-Sync/1.0';
+
+  final String _baseUrl;
+  final String _apiKey;
+  final http.Client _client;
+
+  SupabaseSyncBackend({
+    required String url,
+    required String key,
+    http.Client? client,
+  }) : _baseUrl = url.endsWith('/') ? url.substring(0, url.length - 1) : url,
+       _apiKey = key,
+       _client = client ?? http.Client();
+
+  /// Builds the backend from compile-time configuration
+  /// (`--dart-define=SUPABASE_URL=... --dart-define=SUPABASE_KEY=...`). When
+  /// either is absent the app falls back to [NoopSyncBackend], so an un-
+  /// configured build behaves exactly like the offline-only release.
+  static SyncBackend fromEnvironment() {
+    const url = String.fromEnvironment('SUPABASE_URL');
+    const key = String.fromEnvironment('SUPABASE_KEY');
+    if (url.isEmpty || key.isEmpty) return const NoopSyncBackend();
+    return SupabaseSyncBackend(url: url, key: key);
+  }
+
+  @override
+  bool get isConfigured => _baseUrl.isNotEmpty && _apiKey.isNotEmpty;
+
+  @override
+  Future<void> push(List<SyncOutboxEntry> entries) async {
+    for (final entry in entries) {
+      final table = _tableFor(entry.entityType);
+      if (table == null) continue; // Unknown entity type: nothing to push.
+
+      if (entry.operation == SyncOperations.delete) {
+        await _delete(table, entry);
+        continue;
+      }
+
+      final payload = entry.payload;
+      switch (entry.entityType) {
+        case SyncEntities.sale:
+          // A sale is an aggregate: push the header row, then its line items.
+          final sale = payload['sale'];
+          if (sale != null) {
+            await _upsert('sales', [sale as Map<String, dynamic>]);
+          }
+          final items = payload['items'];
+          if (items is List && items.isNotEmpty) {
+            await _upsert('sale_items', items.cast<Map<String, dynamic>>());
+          }
+        case SyncEntities.shift:
+          await _upsert(table, [
+            (payload['shift'] as Map).cast<String, dynamic>(),
+          ]);
+        case SyncEntities.cashMovement:
+          await _upsert(table, [
+            (payload['cash_movement'] as Map).cast<String, dynamic>(),
+          ]);
+        case SyncEntities.voidRequest:
+          await _upsert(table, [
+            (payload['void_request'] as Map).cast<String, dynamic>(),
+          ]);
+        default:
+          break;
+      }
+    }
+  }
+
+  static String? _tableFor(String entityType) => switch (entityType) {
+    SyncEntities.sale => 'sales',
+    SyncEntities.shift => 'shifts',
+    SyncEntities.cashMovement => 'cash_movements',
+    SyncEntities.voidRequest => 'void_requests',
+    _ => null,
+  };
+
+  Future<void> _upsert(String table, List<Map<String, dynamic>> rows) async {
+    final uri = Uri.parse('$_baseUrl/rest/v1/$table')
+        .replace(queryParameters: {'on_conflict': 'id'});
+    final res = await _client.post(
+      uri,
+      headers: _headers(withPrefer: true),
+      body: jsonEncode(rows),
+    );
+    _ensureOk(res, 'upsert $table');
+  }
+
+  Future<void> _delete(String table, SyncOutboxEntry entry) async {
+    final uri = Uri.parse(
+      '$_baseUrl/rest/v1/$table?id=eq.${Uri.encodeComponent(entry.entityId)}',
+    );
+    final res = await _client.delete(uri, headers: _headers());
+    _ensureOk(res, 'delete $table');
+
+    // A deleted sale must also drop its now-orphaned line items.
+    if (entry.entityType == SyncEntities.sale) {
+      final itemsUri = Uri.parse(
+        '$_baseUrl/rest/v1/sale_items?sale_id=eq.'
+        '${Uri.encodeComponent(entry.entityId)}',
+      );
+      final itemsRes = await _client.delete(itemsUri, headers: _headers());
+      _ensureOk(itemsRes, 'delete sale_items');
+    }
+  }
+
+  Map<String, String> _headers({bool withPrefer = false}) => {
+    'apikey': _apiKey,
+    'Authorization': 'Bearer $_apiKey',
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+    'User-Agent': _userAgent,
+    if (withPrefer) 'Prefer': 'resolution=merge-duplicates',
+  };
+
+  void _ensureOk(http.Response res, String what) {
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      // Throwing leaves the rows queued; the next drain retries them.
+      throw Exception(
+        'Supabase sync failed on $what (HTTP ${res.statusCode}): ${res.body}',
+      );
+    }
+  }
+}

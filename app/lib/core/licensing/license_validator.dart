@@ -38,6 +38,7 @@ class LicenseValidator {
     String? hardwareId,
     DateTime? now,
     String? verificationKeyHex,
+    String? licenseText,
   }) async {
     if (verificationKeyHex == null &&
         _allowUnlicensedDev &&
@@ -56,16 +57,25 @@ class LicenseValidator {
     }
 
     try {
-      var file = File('license.key');
-      if (!await file.exists()) {
-        final exeDir = File(Platform.resolvedExecutable).parent.path;
-        file = File('$exeDir/license.key');
+      // Desktop resolves the license from a `license.key` file. Mobile has no
+      // such file, so the caller passes the entered/persisted code via
+      // [licenseText] and the exact same signature verification runs below.
+      final String licenseContents;
+      if (licenseText != null && licenseText.trim().isNotEmpty) {
+        licenseContents = licenseText.trim();
+      } else {
+        var file = File('license.key');
         if (!await file.exists()) {
-          return {'error': 'license.key not found.'};
+          final exeDir = File(Platform.resolvedExecutable).parent.path;
+          file = File('$exeDir/license.key');
+          if (!await file.exists()) {
+            return {'error': 'license.key not found.'};
+          }
         }
+        licenseContents = await file.readAsString();
       }
 
-      final parts = (await file.readAsString()).trim().split('.');
+      final parts = licenseContents.trim().split('.');
       if (parts.length != 2) {
         return {'error': 'Invalid license format.'};
       }

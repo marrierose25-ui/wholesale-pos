@@ -1,4 +1,4 @@
-﻿# Database Schema (SQLite, schema version 8)
+﻿# Database Schema (SQLite, schema version 9)
 
 This document describes the local SQLite database used by the desktop app. There is no backend in this repository.
 
@@ -96,7 +96,13 @@ Finance entries are completely separate from sales: completing one never affects
 - `name` TEXT PK (e.g. `receipt-20261021`), `value` INTEGER — sequential receipt allocation.
 
 ### `settings`
-- `key` TEXT PK, `value` TEXT — currently stores `theme_mode` (`light`/`dark`).
+- `key` TEXT PK, `value` TEXT — currently stores `theme_mode` (`light`/`dark`), `remember_login` (`1`/`0`, opt-in persistent sign-in, default off) and `auth_session` (opaque JSON nonce for a persisted sign-in; never the password or hash).
+
+### `sync_outbox` (transactional change queue for future cloud sync)
+- `id` TEXT PK, `entity_type` TEXT (`sale`/`shift`/`cash_movement`/`void_request`), `entity_id` TEXT
+- `operation` TEXT (`UPSERT`/`DELETE`), `payload` TEXT (serialized aggregate: the row plus any children)
+- `created_at` TEXT, `synced_at` TEXT (null until pushed)
+- Appended **inside the same transaction** as every business write; drained by `SyncService` only when a real `SyncBackend` is configured (ships as `NoopSyncBackend`, so it stays empty/queued and inert today). SQLite remains the single source of truth. See `docs/CLOUD_SYNC.md`. Not included in JSON backups.
 
 ## Indexes
 
@@ -107,10 +113,11 @@ Finance entries are completely separate from sales: completing one never affects
 - `cash_movements_shift_id`
 - `finance_entries_category_id`
 - `void_requests_sale_id`, `void_requests_status`
+- `sync_outbox_pending` (on `sync_outbox.synced_at`)
 
 ## Migrations
 
-`LocalDatabase.schemaVersion` is the single source of truth (currently `8`). Both `onCreate` and `onUpgrade` build the same final shape:
+`LocalDatabase.schemaVersion` is the single source of truth (currently `9`). Both `onCreate` and `onUpgrade` build the same final shape:
 
 - v2: shifts
 - v3: `sales.payment_method`
@@ -119,6 +126,7 @@ Finance entries are completely separate from sales: completing one never affects
 - v6: rebuilds `cash_movements` with a real `user_id` foreign key, adds `counters`/`settings`, and creates all indexes/triggers on upgraded databases
 - v7: rebuilds `sale_items` to replace the integer `quantity` with `quantity_text` (the old number is preserved as text), `billing_quantity_milliunits` (old quantity x 1000), and `notes`; adds `finance_categories`/`finance_entries` and the `finance_entries_category_id` index
 - v8: adds the `void_requests` table with `void_requests_sale_id` and `void_requests_status` indexes
+- v9: adds the `sync_outbox` table and `sync_outbox_pending` index (purely additive — no existing table or column is touched)
 
 ## Backups
 

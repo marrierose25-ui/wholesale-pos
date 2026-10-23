@@ -1,7 +1,9 @@
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../features/sales/shift.dart';
+import '../sync/sync_outbox.dart';
+import '../sync/sync_outbox_entry.dart';
 import '../utils/date_range.dart';
 
 class ShiftRepository {
@@ -76,6 +78,7 @@ class ShiftRepository {
         'details': 'Shift $shift.id opened with cash $openingCash minor units.',
         'created_at': DateTime.now().toIso8601String(),
       });
+      await _enqueueShift(txn, shift.id);
     });
   }
 
@@ -113,8 +116,9 @@ class ShiftRepository {
           throw Exception('An active user is required.');
         }
       }
+      final movementId = const Uuid().v4();
       await txn.insert('cash_movements', {
-        'id': const Uuid().v4(),
+        'id': movementId,
         'shift_id': shiftId,
         'user_id': userId,
         'type': type,
@@ -129,6 +133,7 @@ class ShiftRepository {
         'details': '$type $amount for shift $shiftId: ${reason.trim()}',
         'created_at': DateTime.now().toIso8601String(),
       });
+      await _enqueueCashMovement(txn, movementId);
     });
   }
 
@@ -268,6 +273,39 @@ class ShiftRepository {
             'Counted: $closingCash, Difference: ${closingCash - expected}.',
         'created_at': DateTime.now().toIso8601String(),
       });
+      await _enqueueShift(txn, shift.id);
     });
+  }
+
+  Future<void> _enqueueShift(Transaction txn, String shiftId) async {
+    final rows = await txn.query(
+      'shifts',
+      where: 'id = ?',
+      whereArgs: [shiftId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    await SyncOutbox.upsert(
+      txn,
+      entityType: SyncEntities.shift,
+      entityId: shiftId,
+      payload: {'shift': rows.first},
+    );
+  }
+
+  Future<void> _enqueueCashMovement(Transaction txn, String movementId) async {
+    final rows = await txn.query(
+      'cash_movements',
+      where: 'id = ?',
+      whereArgs: [movementId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    await SyncOutbox.upsert(
+      txn,
+      entityType: SyncEntities.cashMovement,
+      entityId: movementId,
+      payload: {'cash_movement': rows.first},
+    );
   }
 }

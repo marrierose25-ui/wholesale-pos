@@ -1,4 +1,4 @@
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:sqflite/sqflite.dart';
 
 import '../models/product.dart';
 
@@ -8,18 +8,45 @@ class ProductRepository {
   ProductRepository(this._db);
 
   Future<void> save(Product product) async {
+    await _ensureNameIsUnique(product.name, excludeId: null);
     await _db.insert('products', product.toMap());
   }
 
   /// Updates name, default price and active flag. Used by the Saved Names
   /// screen for rename, price edits and deactivate/reactivate.
   Future<void> update(Product product) async {
+    await _ensureNameIsUnique(product.name, excludeId: product.id);
     await _db.update(
       'products',
       product.toMap(),
       where: 'id = ?',
       whereArgs: [product.id],
     );
+  }
+
+  /// Saved names are POS search shortcuts, so two products sharing a name make
+  /// tapping ambiguous. Enforce uniqueness here (case-insensitive, trimmed)
+  /// rather than with a raw UNIQUE index, which would fail the migration on
+  /// any duplicates that already exist and fights the "code is the unique key"
+  /// design. Blocks against every product, active or not, so a deactivated
+  /// name can be reactivated instead of recreated.
+  Future<void> _ensureNameIsUnique(String name, {String? excludeId}) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return; // empty names are rejected by the form.
+    final maps = await _db.query(
+      'products',
+      columns: ['id'],
+      where:
+          'LOWER(TRIM(name)) = LOWER(TRIM(?))'
+          '${excludeId != null ? ' AND id <> ?' : ''}',
+      whereArgs: excludeId != null ? [trimmed, excludeId] : [trimmed],
+      limit: 1,
+    );
+    if (maps.isNotEmpty) {
+      throw Exception(
+        'A saved name "$trimmed" already exists. Names must be unique.',
+      );
+    }
   }
 
   Future<void> deactivate(String id) async {

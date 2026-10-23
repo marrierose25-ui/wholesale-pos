@@ -72,11 +72,10 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
     if (_isFirstRun) {
-      if (password.length < UserRepository.minimumPasswordLength) {
+      final min = UserRepository.minPasswordLengthFor('OWNER');
+      if (password.length < min) {
         setState(
-          () => _errorMessage =
-              'Password must be at least '
-              '${UserRepository.minimumPasswordLength} characters.',
+          () => _errorMessage = 'Password must be at least $min characters.',
         );
         return;
       }

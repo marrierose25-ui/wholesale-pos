@@ -182,4 +182,95 @@ void main() {
       );
     },
   );
+
+  test('Owner password needs 12 chars, cashier needs 8', () async {
+    // 11 chars is too short for an owner.
+    await expectLater(
+      repository.createUser('boss', 'elevenchars', 'OWNER'),
+      throwsException,
+    );
+    // 13 chars is fine for an owner.
+    await repository.createUser('boss', 'twelvechars12', 'OWNER');
+    // 7 chars is too short for a cashier.
+    await expectLater(
+      repository.createUser('temp', 'sevench', 'CASHIER'),
+      throwsException,
+    );
+    // 10 chars is fine for a cashier.
+    await repository.createUser('temp', 'eightchars', 'CASHIER');
+  });
+
+  test('changePassword enforces the owner minimum', () async {
+    final owner = await repository.createFirstOwner(
+      'owner',
+      'long-strong-password',
+    );
+    await expectLater(
+      repository.changePassword(
+        userId: owner.id,
+        currentPassword: 'long-strong-password',
+        newPassword: 'short12', // 7 < 12
+      ),
+      throwsException,
+    );
+  });
+
+  test('resetPassword enforces the target user role minimum', () async {
+    final owner = await repository.createFirstOwner(
+      'owner',
+      'long-strong-password',
+    );
+    await repository.createUser('cashier1', 'password123', 'CASHIER');
+    final cashier = (await repository.getAllUsers()).firstWhere(
+      (user) => user.username == 'cashier1',
+    );
+    // Cashier target only needs 8 characters.
+    await repository.resetPassword(
+      targetUserId: cashier.id,
+      newPassword: 'neweightchars',
+      actingUserId: owner.id,
+    );
+    // Owner target needs 12, so 8 is rejected.
+    await expectLater(
+      repository.resetPassword(
+        targetUserId: owner.id,
+        newPassword: 'tooshort',
+        actingUserId: owner.id,
+      ),
+      throwsException,
+    );
+  });
+
+  test('Locks a username for the cooldown after repeated failures', () async {
+    await repository.createFirstOwner('owner', 'long-strong-password');
+    for (var i = 0; i < UserRepository.maxFailedAttempts; i++) {
+      expect(await repository.authenticate('owner', 'nope'), isNull);
+    }
+    // The next attempt throws even with the correct password.
+    await expectLater(
+      repository.authenticate('owner', 'long-strong-password'),
+      throwsException,
+    );
+  });
+
+  test('A successful login clears the failed-attempt counter', () async {
+    await repository.createFirstOwner('owner', 'long-strong-password');
+    // Four failures (one short of the lockout threshold).
+    for (var i = 0; i < UserRepository.maxFailedAttempts - 1; i++) {
+      await repository.authenticate('owner', 'nope');
+    }
+    // Success resets the counter...
+    expect(
+      await repository.authenticate('owner', 'long-strong-password'),
+      isNotNull,
+    );
+    // ...so another four failures still do not lock the account.
+    for (var i = 0; i < UserRepository.maxFailedAttempts - 1; i++) {
+      expect(await repository.authenticate('owner', 'nope'), isNull);
+    }
+    expect(
+      await repository.authenticate('owner', 'long-strong-password'),
+      isNotNull,
+    );
+  });
 }

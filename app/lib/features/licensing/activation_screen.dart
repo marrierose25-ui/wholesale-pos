@@ -7,11 +7,21 @@ class ActivationScreen extends StatefulWidget {
   final String? errorMessage;
   final Future<String> Function() hardwareIdProvider;
 
+  /// Mobile-only: validates a typed/pasted license code, persists it on success
+  /// and returns null; returns an error message on failure (nothing persisted).
+  final Future<String?> Function(String code)? onActivateWithCode;
+
+  /// When true (phones/tablets) show the manual code-entry UI instead of the
+  /// desktop "place the license.key file next to the app" instruction.
+  final bool showCodeEntry;
+
   const ActivationScreen({
     super.key,
     required this.onActivated,
     this.errorMessage,
     this.hardwareIdProvider = LicenseValidator.getHardwareId,
+    this.onActivateWithCode,
+    this.showCodeEntry = false,
   });
 
   @override
@@ -20,95 +30,191 @@ class ActivationScreen extends StatefulWidget {
 
 class _ActivationScreenState extends State<ActivationScreen> {
   String _hardwareId = 'Loading...';
+  final _codeController = TextEditingController();
+  String? _submitError;
+  bool _submitting = false;
 
   @override
   void initState() {
     super.initState();
-    widget.hardwareIdProvider().then((id) => setState(() => _hardwareId = id));
+    widget.hardwareIdProvider().then((id) {
+      if (mounted) setState(() => _hardwareId = id);
+    });
+  }
+
+  @override
+  void dispose() {
+    _codeController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final onActivateWithCode = widget.onActivateWithCode;
+    if (onActivateWithCode == null) return;
+    setState(() {
+      _submitting = true;
+      _submitError = null;
+    });
+    final error = await onActivateWithCode(_codeController.text);
+    if (!mounted) return;
+    setState(() {
+      _submitting = false;
+      _submitError = error;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
+    final displayError = _submitError ?? widget.errorMessage;
     return Scaffold(
       body: Center(
-        child: Container(
-          width: 500,
-          padding: const EdgeInsets.all(32),
-          decoration: BoxDecoration(
-            color: Theme.of(context).cardColor,
-            borderRadius: BorderRadius.circular(12),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.1),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.lock_person, size: 64, color: Colors.orange),
-              const SizedBox(height: 16),
-              Text(
-                'License Activation',
-                style: Theme.of(context).textTheme.headlineSmall,
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'This software requires a valid license to run.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey),
-              ),
-              if (widget.errorMessage != null) ...[
-                const SizedBox(height: 16),
-                Text(
-                  widget.errorMessage!,
-                  style: const TextStyle(
-                    color: Colors.red,
-                    fontWeight: FontWeight.bold,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          // ConstrainedBox (not a fixed width) so the card shrinks to fit a
+          // phone instead of overflowing at narrow widths.
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 500),
+            child: Container(
+              padding: const EdgeInsets.all(32),
+              decoration: BoxDecoration(
+                color: Theme.of(context).cardColor,
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.1),
+                    blurRadius: 20,
+                    offset: const Offset(0, 10),
                   ),
-                ),
-              ],
-              const SizedBox(height: 24),
-              const Text(
-                'Your Device Hardware ID:',
-                style: TextStyle(fontWeight: FontWeight.bold),
+                ],
               ),
-              const SizedBox(height: 8),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.grey.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: SelectableText(
-                  _hardwareId,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontWeight: FontWeight.bold,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.lock_person, size: 64, color: Colors.orange),
+                  const SizedBox(height: 16),
+                  Text(
+                    'License Activation',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.headlineSmall,
                   ),
-                ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'This software requires a valid license to run.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.grey),
+                  ),
+                  if (displayError != null) ...[
+                    const SizedBox(height: 16),
+                    Text(
+                      displayError,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.red,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 24),
+                  if (widget.showCodeEntry)
+                    ..._buildCodeEntry(context)
+                  else
+                    ..._buildDesktopInstructions(context),
+                ],
               ),
-              const SizedBox(height: 24),
-              const Text(
-                'Send this ID to your provider. Place the license.key file next to the app and click Retry.',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 12),
-              ),
-              const SizedBox(height: 24),
-              SizedBox(
-                width: double.infinity,
-                height: 50,
-                child: FilledButton(
-                  onPressed: widget.onActivated,
-                  child: const Text('Retry Activation'),
-                ),
-              ),
-            ],
+            ),
           ),
         ),
       ),
     );
+  }
+
+  List<Widget> _buildCodeEntry(BuildContext context) {
+    return [
+      Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          'Enter your license code:',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: Theme.of(context).colorScheme.onSurface,
+          ),
+        ),
+      ),
+      const SizedBox(height: 8),
+      TextField(
+        controller: _codeController,
+        minLines: 3,
+        maxLines: 6,
+        autocorrect: false,
+        enabled: !_submitting,
+        decoration: const InputDecoration(
+          hintText: 'Paste the full activation code',
+          border: OutlineInputBorder(),
+        ),
+        style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+      ),
+      const SizedBox(height: 16),
+      SizedBox(
+        width: double.infinity,
+        height: 50,
+        child: FilledButton(
+          onPressed: _submitting ? null : _submit,
+          child: _submitting
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Activate'),
+        ),
+      ),
+      const SizedBox(height: 16),
+      const Text(
+        'Ask your provider for an activation code for this business. It is '
+        'saved on this device, so you only enter it once.',
+        textAlign: TextAlign.center,
+        style: TextStyle(fontSize: 12, color: Colors.grey),
+      ),
+    ];
+  }
+
+  List<Widget> _buildDesktopInstructions(BuildContext context) {
+    return [
+      const Text(
+        'Your Device Hardware ID:',
+        style: TextStyle(fontWeight: FontWeight.bold),
+      ),
+      const SizedBox(height: 8),
+      Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.grey.withValues(alpha: 0.2),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: SelectableText(
+          _hardwareId,
+          style: const TextStyle(
+            fontFamily: 'monospace',
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+      const SizedBox(height: 24),
+      const Text(
+        'Send this ID to your provider. Place the license.key file next to the '
+        'app and click Retry.',
+        textAlign: TextAlign.center,
+        style: TextStyle(fontSize: 12),
+      ),
+      const SizedBox(height: 24),
+      SizedBox(
+        width: double.infinity,
+        height: 50,
+        child: FilledButton(
+          onPressed: widget.onActivated,
+          child: const Text('Retry Activation'),
+        ),
+      ),
+    ];
   }
 }

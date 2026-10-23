@@ -4,7 +4,7 @@ import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:cryptography/cryptography.dart' as cryptography;
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/user.dart';
@@ -14,8 +14,30 @@ class UserRepository {
   UserRepository(this._db);
 
   static const int defaultIterations = 210000;
-  static const int minimumPasswordLength = 6;
   static const Set<String> roles = {'OWNER', 'CASHIER'};
+
+  /// Role-aware minimum password length. An owner can reset passwords, read
+  /// reports and restore backups, so their secret protects the whole business;
+  /// a cashier signs in many times a day, so a very long password is friction.
+  static const int ownerPasswordLength = 12;
+  static const int cashierPasswordLength = 8;
+
+  /// Backward-compatible floor for callers that don't know the role. Prefer
+  /// [minPasswordLengthFor] everywhere the role is available.
+  static const int minimumPasswordLength = cashierPasswordLength;
+
+  static int minPasswordLengthFor(String? role) =>
+      role != null && role.toUpperCase() == 'OWNER'
+      ? ownerPasswordLength
+      : cashierPasswordLength;
+
+  /// Login cooldown. After [maxFailedAttempts] failures for a username, block
+  /// further attempts for [loginCooldown]. This only deters someone guessing
+  /// at the physical keyboard; it cannot stop an attacker who copies the
+  /// SQLite file and cracks the PBKDF2 hashes offline.
+  static const int maxFailedAttempts = 5;
+  static const Duration loginCooldown = Duration(seconds: 30);
+  final Map<String, _LoginGuard> _loginGuards = {};
 
   static const String _pbkdf2Prefix = 'pbkdf2-sha256\$v=1\$';
   static const int _legacyIterations = 10000;
@@ -135,11 +157,22 @@ class UserRepository {
     }
   }
 
-  static void _validatePassword(String password) {
-    if (password.length < minimumPasswordLength) {
+  static void _validatePassword(String password, String role) {
+    final min = minPasswordLengthFor(role);
+    if (password.length < min) {
       throw Exception(
-        'Password must be at least $minimumPasswordLength characters.',
+        'Password must be at least $min characters for a '
+        '${role.toLowerCase()} account.',
       );
+    }
+  }
+
+  void _recordFailedAttempt(String guardKey) {
+    final guard = _loginGuards.putIfAbsent(guardKey, () => _LoginGuard());
+    guard.failures += 1;
+    if (guard.failures >= maxFailedAttempts) {
+      guard.lockedUntil = DateTime.now().add(loginCooldown);
+      guard.failures = 0;
     }
   }
 
@@ -153,7 +186,7 @@ class UserRepository {
     if (name.isEmpty) {
       throw Exception('Username cannot be empty.');
     }
-    _validatePassword(password);
+    _validatePassword(password, 'OWNER');
 
     final salt = _generateSalt();
     final hash = await _hashPassword(password, salt);
@@ -185,6 +218,21 @@ class UserRepository {
 
   Future<User?> authenticate(String username, String password) async {
     final name = username.trim();
+    final guardKey = name.toLowerCase();
+
+    // Cooldown check first: don't even verify while the account is locked.
+    final guard = _loginGuards[guardKey];
+    final now = DateTime.now();
+    if (guard != null &&
+        guard.lockedUntil != null &&
+        now.isBefore(guard.lockedUntil!)) {
+      final secs = guard.lockedUntil!.difference(now).inSeconds + 1;
+      throw Exception(
+        'Too many failed attempts. Try again in '
+        '$secs second${secs == 1 ? '' : 's'}.',
+      );
+    }
+
     final maps = await _db.query(
       'users',
       where: 'LOWER(username) = LOWER(?) AND is_active = 1',
@@ -193,11 +241,13 @@ class UserRepository {
     );
     if (maps.isEmpty) {
       await _audit(action: 'LOGIN_FAILED', details: 'Unknown username: $name');
+      _recordFailedAttempt(guardKey);
       return null;
     }
 
     final user = User.fromMap(maps.first);
     if (await _verifyUserPassword(user, password)) {
+      _loginGuards.remove(guardKey);
       if (!user.passwordHash.startsWith(_pbkdf2Prefix)) {
         await _upgradePasswordHash(user, password);
         await _audit(
@@ -218,6 +268,7 @@ class UserRepository {
       action: 'LOGIN_FAILED',
       details: 'Wrong password for username: $name',
     );
+    _recordFailedAttempt(guardKey);
     return null;
   }
 
@@ -226,10 +277,10 @@ class UserRepository {
     if (name.isEmpty) {
       throw Exception('Username cannot be empty.');
     }
-    _validatePassword(password);
     if (!roles.contains(role)) {
       throw Exception('Invalid role.');
     }
+    _validatePassword(password, role);
 
     final salt = _generateSalt();
     final hash = await _hashPassword(password, salt);
@@ -266,7 +317,6 @@ class UserRepository {
     required String currentPassword,
     required String newPassword,
   }) async {
-    _validatePassword(newPassword);
     final maps = await _db.query(
       'users',
       where: 'id = ?',
@@ -275,6 +325,7 @@ class UserRepository {
     );
     if (maps.isEmpty) throw Exception('User not found.');
     final user = User.fromMap(maps.first);
+    _validatePassword(newPassword, user.role);
     if (!await _verifyUserPassword(user, currentPassword)) {
       throw Exception('Current password is incorrect.');
     }
@@ -291,7 +342,6 @@ class UserRepository {
     required String newPassword,
     required String actingUserId,
   }) async {
-    _validatePassword(newPassword);
     final actors = await _db.query(
       'users',
       columns: ['role', 'is_active', 'username'],
@@ -312,6 +362,7 @@ class UserRepository {
     );
     if (targets.isEmpty) throw Exception('User not found.');
     final target = User.fromMap(targets.first);
+    _validatePassword(newPassword, target.role);
     await _upgradePasswordHash(target, newPassword);
     await _audit(
       userId: actingUserId,
@@ -381,4 +432,23 @@ class UserRepository {
     final maps = await _db.query('users', orderBy: 'username ASC');
     return maps.map((m) => User.fromMap(m)).toList();
   }
+
+  /// Rehydrates a user for a restored session. Returns null when the account
+  /// is missing or has been deactivated since sign-in, so a persisted session
+  /// can never resurrect a revoked login.
+  Future<User?> getById(String id) async {
+    final maps = await _db.query(
+      'users',
+      where: 'id = ? AND is_active = 1',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (maps.isEmpty) return null;
+    return User.fromMap(maps.first);
+  }
+}
+
+class _LoginGuard {
+  int failures = 0;
+  DateTime? lockedUntil;
 }

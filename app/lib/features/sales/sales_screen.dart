@@ -283,35 +283,71 @@ class SalesScreenState extends State<SalesScreen> {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
+        // Shared pieces: the order-entry column and the live cart.
+        final entryArea = Container(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (_activeShift == null) ...[
+                _buildClosedRegisterBanner(),
+                const SizedBox(height: 16),
+              ],
+              _buildAddItemCard(),
+              const SizedBox(height: 16),
+              Expanded(flex: 3, child: _buildSavedNamesCard()),
+              const SizedBox(height: 16),
+              Expanded(flex: 2, child: _buildRecentSalesCard()),
+            ],
+          ),
+        );
+        final cart = _buildCartPanel(context);
+
+        // Phones / narrow portrait: a single vertical scroll (entry, quick
+        // pickers, then the cart) so nothing has to fit the screen exactly.
+        if (constraints.maxWidth < 700) {
+          return SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (_activeShift == null) ...[
+                  _buildClosedRegisterBanner(),
+                  const SizedBox(height: 16),
+                ],
+                _buildAddItemCard(),
+                const SizedBox(height: 16),
+                SizedBox(height: 240, child: _buildSavedNamesCard()),
+                const SizedBox(height: 16),
+                SizedBox(height: 200, child: _buildRecentSalesCard()),
+                const SizedBox(height: 16),
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    border: Border(
+                      top: BorderSide(
+                        color: Theme.of(context).dividerColor,
+                        width: 1,
+                      ),
+                    ),
+                  ),
+                  child: SizedBox(height: 440, child: cart),
+                ),
+              ],
+            ),
+          );
+        }
+
+        // Tablet / desktop: entry beside a fixed-width cart, as before.
         final cartWidth = constraints.maxWidth >= 1200
             ? 420.0
             : constraints.maxWidth >= 900
             ? 360.0
             : 320.0;
-
         return Row(
           children: [
-            Expanded(
-              child: Container(
-                color: Theme.of(context).scaffoldBackgroundColor,
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (_activeShift == null) ...[
-                      _buildClosedRegisterBanner(),
-                      const SizedBox(height: 16),
-                    ],
-                    _buildAddItemCard(),
-                    const SizedBox(height: 16),
-                    Expanded(flex: 3, child: _buildSavedNamesCard()),
-                    const SizedBox(height: 16),
-                    Expanded(flex: 2, child: _buildRecentSalesCard()),
-                  ],
-                ),
-              ),
-            ),
-            SizedBox(width: cartWidth, child: _buildCartPanel(context)),
+            Expanded(child: entryArea),
+            SizedBox(width: cartWidth, child: cart),
           ],
         );
       },

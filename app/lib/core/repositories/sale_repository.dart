@@ -1,10 +1,12 @@
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../features/sales/sale.dart';
 import '../../features/sales/sale_item.dart';
 import '../../features/sales/shift.dart';
 import '../../features/sales/void_request.dart';
+import '../sync/sync_outbox.dart';
+import '../sync/sync_outbox_entry.dart';
 import '../utils/date_range.dart';
 import '../utils/money_utils.dart';
 import 'shift_repository.dart';
@@ -74,6 +76,7 @@ class SaleRepository {
             'Lines: ${sale.items.length}',
         'created_at': DateTime.now().toIso8601String(),
       });
+      await _enqueueSale(txn, sale.id);
     });
   }
 
@@ -225,6 +228,7 @@ class SaleRepository {
             'Reason: ${reason.trim()}',
         'created_at': DateTime.now().toIso8601String(),
       });
+      await _enqueueSale(txn, saleId);
     });
   }
 
@@ -345,8 +349,9 @@ class SaleRepository {
       if (pending.isNotEmpty) {
         throw Exception('A void request is already pending for this sale.');
       }
+      final requestId = const Uuid().v4();
       await txn.insert('void_requests', {
-        'id': const Uuid().v4(),
+        'id': requestId,
         'sale_id': saleId,
         'requested_by': userId,
         'reason': reason.trim(),
@@ -360,6 +365,7 @@ class SaleRepository {
         'details': 'Void requested for sale $saleId. Reason: ${reason.trim()}',
         'created_at': DateTime.now().toIso8601String(),
       });
+      await _enqueueVoidRequest(txn, requestId);
     });
   }
 
@@ -490,6 +496,8 @@ class SaleRepository {
         'details': 'Void request $requestId approved for sale $saleId.',
         'created_at': now,
       });
+      await _enqueueSale(txn, saleId);
+      await _enqueueVoidRequest(txn, requestId);
     });
   }
 
@@ -537,6 +545,7 @@ class SaleRepository {
             'Reason given: ${requests.first['reason']}',
         'created_at': DateTime.now().toIso8601String(),
       });
+      await _enqueueVoidRequest(txn, requestId);
     });
   }
 
@@ -571,6 +580,47 @@ class SaleRepository {
       ORDER BY day ASC
     ''',
       [period.start.toIso8601String(), period.end.toIso8601String()],
+    );
+  }
+
+  /// Appends the current state of a sale (row + its items) to the outbox, in
+  /// the caller's transaction. The cloud receives the whole aggregate so it can
+  /// reconstruct the sale; re-enqueueing on void simply sends the newer state.
+  Future<void> _enqueueSale(Transaction txn, String saleId) async {
+    final saleRow = await txn.query(
+      'sales',
+      where: 'id = ?',
+      whereArgs: [saleId],
+      limit: 1,
+    );
+    if (saleRow.isEmpty) return;
+    final items = await txn.query(
+      'sale_items',
+      where: 'sale_id = ?',
+      whereArgs: [saleId],
+      orderBy: 'rowid ASC',
+    );
+    await SyncOutbox.upsert(
+      txn,
+      entityType: SyncEntities.sale,
+      entityId: saleId,
+      payload: {'sale': saleRow.first, 'items': items},
+    );
+  }
+
+  Future<void> _enqueueVoidRequest(Transaction txn, String requestId) async {
+    final rows = await txn.query(
+      'void_requests',
+      where: 'id = ?',
+      whereArgs: [requestId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    await SyncOutbox.upsert(
+      txn,
+      entityType: SyncEntities.voidRequest,
+      entityId: requestId,
+      payload: {'void_request': rows.first},
     );
   }
 

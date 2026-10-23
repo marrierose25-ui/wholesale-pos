@@ -32,10 +32,38 @@ The tool prints the public key and, when a license path is supplied, verifies th
 Issue a license with:
 
 ```powershell
-dart run tools/generate_license.dart <hardware-id-or-> <private-key-path> <output-license-path>
+dart run tools/generate_license.dart <hardware-id-or-> <private-key-path> <output-license-path-or->
 ```
 
 Use `-` only for an intentionally unbound license. The tool refuses to overwrite an existing output. Place the resulting file next to the executable (or in the working directory) as `license.key` for the customer. `flutter build windows` replaces the executable but leaves extra files in the release folder alone, so copy `license.key` into `build\windows\x64\runner\Release\` after each clean build and include it in any distribution archive.
+
+## Mobile activation
+
+Phones and tablets have no file system the user can drop a `license.key` next to, so mobile uses a **one-time activation code** instead. The code is the exact same signed token (`base64url(payload).base64url(signature)`) — only the delivery changes from "a file" to "a string the owner pastes once".
+
+- The activation screen shows a text box; whatever is entered is verified against the build-time public key with the identical Ed25519 path as desktop, and on success is persisted in the app's `settings` table (which lives in app-private storage on Android/iOS, so it is not exported and survives restarts). Nothing is stored if verification fails.
+- Mobile licenses are normally **device-unbound** (no `hardware_id`), so the owner can activate any number of the business's own phones/tablets with codes you issue. A bound code still works but must match the device fingerprint.
+- Mint a copy-paste code for a phone (writes no file, prints the code):
+
+```powershell
+dart run tools/generate_license.dart - <private-key-path> -
+```
+
+The resulting string is what the owner pastes into the app. It expires after one year like a desktop license; re-issue to renew. A shippable mobile build must be compiled with the real public key baked in — `flutter build apk --release --dart-define=WHOLESALE_POS_LICENSE_PUBLIC_KEY=<hex>` — and must NOT use `WHOLESALE_POS_DEV_UNLICENSED` (that bypass is for developer preview APKs only).
+
+### Two different signing keys (do not confuse them)
+
+- The **Ed25519 license seed** (`owner-ed25519.key`) proves a *license*. It lives outside the repo and is used only by `tools/generate_license.dart`.
+- The **Android upload keystore** (`wholesale_pos_upload.jks`, `CN=Wholesale POS`) proves the *APK package identity* so Android accepts installs/updates. It is referenced by `android/key.properties` (both git-ignored) and consumed by `android/app/build.gradle.kts`; when `key.properties` is missing the release build falls back to debug signing so local `flutter run --release` still works. Back this keystore up: if it is lost you cannot publish updates that install over the existing app under the same signature.
+
+A signed release is produced with:
+
+```powershell
+flutter build apk --release `
+  --dart-define=WHOLESALE_POS_LICENSE_PUBLIC_KEY=<64-hex-char-public-key>
+```
+
+Deliberately, the Supabase secret key is not baked into distributable builds (it would be extractable and bypass row-level security); mobile ships with sync inert until an anon-key + RLS backend exists.
 
 ## Development without a key
 

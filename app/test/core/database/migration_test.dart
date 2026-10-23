@@ -338,6 +338,80 @@ void main() {
     },
   );
 
+  test('Upgrades a v8 database to v9, adding the sync_outbox queue', () async {
+    var db = await LocalDatabase.openAt(dbPath);
+    final now = DateTime.now().toIso8601String();
+    await db.insert('users', {
+      'id': 'user-1',
+      'username': 'owner',
+      'password_hash': 'x',
+      'salt': 'x',
+      'role': 'OWNER',
+      'is_active': 1,
+      'created_at': now,
+    });
+    await db.insert('devices', {
+      'id': 'device-1',
+      'name': 'PC',
+      'platform': 'Windows',
+    });
+    await db.insert('shifts', {
+      'id': 'shift-1',
+      'cashier_id': 'user-1',
+      'opening_cash_minor_units': 0,
+      'status': 'CLOSED',
+      'opened_at': now,
+    });
+    await db.insert('sales', {
+      'id': 'sale-1',
+      'receipt_number': 'REC-001',
+      'cashier_id': 'user-1',
+      'device_id': 'device-1',
+      'shift_id': 'shift-1',
+      'subtotal_minor_units': 5000,
+      'discount_minor_units': 0,
+      'total_minor_units': 5000,
+      'amount_paid_minor_units': 5000,
+      'change_minor_units': 0,
+      'status': 'COMPLETED',
+      'created_at': now,
+    });
+
+    // Rewind to the v8 shape: no sync_outbox table or its pending index.
+    await db.execute('DROP TABLE sync_outbox');
+    await db.execute('DROP INDEX IF EXISTS sync_outbox_pending');
+    await db.execute('PRAGMA user_version = 8');
+    await db.close();
+
+    db = await LocalDatabase.openAt(dbPath);
+
+    final version = await db.rawQuery('PRAGMA user_version');
+    expect(version.first.values.first, LocalDatabase.schemaVersion);
+
+    final tables = (await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type = 'table'",
+    )).map((row) => row['name'] as String).toSet();
+    expect(tables, contains('sync_outbox'));
+
+    final indexes = (await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type = 'index'",
+    )).map((row) => row['name'] as String).toSet();
+    expect(indexes, contains('sync_outbox_pending'));
+
+    // sync_outbox is a fresh empty queue: nothing is marked pending yet.
+    expect(await db.query('sync_outbox'), isEmpty);
+
+    // The pre-existing sale survived the upgrade untouched.
+    final sale = (await db.query(
+      'sales',
+      where: 'id = ?',
+      whereArgs: ['sale-1'],
+    )).single;
+    expect(sale['total_minor_units'], 5000);
+
+    await db.close();
+  });
+
   test('Re-registers the persisted device ID after a restore', () async {
     var db = await LocalDatabase.openAt(dbPath);
     final deviceId = await LocalDatabase.registerCurrentDevice(db);

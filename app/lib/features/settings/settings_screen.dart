@@ -1,8 +1,9 @@
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:sqflite/sqflite.dart';
 
 import '../../core/database/local_database.dart';
+import '../../core/auth/session_store.dart';
 import '../../core/models/user.dart';
 import '../../core/repositories/user_repository.dart';
 import '../../core/theme/app_theme.dart';
@@ -34,8 +35,35 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _isExporting = false;
   bool _isImporting = false;
+  bool _rememberLogin = false;
 
   bool get _isOwner => widget.currentUser.role == 'OWNER';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRememberPreference();
+  }
+
+  Future<void> _loadRememberPreference() async {
+    final value = await LocalDatabase.getSetting(
+      widget.db,
+      SessionStore.rememberKey,
+    );
+    if (!mounted) return;
+    setState(() => _rememberLogin = value == '1');
+  }
+
+  Future<void> _toggleRemember(bool value) async {
+    setState(() => _rememberLogin = value);
+    await LocalDatabase.setSetting(
+      widget.db,
+      SessionStore.rememberKey,
+      value ? '1' : '0',
+    );
+    // Turning it off drops any session saved under the previous choice.
+    if (!value) await SettingsSessionStore(widget.db).clear();
+  }
 
   Future<void> _exportData() async {
     setState(() => _isExporting = true);
@@ -133,6 +161,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (context) => _ChangePasswordDialog(
         userRepository: widget.userRepository,
         userId: widget.currentUser.id,
+        role: widget.currentUser.role,
       ),
     );
     if (changed == true && mounted) {
@@ -199,6 +228,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: const Text('Update your sign-in password'),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: _changePassword,
+                ),
+                const Divider(height: 1),
+                SwitchListTile(
+                  secondary: const Icon(Icons.login),
+                  title: const Text('Stay signed in on this PC'),
+                  subtitle: const Text(
+                    'Reopen the app straight to the register without '
+                    're-entering the password for 12 hours. Off by default '
+                    'for shared tills.',
+                  ),
+                  value: _rememberLogin,
+                  onChanged: _toggleRemember,
                 ),
                 const Divider(height: 1),
                 ListTile(
@@ -272,10 +313,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
 class _ChangePasswordDialog extends StatefulWidget {
   final UserRepository userRepository;
   final String userId;
+  final String role;
 
   const _ChangePasswordDialog({
     required this.userRepository,
     required this.userId,
+    required this.role,
   });
 
   @override
@@ -300,12 +343,9 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
   Future<void> _submit() async {
     final current = _currentController.text;
     final next = _newController.text;
-    if (next.length < UserRepository.minimumPasswordLength) {
-      setState(
-        () => _error =
-            'New password must be at least '
-            '${UserRepository.minimumPasswordLength} characters.',
-      );
+    final min = UserRepository.minPasswordLengthFor(widget.role);
+    if (next.length < min) {
+      setState(() => _error = 'New password must be at least $min characters.');
       return;
     }
     if (next != _confirmController.text) {

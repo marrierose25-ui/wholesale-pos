@@ -2,21 +2,25 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart' as ffi;
 import 'package:uuid/uuid.dart';
 
 class LocalDatabase {
   static const String databaseName = 'wholesale_pos.db';
-  static const int schemaVersion = 8;
+  static const int schemaVersion = 9;
   static const String deviceIdFileName = 'device_id.txt';
   static const String themeSettingKey = 'theme_mode';
 
   LocalDatabase._();
 
   static void _configureFactory() {
+    // On desktop (and in `flutter test`, which runs on the host VM) use the
+    // pure-Dart FFI engine. On Android/iOS the native sqflite plugin is already
+    // the default factory, so nothing is overridden there.
     if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-      sqfliteFfiInit();
-      databaseFactory = databaseFactoryFfi;
+      ffi.sqfliteFfiInit();
+      databaseFactory = ffi.databaseFactoryFfi;
     }
   }
 
@@ -255,6 +259,22 @@ class LocalDatabase {
       ''');
       await _createIndexesAndTriggers(db);
     }
+    if (oldVersion < 9) {
+      // Local-only change queue for the future cloud sync. Business tables are
+      // unchanged; this just records what still needs pushing to the server.
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS sync_outbox (
+          id TEXT PRIMARY KEY,
+          entity_type TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          operation TEXT NOT NULL,
+          payload TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          synced_at TEXT
+        )
+      ''');
+      await _createIndexesAndTriggers(db);
+    }
   }
 
   /// Schema 6 stored quantities as plain integers. Schema 7 keeps the exact
@@ -376,6 +396,10 @@ class LocalDatabase {
     await db.execute(
       'CREATE INDEX IF NOT EXISTS void_requests_status '
       'ON void_requests(status)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS sync_outbox_pending '
+      'ON sync_outbox(synced_at)',
     );
     await db.execute('''
       CREATE TRIGGER IF NOT EXISTS prevent_second_open_shift_insert
@@ -566,6 +590,21 @@ class LocalDatabase {
       CREATE TABLE settings (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
+      )
+    ''');
+
+    // Transactional outbox: every business write appends a row here inside the
+    // same transaction, and a background worker drains it to the cloud when a
+    // SyncBackend is configured. Rows survive restarts and offline periods.
+    batch.execute('''
+      CREATE TABLE sync_outbox (
+        id TEXT PRIMARY KEY,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        synced_at TEXT
       )
     ''');
 

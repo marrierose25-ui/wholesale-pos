@@ -6,7 +6,12 @@ import 'package:cryptography/cryptography.dart';
 Future<void> main(List<String> args) async {
   if (args.length != 3) {
     stderr.writeln(
-      'Usage: dart run tools/generate_license.dart <hardware-id-or-> <private-key-path> <output-license-path>',
+      'Usage: dart run tools/generate_license.dart '
+      '<hardware-id-or-> <private-key-path> <output-license-path-or->',
+    );
+    stderr.writeln(
+      '  Mobile activation: pass "-" for BOTH the hardware id (a device-unbound '
+      'license) and the output path to print a copy-paste code.',
     );
     exitCode = 2;
     return;
@@ -14,6 +19,9 @@ Future<void> main(List<String> args) async {
 
   final hardwareId = args[0];
   final privateKeyFile = File(args[1]).absolute;
+  // A 3rd arg of "-" means print the code to stdout only (mobile activation),
+  // writing no file. Otherwise it is the desktop license.key output path.
+  final printOnly = args[2] == '-';
   final outputFile = File(args[2]).absolute;
 
   if (!await privateKeyFile.exists()) {
@@ -21,7 +29,7 @@ Future<void> main(List<String> args) async {
     exitCode = 2;
     return;
   }
-  if (await outputFile.exists()) {
+  if (!printOnly && await outputFile.exists()) {
     stderr.writeln('Output license already exists; refusing to overwrite.');
     exitCode = 2;
     return;
@@ -59,17 +67,24 @@ Future<void> main(List<String> args) async {
     final contents =
         '${base64Url.encode(payloadBytes)}.${base64Url.encode(signature.bytes)}';
 
-    await outputFile.parent.create(recursive: true);
-    final handle = await outputFile.open(mode: FileMode.write);
-    try {
-      await handle.writeString(contents);
-      await handle.flush();
-    } finally {
-      await handle.close();
+    if (printOnly) {
+      // Mobile: the operator pastes this exact string into the app's
+      // activation screen. Nothing is written to disk.
+      stdout.writeln(contents);
+    } else {
+      await outputFile.parent.create(recursive: true);
+      final handle = await outputFile.open(mode: FileMode.write);
+      try {
+        await handle.writeString(contents);
+        await handle.flush();
+      } finally {
+        await handle.close();
+      }
+      stdout.writeln(
+        'License written to ${outputFile.path}. Expires at ${expiresAt.toIso8601String()}.',
+      );
+      stdout.writeln('Code (also pasteable on mobile): $contents');
     }
-    stdout.writeln(
-      'License written to ${outputFile.path}. Expires at ${expiresAt.toIso8601String()}.',
-    );
   } catch (error) {
     stderr.writeln('License generation failed: ${error.runtimeType}.');
     exitCode = 1;

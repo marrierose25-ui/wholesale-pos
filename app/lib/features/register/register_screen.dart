@@ -358,7 +358,6 @@ class RegisterScreenState extends State<RegisterScreen> {
     final bankSales = _summary!['bank_sales']!;
     final deposits = _summary!['deposits']!;
     final withdrawals = _summary!['withdrawals']!;
-    final cashRefunds = _summary!['cash_refunds'] ?? 0;
 
     final actualCash =
         MoneyUtils.stringToMinorUnits(_actualCashController.text) ?? 0;
@@ -378,15 +377,6 @@ class RegisterScreenState extends State<RegisterScreen> {
             _buildStatCard('Deposits', deposits),
             _buildStatCard('Expected Cash', expectedCash, isPrimary: true),
           ],
-        ),
-        const SizedBox(height: 24),
-        _buildExpectedCashBreakdown(
-          opening: _activeShift!.openingCashMinorUnits,
-          cashSales: cashSales,
-          deposits: deposits,
-          withdrawals: withdrawals,
-          cashRefunds: cashRefunds,
-          expectedCash: expectedCash,
         ),
         if (_pendingRequests.isNotEmpty) ...[
           const SizedBox(height: 24),
@@ -413,73 +403,6 @@ class RegisterScreenState extends State<RegisterScreen> {
           },
         ),
       ],
-    );
-  }
-
-  Widget _buildExpectedCashBreakdown({
-    required int opening,
-    required int cashSales,
-    required int deposits,
-    required int withdrawals,
-    required int cashRefunds,
-    required int expectedCash,
-  }) {
-    Widget line(String label, int amount, {bool emphasize = false}) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 13,
-                color: emphasize ? null : AppTheme.muted,
-                fontWeight: emphasize ? FontWeight.bold : null,
-              ),
-            ),
-            Text(
-              MoneyUtils.formatBr(amount),
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: emphasize ? FontWeight.bold : null,
-                color: emphasize ? Theme.of(context).colorScheme.primary : null,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'How Expected Cash is calculated',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 12),
-            line('Opening Cash', opening),
-            line('+ Cash Sales', cashSales),
-            line('+ Deposits', deposits),
-            line('- Withdrawals', -withdrawals),
-            line('- Cash refunds for other-shift sales', -cashRefunds),
-            const Divider(height: 20),
-            line('= Expected Cash', expectedCash, emphasize: true),
-            const SizedBox(height: 8),
-            const Text(
-              'A sale voided within this same shift nets to zero and is not '
-              'subtracted again; only refunds for sales from other shifts '
-              'reduce the drawer.',
-              style: TextStyle(fontSize: 11, color: AppTheme.muted),
-            ),
-          ],
-        ),
-      ),
     );
   }
 
@@ -639,13 +562,18 @@ class RegisterScreenState extends State<RegisterScreen> {
                     'Discrepancy',
                     style: TextStyle(fontWeight: FontWeight.w500),
                   ),
-                  Text(
-                    MoneyUtils.formatBr(discrepancy),
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: discrepancy == 0
-                          ? AppTheme.success
-                          : AppTheme.danger,
+                  // Flexible so the amount can wrap on narrow (phone) widths
+                  // instead of overflowing; on desktop it keeps its natural size.
+                  Flexible(
+                    child: Text(
+                      MoneyUtils.formatBr(discrepancy),
+                      textAlign: TextAlign.right,
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: discrepancy == 0
+                            ? AppTheme.success
+                            : AppTheme.danger,
+                      ),
                     ),
                   ),
                 ],

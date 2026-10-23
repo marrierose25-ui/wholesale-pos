@@ -125,4 +125,30 @@ void main() {
       Directory.current = previous;
     }
   });
+
+  test('validates a license code supplied as text (mobile path, no file)', () async {
+    // Mobile has no license.key file: the signed code is pasted into the app
+    // and passed via licenseText, so the same signature verification must apply.
+    // The payload carries no hardware_id, i.e. a device-unbound mobile license.
+    final mobile = Map<String, Object?>.from(payload())..remove('hardware_id');
+    final bytes = utf8.encode(jsonEncode(canonical(mobile)));
+    final signature = await Ed25519().sign(bytes, keyPair: pair);
+    final code =
+        '${base64Url.encode(bytes)}.${base64Url.encode(signature.bytes)}';
+
+    final ok = await LicenseValidator.validateLicense(
+      licenseText: code,
+      now: DateTime.utc(2030),
+      verificationKeyHex: publicHex,
+    );
+    expect(ok, containsPair('product', 'wholesale_pos'));
+
+    // A tampered code (with no file present) is still rejected.
+    final bad = await LicenseValidator.validateLicense(
+      licenseText: '$code-tampered',
+      now: DateTime.utc(2030),
+      verificationKeyHex: publicHex,
+    );
+    expect(bad?['error'], 'Invalid license format.');
+  });
 }
