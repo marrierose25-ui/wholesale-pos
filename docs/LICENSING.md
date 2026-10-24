@@ -124,6 +124,20 @@ A stolen code, without a matching device fingerprint, can only consume the ORIGI
 
 The one thing software cannot stop: a buyer physically handing an already-unlocked activated phone to a friend. If that becomes a real problem, the mitigation is a per-shop PIN lock (Phase 17c).
 
+## Server access model & security audit (Phase 19, 2026-10-24)
+
+A full penetration test was run against the live licensing/sync backend (osv.dev dependency CVE scan, direct PostgREST/RLS probes, license forgery/tampering, SQL-injection, seat/voucher logic abuse, and an APK binary audit). The trust boundary is: **clients hold only a signed license and the anon key; every privileged operation goes through an Edge Function that authenticates that license, and the only DB role that can touch the tables is `service_role`.**
+
+Enforced invariants (all verified live):
+
+- **RLS default-deny everywhere.** No policies exist on any public table and `anon`/`authenticated` have `rolbypassrls = false`, so those roles read 0 rows from every licensing/mirror table. The licensing tables and the `license_seat_usage` view additionally `REVOKE ALL` from `anon`/`authenticated` as defense-in-depth.
+- **Licensing RPCs are service_role-only.** `apply_seat_voucher` and `try_reserve_seat` are `SECURITY DEFINER` (they run as `postgres` and skip RLS), so `EXECUTE` is revoked from `public, anon, authenticated` and granted only to `service_role`. They are never reachable via `/rest/v1/rpc/…` with an anon key — only the Edge Function calls them.
+- **Seat redemption is tenant-bound.** `apply_seat_voucher(p_voucher_code, p_activation_code)` only redeems a voucher whose parent `activation_code` equals the caller's; a foreign or guessed code returns the generic "not found", so one shop can neither burn another's voucher nor learn which voucher codes exist.
+- **Activation is atomic.** `try_reserve_seat` locks the license row (`SELECT … FOR UPDATE`) around the revoked/expired check + seat count + insert, so concurrent activations cannot over-admit past `seat_limit`.
+- **The sync gateway authenticates cryptographically.** Ed25519 signature, embedded expiry, license-row revocation, and an active registered seat are all checked per request; `customer_id` is taken only from the verified payload (a client cannot write into another tenant's partition); PostgREST parameterisation neutralises injection in pushed values.
+
+Two live-exploitable defects found in that audit — cross-tenant voucher/seat theft and publicly-executable `SECURITY DEFINER` RPCs — were fixed as above and re-verified (the attack now fails; legitimate in-tenant redemption still works). See `docs/PROGRESS.md` Phase 19. The repro/verification harness is kept in `app/tools/sec_*.ps1`; those scripts embed the deploy token, which must be rotated.
+
 ## Development without a key
 
 To run the app locally before a production key exists:

@@ -69,56 +69,38 @@ async function activateDevice(db: any, body: any): Promise<Response> {
   const deviceName = str(body.device_name) || 'Unknown device';
   if (!code || !fingerprint) return json({ ok: false, error: 'Missing fields' }, 400);
 
-  const { data: license } = await db
-    .from('licenses').select('*').eq('activation_code', code).maybeSingle();
-  if (!license) return json({ ok: false, error: 'Invalid activation code.' }, 404);
-  if (license.revoked_at) return json({ ok: false, error: 'License revoked.' }, 403);
-  if (license.expires_at && new Date(license.expires_at) < new Date()) {
-    return json({ ok: false, error: 'License expired.' }, 403);
+  // Atomic seat reservation under the license row lock (SELECT ... FOR UPDATE
+  // inside try_reserve_seat). One round-trip does the revoked/expired checks,
+  // the seat count, and the insert, so two devices racing for the last seat
+  // can no longer both be admitted (a check-then-insert TOCTOU). The RPC also
+  // hands back the license fields we need to mint the token below.
+  const { data: res, error: rpcErr } = await db.rpc('try_reserve_seat', {
+    p_activation_code: code,
+    p_device_fingerprint: fingerprint,
+    p_device_name: deviceName,
+  });
+  if (rpcErr) {
+    console.error('try_reserve_seat error:', rpcErr);
+    return json({ ok: false, error: 'Internal error.' }, 500);
   }
-
-  const { data: existing } = await db
-    .from('device_registrations').select('*')
-    .eq('activation_code', code)
-    .eq('device_fingerprint', fingerprint)
-    .maybeSingle();
-
-  let seatsUsed: number;
-  if (existing && !existing.revoked_at) {
-    // Same device re-activating: refresh heartbeat, no seat consumed.
-    await db.from('device_registrations')
-      .update({ last_heartbeat: new Date().toISOString(), device_name: deviceName })
-      .eq('id', existing.id);
-    seatsUsed = await countActiveSeats(db, code);
-  } else if (existing && existing.revoked_at) {
-    // Was revoked; reactivate. Doesn't count against seat because it holds
-    // the same (code, fingerprint) slot; if the buyer has since filled the
-    // slot with another device we would refuse on the unique index.
-    await db.from('device_registrations')
-      .update({ revoked_at: null, last_heartbeat: new Date().toISOString(), device_name: deviceName })
-      .eq('id', existing.id);
-    seatsUsed = await countActiveSeats(db, code);
-  } else {
-    // Brand new device: check seat.
-    seatsUsed = await countActiveSeats(db, code);
-    if (seatsUsed >= license.seat_limit) {
+  const r = res as any;
+  switch (r.status) {
+    case 'not_found': return json({ ok: false, error: 'Invalid activation code.' }, 404);
+    case 'revoked':   return json({ ok: false, error: 'License revoked.' }, 403);
+    case 'expired':   return json({ ok: false, error: 'License expired.' }, 403);
+    case 'seat_limit':
       return json({
         ok: false,
         error: 'Seat limit reached. Deactivate one of your devices in Settings -> Devices, or buy an extra seat.',
-        seat_limit: license.seat_limit,
-        seats_used: seatsUsed,
+        seat_limit: r.seat_limit,
+        seats_used: r.seats_used,
       }, 409);
-    }
-    const { error: insErr } = await db.from('device_registrations').insert({
-      activation_code: code,
-      device_fingerprint: fingerprint,
-      device_name: deviceName,
-      last_heartbeat: new Date().toISOString(),
-    });
-    if (insErr) return json({ ok: false, error: 'Insert failed.' }, 500);
-    seatsUsed += 1;
+  }
+  // activated | reactivated | refreshed -> mint a signed license for this seat.
+  if (r.status === 'activated' || r.status === 'reactivated') {
     await writeAudit(db, code, fingerprint, 'activate', { device_name: deviceName });
   }
+  const seatsUsed: number = r.seats_used;
 
   // Build the license payload. Canonicalization matches Dart's
   // `jsonEncode(_canonicalize(payload))` byte-for-byte: keys sorted
@@ -127,7 +109,7 @@ async function activateDevice(db: any, body: any): Promise<Response> {
   // Cap at the license's own expiry if the customer is on a paid subscription;
   // otherwise default to a rolling 1-year device license (re-checkable on
   // next activation after expiry).
-  const hardExpiry = license.expires_at ? new Date(license.expires_at) : null;
+  const hardExpiry = r.expires_at ? new Date(r.expires_at) : null;
   const rolling = new Date(issued.getTime() + 365 * 24 * 3600 * 1000);
   const expires = hardExpiry && hardExpiry < rolling ? hardExpiry : rolling;
 
@@ -137,7 +119,7 @@ async function activateDevice(db: any, body: any): Promise<Response> {
     product: 'wholesale_pos',
     entitlements: ['pos'],
     activation_code: code,
-    customer_id: license.customer_id,
+    customer_id: r.customer_id,
     device_fingerprint: fingerprint,
     issued_at: isoNoMillis(issued),
     expires_at: isoNoMillis(expires),
@@ -151,7 +133,7 @@ async function activateDevice(db: any, body: any): Promise<Response> {
     ok: true,
     license_code: licenseCode,
     expires_at: payload.expires_at,
-    seat_limit: license.seat_limit,
+    seat_limit: r.seat_limit,
     seats_used: seatsUsed,
   });
 }
@@ -242,8 +224,14 @@ async function redeemVoucher(db: any, body: any): Promise<Response> {
   if (!me) return json({ ok: false, error: 'Unauthorized.' }, 403);
 
   // apply_seat_voucher() is SECURITY DEFINER: atomically bumps the seat_limit
-  // and stamps redeemed_at; a second call with the same voucher raises.
-  const { data, error } = await db.rpc('apply_seat_voucher', { p_voucher_code: voucher });
+  // and stamps redeemed_at; a second call with the same voucher raises. We pass
+  // the CALLER's activation_code so the RPC only redeems a voucher issued for
+  // THIS license — a foreign (or guessed) voucher code is refused as "not
+  // found", closing the cross-tenant voucher-burn / seat-theft vector.
+  const { data, error } = await db.rpc('apply_seat_voucher', {
+    p_voucher_code: voucher,
+    p_activation_code: code,
+  });
   if (error) return json({ ok: false, error: 'Voucher not found or already redeemed.' }, 400);
 
   const row = Array.isArray(data) ? data[0] : data;
@@ -256,13 +244,6 @@ async function redeemVoucher(db: any, body: any): Promise<Response> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-async function countActiveSeats(db: any, code: string): Promise<number> {
-  const { count } = await db.from('device_registrations')
-    .select('*', { count: 'exact', head: true })
-    .eq('activation_code', code).is('revoked_at', null);
-  return count ?? 0;
-}
-
 async function writeAudit(db: any, code: string, fp: string | null, event: string, detail: any) {
   await db.from('license_audit').insert({
     activation_code: code, device_fingerprint: fp, event, detail,

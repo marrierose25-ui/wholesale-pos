@@ -91,7 +91,19 @@ create index if not exists seat_voucher_code_idx
   where redeemed_at is null;
 
 -- Redeeming a voucher bumps seat_limit on the parent license atomically.
-create or replace function public.apply_seat_voucher(p_voucher_code text)
+-- SECURITY: the caller MUST present the same activation_code the voucher was
+-- issued for (p_activation_code). Without that binding, any registered device
+-- could burn another tenant's voucher the moment it guessed/leaked the code,
+-- bumping the victim's seat_limit and consuming a seat the victim paid for.
+-- A mismatched voucher is indistinguishable from "not found" so the endpoint
+-- leaks no oracle about which voucher codes exist on OTHER licenses.
+-- Drop the legacy single-argument overload first: `create or replace` with a
+-- DIFFERENT signature would otherwise leave the old unbound (p_voucher_code
+-- only) version live alongside the new one, and PostgREST would still let a
+-- caller reach the unbound version via /rpc/apply_seat_voucher.
+drop function if exists public.apply_seat_voucher(text);
+create or replace function public.apply_seat_voucher(
+  p_voucher_code text, p_activation_code text)
 returns table (new_seat_limit int, seats_added int)
 language plpgsql security definer
 set search_path = public
@@ -102,6 +114,7 @@ declare
 begin
   select * into v_row from public.seat_vouchers
     where voucher_code = p_voucher_code
+      and activation_code = p_activation_code   -- tenant binding
       and redeemed_at is null
     for update;
   if not found then
@@ -120,6 +133,99 @@ begin
   return query select v_current_limit, v_row.seats_added;
 end;
 $$;
+
+-- ---------------------------------------------------------------------------
+-- 3b. Atomic seat reservation (closes a TOCTOU in the activation path)
+-- ---------------------------------------------------------------------------
+-- The Edge Function used to SELECT the active-seat count and then INSERT in
+-- two round-trips; two devices racing for the last seat could both pass the
+-- count check before either insert landed. This RPC serialises on the license
+-- row (SELECT ... FOR UPDATE) so the count and the insert happen under one
+-- lock, and folds the revoked/expired/not-found checks in as well. It returns
+-- a small JSON status the function maps to an HTTP response, plus the license
+-- fields needed to mint the signed token (customer_id, expires_at).
+create or replace function public.try_reserve_seat(
+  p_activation_code text, p_device_fingerprint text, p_device_name text)
+returns jsonb
+language plpgsql security definer
+set search_path = public
+as $$
+declare
+  v_license public.licenses%rowtype;
+  v_reg     public.device_registrations%rowtype;
+  v_used    int;
+begin
+  -- Serialize all activations for THIS code behind the license row lock.
+  select * into v_license from public.licenses
+    where activation_code = p_activation_code
+    for update;
+  if not found then
+    return jsonb_build_object('status', 'not_found');
+  end if;
+  if v_license.revoked_at is not null then
+    return jsonb_build_object('status', 'revoked');
+  end if;
+  if v_license.expires_at is not null and v_license.expires_at < now() then
+    return jsonb_build_object('status', 'expired');
+  end if;
+
+  -- Existing (code, fingerprint) slot? Reuse it; never consumes a new seat.
+  select * into v_reg from public.device_registrations
+    where activation_code = p_activation_code
+      and device_fingerprint = p_device_fingerprint;
+  if found then
+    if v_reg.revoked_at is null then
+      update public.device_registrations
+        set last_heartbeat = now(), device_name = p_device_name
+        where id = v_reg.id;
+      select count(*) into v_used from public.device_registrations
+        where activation_code = p_activation_code and revoked_at is null;
+      return jsonb_build_object('status', 'refreshed', 'seats_used', v_used,
+        'seat_limit', v_license.seat_limit, 'customer_id', v_license.customer_id,
+        'expires_at', v_license.expires_at);
+    else
+      update public.device_registrations
+        set revoked_at = null, last_heartbeat = now(), device_name = p_device_name
+        where id = v_reg.id;
+      select count(*) into v_used from public.device_registrations
+        where activation_code = p_activation_code and revoked_at is null;
+      return jsonb_build_object('status', 'reactivated', 'seats_used', v_used,
+        'seat_limit', v_license.seat_limit, 'customer_id', v_license.customer_id,
+        'expires_at', v_license.expires_at);
+    end if;
+  end if;
+
+  -- Brand-new device: count under the held lock, then decide.
+  select count(*) into v_used from public.device_registrations
+    where activation_code = p_activation_code and revoked_at is null;
+  if v_used >= v_license.seat_limit then
+    return jsonb_build_object('status', 'seat_limit', 'seats_used', v_used,
+      'seat_limit', v_license.seat_limit);
+  end if;
+
+  insert into public.device_registrations
+    (activation_code, device_fingerprint, device_name, last_heartbeat)
+    values (p_activation_code, p_device_fingerprint, p_device_name, now());
+  return jsonb_build_object('status', 'activated', 'seats_used', v_used + 1,
+    'seat_limit', v_license.seat_limit, 'customer_id', v_license.customer_id,
+    'expires_at', v_license.expires_at);
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 3c. Lock the licensing RPCs to service_role only
+-- ---------------------------------------------------------------------------
+-- Supabase's default privileges grant EXECUTE on every new public function to
+-- the `public` role group, which anon + authenticated inherit. That would let
+-- anyone POST /rest/v1/rpc/apply_seat_voucher or /rpc/try_reserve_seat with a
+-- service-less anon key and mutate seat state directly, bypassing the Edge
+-- Function's registered-device check and rate shaping. These SECURITY DEFINER
+-- functions run as their owner (postgres) and skip RLS, so they must NOT be
+-- publicly executable. Only the Edge Functions (service_role) call them.
+revoke execute on function public.apply_seat_voucher(text, text) from public, anon, authenticated;
+revoke execute on function public.try_reserve_seat(text, text, text) from public, anon, authenticated;
+grant  execute on function public.apply_seat_voucher(text, text) to service_role;
+grant  execute on function public.try_reserve_seat(text, text, text) to service_role;
 
 -- ---------------------------------------------------------------------------
 -- 5. Audit log (append-only; every state-changing licensing action writes here)
@@ -152,6 +258,17 @@ alter table public.license_audit       enable row level security;
 
 -- No policies on purpose: RLS denies all reads/writes to anon + authenticated
 -- roles. Service role (used by the Edge Functions) always bypasses RLS.
+
+-- Defense-in-depth: Supabase's default privileges GRANT every public table to
+-- anon + authenticated. RLS already hides all rows from those roles (0 policy
+-- hits, proven), but an explicit REVOKE means even a future "enable RLS off"
+-- or an accidental permissive policy cannot instantly expose activation codes,
+-- customer PII, or seat state. Only service_role (Edge Functions) keeps access.
+revoke all on public.customers            from anon, authenticated;
+revoke all on public.licenses             from anon, authenticated;
+revoke all on public.device_registrations from anon, authenticated;
+revoke all on public.seat_vouchers         from anon, authenticated;
+revoke all on public.license_audit         from anon, authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 7. Convenience view: current seat usage per license
