@@ -2,6 +2,10 @@
 
 Licenses use `base64url(canonical-json).base64url(Ed25519-signature)`. Canonical JSON is UTF-8 compact JSON with every object key recursively sorted; arrays retain order. Version 1 payloads require `format`, `version`, `product`, `entitlements`, `issued_at`, and `expires_at`. `hardware_id` is optional; when present it is checked against the machine fingerprint (Windows WMI UUID, falling back to the hostname).
 
+Version 2 payloads (issued by the licensing Edge Function since Phase 17) additionally require `customer_id`, `activation_code`, and `device_fingerprint`. A v2 license is always bound to a specific device: on Windows the fingerprint is `sha256("win|" + motherboard UUID)`, on Android/iOS it is `sha256("and|<install_uuid>")` where the install_uuid is generated on first launch and stored in the app's SQLite `settings` table. `hardware_id` is not used in v2. The validator accepts both versions so existing `license.key` files keep working on shop PCs unchanged.
+
+The commercial workflow that surrounds v2 — issuing a code to a new buyer, adding seats after they pay you, handling a lost phone — is described under "Selling the app (v2 licensing)" further down this file.
+
 The app never embeds the private key. The public verification key is supplied at build time:
 
 ```powershell
@@ -56,14 +60,69 @@ The resulting string is what the owner pastes into the app. It expires after one
 - The **Ed25519 license seed** (`owner-ed25519.key`) proves a *license*. It lives outside the repo and is used only by `tools/generate_license.dart`.
 - The **Android upload keystore** (`wholesale_pos_upload.jks`, `CN=Wholesale POS`) proves the *APK package identity* so Android accepts installs/updates. It is referenced by `android/key.properties` (both git-ignored) and consumed by `android/app/build.gradle.kts`; when `key.properties` is missing the release build falls back to debug signing so local `flutter run --release` still works. Back this keystore up: if it is lost you cannot publish updates that install over the existing app under the same signature.
 
-A signed release is produced with:
+A signed release is produced with the one-command recipe (bakes the public key AND the licensing Edge Function URL, so activation works out of the box):
 
 ```powershell
-flutter build apk --release `
-  --dart-define=WHOLESALE_POS_LICENSE_PUBLIC_KEY=<64-hex-char-public-key>
+powershell -File tools\build_release.ps1 apk      # Android
+powershell -File tools\build_release.ps1 windows  # Windows desktop
 ```
 
-Deliberately, the Supabase secret key is not baked into distributable builds (it would be extractable and bypass row-level security); mobile ships with sync inert until an anon-key + RLS backend exists.
+The script (`app/tools/build_release.ps1`) contains the shop's real public key and function URL. Building with bare `flutter build` instead of the script produces an app that cannot activate — prefer the script for every distributable.
+
+Deliberately, the Supabase secret key is not baked into distributable builds (it would be extractable and bypass row-level security); mobile ships with sync inert by default — a phone build refuses the baked-in key unless you add the private-use opt-in `--dart-define=WHOLESALE_POS_UNSAFE_EMBED_SYNC_SECRET=true` for the shop's own devices only. See `docs/CLOUD_SYNC.md` §8a for the full trade-off and the eventual anon-key + RLS replacement.
+
+## Selling the app (v2 licensing)
+
+Use this section once you want to hand Wholesale POS to another business. Your own shop PC keeps working through the legacy `license.key` file (v1) forever; nothing here changes how you run your till day-to-day.
+
+### One-time server setup (deployed ✅ — done 2026-10-24, live on project `trcthxyyuapwavzeisvm`)
+
+The steps below were executed once and are complete; they are kept as a reference for rebuilding the environment or setting up a second project:
+
+1. **Supabase → SQL Editor.** Ran `docs/supabase_licensing.sql` — creates `customers`, `licenses`, `device_registrations`, `seat_vouchers`, `license_audit`, the `apply_seat_voucher` RPC, indexes, RLS with no public policies, and the `license_seat_usage` view (`security_invoker = true`). Note: the explicit `grant`/`alter owner` lines were removed from the file — Supabase default privileges already cover `service_role`, and the grants failed with `42501` because schema `public` is owned by `pg_database_owner` there.
+2. **Supabase → Edge Functions → create one named `licensing`.** Paste the whole of `supabase/functions/licensing/index.ts`. Uncheck "Confirm deployments manually" and "Verify JWT" (this function is authenticated by the (activation_code, device_fingerprint) pair the caller presents, not by a Supabase JWT — see the header comment in that file). Save and Deploy.
+3. **Supabase → Edge Functions → Settings → Add secrets**, three of them:
+   - `LICENSE_SIGNING_SEED_B64URL` — the contents of `C:\Users\www\AppData\Local\WholesalePOS\Signing\owner-ed25519.key` (a 43-char base64url string). This is the SAME private key you already use with `generate_license.dart`. The Edge Function holds it as a runtime secret; it is never in the client or in Git.
+   - `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are auto-injected by Supabase for every Edge Function, so you normally do not need to set them. If the "Secrets" panel doesn't list them, add them (URL from Settings → API, service_role key from the same page).
+4. **Redeploy** the function so the secrets are picked up.
+
+### Selling to a new customer
+
+1. Get paid (bank transfer, cash, Chapa — anything out of band).
+2. Run the tool:
+   ```powershell
+   $env:SUPABASE_URL    = "https://<your-ref>.supabase.co"
+   $env:SUPABASE_SECRET = "sb_secret_..."   # service_role key
+   cd app
+   dart run tools/create_customer.dart `
+     --name "Mercato Textiles" `
+     --seats 3 `
+     --expires never
+   ```
+   The tool prints one `ACTIVATION_CODE=XXXX-XXXX-XXXX-XXXX-XX` line. Send that to the buyer.
+3. The buyer opens the app on their first device, pastes the code into the activation screen, the app auto-generates their device fingerprint, calls the licensing function, and gets back a signed per-device license which is stored locally. They can now sell offline indefinitely.
+4. Buyer installs on a second device → pastes the same code → gets another seat. Third device → same. Fourth device (if seat_limit=3) → the app shows "Seat limit reached" and points at Settings → Devices.
+
+### Adding seats after payment
+
+1. Buyer contacts you; you take payment out of band.
+2. `dart run tools/create_seat_voucher.dart --activation-code "XXXX-…-XX" --seats 2` → prints a `VOUCHER_CODE=V-XXXXXXXX` string. Send it to the buyer.
+3. Buyer pastes it into Settings → My devices → "Add more seats". The Edge Function bumps their `seat_limit` atomically via the `apply_seat_voucher` RPC; nothing on your end changes and the voucher cannot be reused (a second redemption returns "already redeemed").
+
+### Handling a lost or replaced device
+
+The buyer does this themselves in **Settings → My devices** (visible to the OWNER account only — cashiers cannot touch seats) — no email to you:
+- The screen lists every active seat with a masked fingerprint and the device name; the caller's own row is marked "This device".
+- Tap **Deactivate** on the lost phone (a confirmation dialog explains the seat becomes free immediately) → seat is freed.
+- On the replacement phone, open the app → paste the same activation code on the activation screen → it takes the freed seat.
+
+If the buyer lost their ONLY device and cannot reach Settings, use the Supabase dashboard (Table Editor → `device_registrations` filtered by `activation_code`), delete the stale row, then tell them to re-activate. This is the only support case that needs you.
+
+### What protects you against a buyer sharing the code
+
+A stolen code, without a matching device fingerprint, can only consume the ORIGINAL buyer's seats. It cannot create a fresh workspace for the thief, because every sync table is (or will be) partitioned by `customer_id` from the signed license. Two of the buyer's seats going to a friend means the friend sees the buyer's data (which the buyer will notice fast, and can stop from Settings → My devices by deactivating the thief's seat). Selling beyond the seat count means the friend simply cannot activate. Either way, they have to come to you for a bigger code.
+
+The one thing software cannot stop: a buyer physically handing an already-unlocked activated phone to a friend. If that becomes a real problem, the mitigation is a per-shop PIN lock (Phase 17c).
 
 ## Development without a key
 
@@ -81,5 +140,6 @@ Generate and securely escrow a new private key, rebuild with the new `WHOLESALE_
 
 ## Limitations
 
-- The license file is a signed document on disk, not a server-verified entitlement. A machine administrator can delete or restore it, but cannot forge a valid signature.
+- The license file is a signed document on disk, not a server-verified entitlement. A machine administrator can delete or restore it, but cannot forge a valid signature. *(Applies to the legacy v1 file path.)*
+- v2 activation codes are verified against the licensing Edge Function at activation time and against the local signed license on every launch after that; there is no periodic phone-home. A buyer who never reconnects to the internet keeps their last-signed license until it expires — the enforcement point is device-swap and new activations, not every sale.
 - The verifier rejects licenses whose `issued_at` is more than one day in the future (a coarse clock-rollback check). It does not persist the last-seen time, so a clock set backwards within the license validity window is not detected.

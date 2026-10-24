@@ -4,11 +4,14 @@ import 'package:sqflite/sqflite.dart';
 
 import '../../core/database/local_database.dart';
 import '../../core/auth/session_store.dart';
+import '../../core/licensing/activation_client.dart';
+import '../../core/licensing/device_fingerprint.dart';
 import '../../core/models/user.dart';
 import '../../core/repositories/user_repository.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/data_exporter.dart';
 import '../../core/utils/data_importer.dart';
+import 'devices_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   final User currentUser;
@@ -155,6 +158,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _openDevicesScreen() async {
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => DevicesScreen(
+          activationCodeProvider: () async =>
+              LocalDatabase.getSetting(widget.db, 'activation_code'),
+          fingerprintProvider: () => DeviceFingerprint.get(widget.db),
+          client: ActivationClient(),
+        ),
+      ),
+    );
+  }
+
   Future<void> _changePassword() async {
     final changed = await showDialog<bool>(
       context: context,
@@ -229,6 +246,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   trailing: const Icon(Icons.chevron_right),
                   onTap: _changePassword,
                 ),
+                if (_isOwner) ...[
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: const Icon(Icons.devices_other),
+                    title: const Text('My devices'),
+                    subtitle: const Text(
+                      'See which phones and PCs are using your activation '
+                      'code, deactivate a lost one, or redeem a seat voucher.',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: _openDevicesScreen,
+                  ),
+                ],
                 const Divider(height: 1),
                 SwitchListTile(
                   secondary: const Icon(Icons.login),

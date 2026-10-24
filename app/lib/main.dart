@@ -6,6 +6,8 @@ import 'package:sqflite/sqflite.dart';
 
 import 'core/database/local_database.dart';
 import 'core/auth/session_store.dart';
+import 'core/licensing/activation_client.dart';
+import 'core/licensing/device_fingerprint.dart';
 import 'core/licensing/license_validator.dart';
 import 'core/models/user.dart';
 import 'core/repositories/finance_repository.dart';
@@ -13,9 +15,9 @@ import 'core/repositories/product_repository.dart';
 import 'core/repositories/sale_repository.dart';
 import 'core/repositories/shift_repository.dart';
 import 'core/repositories/user_repository.dart';
+import 'core/sync/sync_gateway_backend.dart';
 import 'core/sync/sync_outbox_repository.dart';
 import 'core/sync/sync_service.dart';
-import 'core/sync/supabase_sync_backend.dart';
 import 'core/theme/app_theme.dart';
 import 'features/audit/audit_log_screen.dart';
 import 'features/auth/login_screen.dart';
@@ -46,9 +48,24 @@ Future<void> main() async {
     LocalDatabase.themeSettingKey,
   );
 
-  // Cloud sync. Inert unless built with --dart-define=SUPABASE_URL/KEY: with no
-  // backend configured this stays the offline no-op and never starts a timer.
-  final syncBackend = SupabaseSyncBackend.fromEnvironment();
+  // Cloud sync (Phase 18). Priority: legacy baked secret on the owner's own
+  // desktop (locked back-office PC, direct PostgREST) → license-gated sync
+  // gateway (every buyer build and every phone; carries only the signed
+  // license, never a key) → Noop. The gateway URL is either baked via
+  // --dart-define=WHOLESALE_POS_SYNC_FN_URL or derived from the licensing
+  // function URL, so the release script's defines enable it automatically.
+  // Rows queued before activation stay put and flow on the first drain after.
+  final syncBackend = SyncGatewayBackend.selectBackend(
+    gatewayUrl: SyncGatewayBackend.gatewayUrlFromEnvironment(),
+    secretUrl: const String.fromEnvironment('SUPABASE_URL'),
+    secretKey: const String.fromEnvironment('SUPABASE_KEY'),
+    unsafeAllowEmbed: const bool.fromEnvironment(
+      'WHOLESALE_POS_UNSAFE_EMBED_SYNC_SECRET',
+    ),
+    isMobile: Platform.isAndroid || Platform.isIOS,
+    licenseProvider: () =>
+        LocalDatabase.getSetting(db, SyncGatewayBackend.licenseSettingKey),
+  );
   if (syncBackend.isConfigured) {
     final outbox = SyncOutboxRepository(db);
     _startSyncLoop(SyncService(outbox, syncBackend), outbox);
@@ -185,43 +202,65 @@ class LicenseWrapper extends StatefulWidget {
 }
 
 class _LicenseWrapperState extends State<LicenseWrapper> {
-  /// Settings key holding a mobile device's entered license code. Desktop keeps
-  /// using the `license.key` file; phones have no such file, so the code typed
-  /// into the activation screen is persisted here (app-private on mobile).
+  /// Settings key holding the signed license payload on ANY platform. Desktop
+  /// additionally honours the legacy `license.key` file next to the exe if
+  /// this is empty, so Umer's existing shop PCs keep working unchanged.
   static const String _licenseCodeKey = 'license_code';
+
+  /// Settings key holding the short opaque activation code (e.g.
+  /// "MERCA-7Q2F-9K3X-4D8M-BN"). Kept separately so Settings -> Devices can
+  /// pass it to list/deactivate/voucher endpoints without exposing the
+  /// signed license payload itself.
+  static const String _activationCodeKey = 'activation_code';
 
   bool _isChecking = true;
   bool _isLicensed = false;
   String? _error;
+  String? _fingerprint;
 
-  bool get _isMobile => Platform.isAndroid || Platform.isIOS;
+  /// Instantiated once; the URL is baked via --dart-define at build time.
+  final ActivationClient _activationClient = ActivationClient();
 
   @override
   void initState() {
     super.initState();
-    _checkLicense();
+    _bootstrap();
+  }
+
+  Future<void> _bootstrap() async {
+    // Compute fingerprint (needs DB access on mobile) before the first
+    // validateLicense call so a stored v2 license matches on startup.
+    try {
+      _fingerprint = await DeviceFingerprint.get(widget.db);
+    } catch (_) {
+      _fingerprint = null;
+    }
+    await _checkLicense();
   }
 
   Future<void> _checkLicense() async {
-    setState(() => _isChecking = true);
-    // On mobile, validate the code persisted in settings (null on first run,
-    // which simply shows the activation screen). Desktop reads license.key.
-    final storedCode = _isMobile
-        ? await LocalDatabase.getSetting(widget.db, _licenseCodeKey)
-        : null;
+    if (mounted) setState(() => _isChecking = true);
+    final storedCode = await LocalDatabase.getSetting(
+      widget.db,
+      _licenseCodeKey,
+    );
     final license = await LicenseValidator.validateLicense(
       licenseText: storedCode,
+      deviceFingerprint: _fingerprint,
     );
     if (!mounted) return;
 
     setState(() {
       if (license != null && license['error'] != null) {
         _isLicensed = false;
-        // On mobile with nothing entered yet, suppress the desktop-specific
-        // "license.key not found" text; the code-entry UI has its own guidance.
-        _error = _isMobile && (storedCode == null || storedCode.isEmpty)
-            ? null
-            : license['error'] as String?;
+        // Fresh-install state (mobile, or desktop with no license.key file):
+        // validator returns "license.key not found." — hide that behind the
+        // code-entry UI so the buyer sees an obvious "paste your code here"
+        // path instead of a scary file-missing error.
+        final fresh =
+            (storedCode == null || storedCode.isEmpty) &&
+            license['error'] == 'license.key not found.';
+        _error = fresh ? null : license['error'] as String?;
       } else {
         _isLicensed = license != null;
         _error = null;
@@ -230,17 +269,63 @@ class _LicenseWrapperState extends State<LicenseWrapper> {
     });
   }
 
-  /// Validates a code the user typed/pasted. On success it is persisted so the
-  /// app stays activated on later launches; on failure the error is returned to
-  /// the activation screen (nothing is saved).
-  Future<String?> _activateWithCode(String code) async {
-    final trimmed = code.trim();
-    if (trimmed.isEmpty) return 'Enter the license code.';
-    final result = await LicenseValidator.validateLicense(licenseText: trimmed);
-    if (result == null || result['error'] != null) {
-      return result?['error'] as String? ?? 'Invalid license code.';
+  /// Validates whatever the user typed on the activation screen. Two shapes
+  /// are accepted for backward compatibility:
+  ///  - A short opaque code (e.g. "MERCA-…-BN") — redeem it against the
+  ///    licensing Edge Function; on success the server returns a signed v2
+  ///    license bound to this device's fingerprint, which we persist.
+  ///  - A full signed payload (`base64url.base64url`) — validate it locally
+  ///    with the same Ed25519 path used in Phase 14 for device-unbound
+  ///    licenses (still valid for the developer's own shop PC + any legacy
+  ///    codes sold before Phase 17).
+  Future<String?> _activateWithCode(String input) async {
+    final trimmed = input.trim();
+    if (trimmed.isEmpty) return 'Enter the activation code.';
+    final fingerprint = _fingerprint;
+    if (fingerprint == null) {
+      return 'Could not compute a device fingerprint; restart the app.';
     }
-    await LocalDatabase.setSetting(widget.db, _licenseCodeKey, trimmed);
+
+    final looksLikeSignedPayload = trimmed.contains('.');
+    final String licenseToStore;
+    if (looksLikeSignedPayload) {
+      final result = await LicenseValidator.validateLicense(
+        licenseText: trimmed,
+        deviceFingerprint: fingerprint,
+      );
+      if (result == null || result['error'] != null) {
+        return result?['error'] as String? ?? 'Invalid license code.';
+      }
+      licenseToStore = trimmed;
+    } else {
+      if (!_activationClient.isConfigured) {
+        return 'Activation server is not configured on this build. Ask your '
+            'provider to rebuild with '
+            '--dart-define=WHOLESALE_POS_LICENSE_FN_URL=<url>.';
+      }
+      final response = await _activationClient.activateDevice(
+        activationCode: trimmed,
+        deviceFingerprint: fingerprint,
+        deviceName: Platform.localHostname,
+      );
+      if (!response.ok) {
+        return response.error ?? 'Activation failed.';
+      }
+      final returned = response.licenseCode!;
+      // Defense-in-depth: never trust the server's word — verify the signed
+      // payload with the baked Ed25519 public key before we accept it.
+      final verify = await LicenseValidator.validateLicense(
+        licenseText: returned,
+        deviceFingerprint: fingerprint,
+      );
+      if (verify == null || verify['error'] != null) {
+        return 'Server returned an invalid license.';
+      }
+      licenseToStore = returned;
+      await LocalDatabase.setSetting(widget.db, _activationCodeKey, trimmed);
+    }
+
+    await LocalDatabase.setSetting(widget.db, _licenseCodeKey, licenseToStore);
     if (!mounted) return null;
     setState(() {
       _isLicensed = true;
@@ -260,7 +345,11 @@ class _LicenseWrapperState extends State<LicenseWrapper> {
         onActivated: _checkLicense,
         errorMessage: _error,
         onActivateWithCode: _activateWithCode,
-        showCodeEntry: _isMobile,
+        // Unified code-entry across Windows / Android / iOS. Legacy
+        // license.key on desktop is still honoured silently at startup by
+        // validateLicense's file fallback, so a shop PC with the file just
+        // never reaches this screen.
+        showCodeEntry: true,
       );
     }
 

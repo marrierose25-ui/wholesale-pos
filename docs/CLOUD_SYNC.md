@@ -197,11 +197,114 @@ path. Points an auditor should note:
   "today" boundaries by the local offset and should be revisited when the reporting
   dashboard is built (send an explicit offset or convert to UTC at enqueue).
 
+### 8a. Mobile sync — safe default and the private-use opt-in (SUPERSEDED by §8b)
+
+> **Phase 18 note:** the whole embed-the-secret question below is obsolete for
+> phone and buyer builds — the license-gated sync gateway (§8b) now takes
+> precedence over this path automatically whenever the licensing function URL
+> is baked in. Kept for the developer's own desktop secret path and history.
+
+A phone build inherits the same `SUPABASE_URL` / `SUPABASE_KEY` defines, but
+the APK is a distributable artifact: anyone who has the file can unpack it and
+extract the key. That is why `SupabaseSyncBackend.fromEnvironment()` adds one
+extra rule for Android/iOS:
+
+* **Safe default (`NoopSyncBackend`)** — on mobile, if the URL and key are
+  baked in but the operator has *not* explicitly opted in, the app refuses
+  the credentials, prints a one-shot startup notice explaining why, and
+  behaves exactly like the offline release. A `flutter build apk --release`
+  with the licensing define but no sync flag therefore produces a **shippable
+  APK that cannot leak the key** — sync is simply off on the phone.
+* **Private-use opt-in** — for the shop's own handful of phones on the owner's
+  own network (never distributed, never posted to a store), pass:
+
+  ```powershell
+  flutter build apk --release `
+    --dart-define=WHOLESALE_POS_LICENSE_PUBLIC_KEY=<hex> `
+    --dart-define=SUPABASE_URL=<project-url> `
+    --dart-define=SUPABASE_KEY=<secret-key> `
+    --dart-define=WHOLESALE_POS_UNSAFE_EMBED_SYNC_SECRET=true
+  ```
+
+  The name of the flag is intentional: `UNSAFE_EMBED` makes it awkward to
+  add by accident and easy to grep in CI logs. When this flag is set the
+  phone behaves like a shop PC — sync runs, mirror tables fill.
+
+  Trade-offs the owner accepts by flipping it: the secret is inside the APK
+  on disk and in memory; anyone with the APK (or the phone) can extract it;
+  RLS cannot help because the key bypasses RLS by design. So the key must
+  match a Supabase project whose only entry point is this shop, and the
+  owner should rotate the key from the Supabase dashboard if a phone or APK
+  is ever lost. If the app is going to be distributed beyond the shop or
+  listed on an app store, **do not use this flag** — wait for the
+  anon-key + row-level-security backend (see §9).
+
+* **Unit-testable** — the branching lives in `SupabaseSyncBackend.selectBackend(
+  url, key, unsafeAllowEmbed, isMobile)`, a pure function covered by
+  `test/core/sync/backend_selection_test.dart`. The tests assert all four
+  combinations (empty key → Noop, desktop → live regardless of flag, phone
+  without flag → Noop, phone with flag → live) so an accidental change to
+  the rule fails CI rather than ships.
+
+### 8b. Phase 18 — the license-gated sync gateway (multi-tenant, sellable)
+
+The Phase-12 problem: sync authenticated with the project **secret key**, which
+bypasses RLS entirely, so it could only ever live inside the owner's own locked
+desktop builds — never in a distributable. The Phase-18 replacement reuses the
+trust primitive the licensing system already mints: the **signed v2 license**
+(Ed25519, device-bound, contains `customer_id`).
+
+```
+client (no keys)                    sync Edge Function (service role)
+  outbox batch ───────────────────►  1. verify Ed25519 signature + expiry
+  { action:'push',                   2. license row not revoked server-side
+    license:<signed payload>,        3. (code,fingerprint) holds an ACTIVE seat
+    entries:[…] }                    4. upsert rows, STAMPING customer_id from
+                                       the license — caller cannot address
+                                       another shop's partition
+```
+
+* **Server** (`supabase/functions/sync/index.ts`, deployed, JWT-verify off like
+  `licensing`): mirrors `push` / `pull` / `ping`. Authenticates with the license
+  itself — the anon key is never sent and has `REVOKE ALL` plus RLS-with-no-
+  policies on every mirror table, so direct PostgREST access is dead even with
+  a valid-looking request. `customer_id` is taken ONLY from the verified
+  license payload, never from client JSON. Seat deactivation cuts sync on the
+  next drain (registration check per request).
+* **Schema** (`docs/supabase_sync_multi_tenant.sql`, applied live): every
+  mirror table gained `customer_id uuid NOT NULL REFERENCES customers(id)`,
+  PK became `(customer_id, id)` (local uuids are namespaced per shop), and
+  read indexes lead with `customer_id`. One Supabase project now hosts many
+  shops without cross-reads possible at any layer below the function.
+* **Client** (`lib/core/sync/sync_gateway_backend.dart`): implements the same
+  `SyncBackend` seam. Reads the license lazily per drain from the
+  `license_code` setting — activate mid-session and the next 30-second tick
+  starts flowing, no restart. Un-activated devices throw before any HTTP call,
+  so `SyncService` keeps rows queued and selling is unaffected.
+* **Selection priority** (pure + tested in
+  `test/core/sync/sync_gateway_backend_test.dart`, 13 cases): desktop with
+  baked secret → legacy direct path (unchanged, owner PCs only). Otherwise
+  gateway whenever its URL resolves (explicit
+  `WHOLESALE_POS_SYNC_FN_URL` define, or derived by swapping the licensing
+  URL's `/licensing` suffix for `/sync` — so `tools/build_release.ps1`
+  enables it with zero extra flags). Otherwise the legacy mobile opt-in.
+  Otherwise Noop. **A phone build with the release script's defines can no
+  longer sync through the secret path even if the UNSAFE flag is passed —
+  the gateway preempts it.**
+* **Verified live 2026-10-24**: real license minted by the licensing function
+  → `ping` ok; push in client vocabulary (`sale`/`UPSERT`) → 2 rows landed
+  stamped with the right `customer_id`; `DELETE` cascaded sale_items;
+  forged license rejected 401; `has_table_privilege('anon',…)` false on every
+  mirror table.
+
 ## 9. What still remains before the phone/dashboard view
 
-The data now reaches the cloud. The remaining work is the **read side**: a small
-web or mobile report screen that queries these mirror tables, plus row-level
-security / auth if that viewer is ever exposed publicly. That is the next phase.
+The write path is now sellable. The remaining work is the **read side**: the
+`pull` endpoint exists server-side (delta cursor on `received_at`), but no
+client screen consumes it yet — the phone viewer / web dashboard showing a
+shop's live sales is the next phase. Multi-register *selling* (two tills, same
+shop) additionally needs the outbox to start pulling reference data, which
+stays deliberately out of scope under the single-writer rule (§1).
 
 ## Summary for the auditor
 

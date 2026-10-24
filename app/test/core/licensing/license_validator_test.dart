@@ -151,4 +151,72 @@ void main() {
     );
     expect(bad?['error'], 'Invalid license format.');
   });
+
+  // ----- Version 2: seat-based licenses issued by the licensing Edge Function.
+
+  Map<String, Object?> v2Payload({String fp = 'aaaa'}) => {
+    'format': 'wholesale-pos-license',
+    'version': 2,
+    'product': 'wholesale_pos',
+    'entitlements': ['pos'],
+    'activation_code': 'TEST-A',
+    'customer_id': 'cust-uuid',
+    'device_fingerprint': fp,
+    'issued_at': '2029-01-01T00:00:00Z',
+    'expires_at': '2031-01-01T00:00:00Z',
+  };
+
+  Future<String> signV2(Map<String, Object?> payload) async {
+    final bytes = utf8.encode(jsonEncode(canonical(payload)));
+    final signature = await Ed25519().sign(bytes, keyPair: pair);
+    return '${base64Url.encode(bytes)}.${base64Url.encode(signature.bytes)}';
+  }
+
+  test('accepts a v2 license whose fingerprint matches', () async {
+    final code = await signV2(v2Payload(fp: 'bbbb'));
+    final ok = await LicenseValidator.validateLicense(
+      licenseText: code,
+      deviceFingerprint: 'bbbb',
+      now: DateTime.utc(2030),
+      verificationKeyHex: publicHex,
+    );
+    expect(ok, containsPair('version', 2));
+    expect(ok, containsPair('device_fingerprint', 'bbbb'));
+  });
+
+  test('rejects a v2 license bound to a different device', () async {
+    final code = await signV2(v2Payload(fp: 'bbbb'));
+    final bad = await LicenseValidator.validateLicense(
+      licenseText: code,
+      deviceFingerprint: 'cccc',
+      now: DateTime.utc(2030),
+      verificationKeyHex: publicHex,
+    );
+    expect(bad?['error'], 'License is for a different device.');
+  });
+
+  test(
+    'rejects a v2 license missing customer_id / activation_code / fingerprint',
+    () async {
+      for (final field in [
+        'customer_id',
+        'activation_code',
+        'device_fingerprint',
+      ]) {
+        final stripped = Map<String, Object?>.from(v2Payload())..remove(field);
+        final code = await signV2(stripped);
+        final bad = await LicenseValidator.validateLicense(
+          licenseText: code,
+          deviceFingerprint: 'aaaa',
+          now: DateTime.utc(2030),
+          verificationKeyHex: publicHex,
+        );
+        expect(
+          bad?['error'],
+          'License is missing required fields.',
+          reason: 'v2 payload missing $field must be rejected',
+        );
+      }
+    },
+  );
 }

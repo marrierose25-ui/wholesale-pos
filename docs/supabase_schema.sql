@@ -108,3 +108,4 @@ CREATE INDEX IF NOT EXISTS void_requests_sale     ON void_requests(sale_id);
 CREATE INDEX IF NOT EXISTS void_requests_status   ON void_requests(status);
 
 COMMIT;
+ 

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io' show Platform;
 
 import 'package:http/http.dart' as http;
 
@@ -33,14 +34,57 @@ class SupabaseSyncBackend implements SyncBackend {
        _apiKey = key,
        _client = client ?? http.Client();
 
-  /// Builds the backend from compile-time configuration
-  /// (`--dart-define=SUPABASE_URL=... --dart-define=SUPABASE_KEY=...`). When
-  /// either is absent the app falls back to [NoopSyncBackend], so an un-
+  /// Builds the backend from compile-time configuration.
+  ///
+  /// Desktop (owner's own shop PCs, in a locked back office): supply
+  /// `--dart-define=SUPABASE_URL=... --dart-define=SUPABASE_KEY=...` and sync
+  /// is live. Missing either falls back to [NoopSyncBackend] so an un-
   /// configured build behaves exactly like the offline-only release.
+  ///
+  /// Mobile (Android/iOS): the key would travel inside a distributable APK and
+  /// bypass row-level security if extracted, so a phone build refuses the
+  /// baked-in key and stays offline **unless** the operator explicitly opts
+  /// in with `--dart-define=WHOLESALE_POS_UNSAFE_EMBED_SYNC_SECRET=true`.
+  /// That flag is the private-use path (your own phones on your own shop,
+  /// never handed to customers); the loud startup notice is there so you
+  /// cannot miss that sync was refused on a plain mobile build.
   static SyncBackend fromEnvironment() {
     const url = String.fromEnvironment('SUPABASE_URL');
     const key = String.fromEnvironment('SUPABASE_KEY');
+    const unsafeAllowEmbed = bool.fromEnvironment(
+      'WHOLESALE_POS_UNSAFE_EMBED_SYNC_SECRET',
+    );
+    final isMobile = Platform.isAndroid || Platform.isIOS;
+    final backend = selectBackend(
+      url: url,
+      key: key,
+      unsafeAllowEmbed: unsafeAllowEmbed,
+      isMobile: isMobile,
+    );
+    // If a phone build had the keys baked in but we refused to use them,
+    // announce it once so an operator can notice the sync stayed off.
+    if (isMobile && !unsafeAllowEmbed && url.isNotEmpty && key.isNotEmpty) {
+      // ignore: avoid_print
+      print(
+        'WholesalePOS: cloud sync is DISABLED on this phone build. To enable '
+        'private-use sync on your own devices, rebuild with '
+        '--dart-define=WHOLESALE_POS_UNSAFE_EMBED_SYNC_SECRET=true. Do NOT do '
+        'this for an APK you distribute. See docs/CLOUD_SYNC.md.',
+      );
+    }
+    return backend;
+  }
+
+  /// Pure selection logic, factored out of [fromEnvironment] so it is
+  /// unit-testable without needing to fake [Platform] at runtime.
+  static SyncBackend selectBackend({
+    required String url,
+    required String key,
+    required bool unsafeAllowEmbed,
+    required bool isMobile,
+  }) {
     if (url.isEmpty || key.isEmpty) return const NoopSyncBackend();
+    if (isMobile && !unsafeAllowEmbed) return const NoopSyncBackend();
     return SupabaseSyncBackend(url: url, key: key);
   }
 

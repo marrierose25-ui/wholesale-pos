@@ -133,7 +133,7 @@ class _ActivationScreenState extends State<ActivationScreen> {
       Align(
         alignment: Alignment.centerLeft,
         child: Text(
-          'Enter your license code:',
+          'Enter your activation code:',
           style: TextStyle(
             fontWeight: FontWeight.bold,
             color: Theme.of(context).colorScheme.onSurface,
@@ -143,12 +143,14 @@ class _ActivationScreenState extends State<ActivationScreen> {
       const SizedBox(height: 8),
       TextField(
         controller: _codeController,
-        minLines: 3,
-        maxLines: 6,
+        minLines: 2,
+        maxLines: 4,
         autocorrect: false,
         enabled: !_submitting,
         decoration: const InputDecoration(
-          hintText: 'Paste the full activation code',
+          hintText:
+              'Your provider sends this code once per shop, e.g.\n'
+              'MERCA-7Q2F-9K3X-4D8M-BN',
           border: OutlineInputBorder(),
         ),
         style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
@@ -170,8 +172,9 @@ class _ActivationScreenState extends State<ActivationScreen> {
       ),
       const SizedBox(height: 16),
       const Text(
-        'Ask your provider for an activation code for this business. It is '
-        'saved on this device, so you only enter it once.',
+        'One code covers the seats you bought (a shop PC plus phones). If you '
+        'change device, deactivate an old one under Settings \u2192 Devices \u2014 no need '
+        'to contact your provider.',
         textAlign: TextAlign.center,
         style: TextStyle(fontSize: 12, color: Colors.grey),
       ),

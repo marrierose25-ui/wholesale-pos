@@ -36,6 +36,7 @@ class LicenseValidator {
 
   static Future<Map<String, dynamic>?> validateLicense({
     String? hardwareId,
+    String? deviceFingerprint,
     DateTime? now,
     String? verificationKeyHex,
     String? licenseText,
@@ -101,7 +102,7 @@ class LicenseValidator {
       ];
       if (required.any((key) => !payload.containsKey(key)) ||
           payload['format'] != 'wholesale-pos-license' ||
-          payload['version'] != 1 ||
+          (payload['version'] != 1 && payload['version'] != 2) ||
           payload['product'] != 'wholesale_pos' ||
           payload['entitlements'] is! List ||
           (payload['entitlements'] as List).any((item) => item is! String) ||
@@ -151,6 +152,25 @@ class LicenseValidator {
       if (payload['hardware_id'] != null &&
           payload['hardware_id'] != expectedHardwareId) {
         return {'error': 'License is for a different device.'};
+      }
+      // Version 2 (issued by the licensing Edge Function) binds the seat to a
+      // SHA-256 device fingerprint instead of a raw hardware id. All v2 fields
+      // are mandatory; a missing / mismatched fingerprint is a hard reject.
+      if (payload['version'] == 2) {
+        for (final field in const [
+          'customer_id',
+          'activation_code',
+          'device_fingerprint',
+        ]) {
+          final v = payload[field];
+          if (v is! String || v.isEmpty) {
+            return {'error': 'License is missing required fields.'};
+          }
+        }
+        if (deviceFingerprint != null &&
+            payload['device_fingerprint'] != deviceFingerprint) {
+          return {'error': 'License is for a different device.'};
+        }
       }
       final nowValue = now ?? DateTime.now();
       if (issuedAt.isAfter(nowValue.add(const Duration(days: 1)))) {

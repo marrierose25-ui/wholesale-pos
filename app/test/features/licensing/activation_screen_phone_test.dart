@@ -25,7 +25,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Enter your license code:'), findsOneWidget);
+    expect(find.text('Enter your activation code:'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'Activate'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
