@@ -47,12 +47,17 @@ class Shift {
   }
 
   factory Shift.fromMap(Map<String, dynamic> map) {
+    // Cash columns are integer-typed in both stores, but the web JSON decoder
+    // can hand back a whole number as a `double`; reading through `num` keeps a
+    // cloud-hydrated shift from throwing an `as int` cast.
     return Shift(
       id: map['id'] as String,
       cashierId: map['cashier_id'] as String,
-      openingCashMinorUnits: map['opening_cash_minor_units'] as int,
-      closingCashMinorUnits: map['closing_cash_minor_units'] as int?,
-      expectedCashMinorUnits: map['expected_cash_minor_units'] as int?,
+      openingCashMinorUnits:
+          (map['opening_cash_minor_units'] as num?)?.toInt() ?? 0,
+      closingCashMinorUnits: (map['closing_cash_minor_units'] as num?)?.toInt(),
+      expectedCashMinorUnits: (map['expected_cash_minor_units'] as num?)
+          ?.toInt(),
       status: map['status'] as String,
       openedAt: DateTime.parse(map['opened_at'] as String),
       closedAt: map['closed_at'] != null

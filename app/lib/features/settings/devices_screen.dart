@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/licensing/activation_client.dart';
+import '../../core/theme/app_design.dart';
 import '../../core/theme/app_theme.dart';
 
 /// Buyer-facing screen for the seat-based licensing (Phase 17 / 17b).
@@ -213,106 +214,110 @@ class _DevicesScreenState extends State<DevicesScreen> {
           ),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                  if (_activationCode != null) ...[
-                    _HeaderCard(
-                      activationCodeMasked: _mask(_activationCode),
-                      seatsUsed: _seatsUsed,
-                      seatLimit: _seatLimit,
-                    ),
-                    const SizedBox(height: 16),
-                  ],
-                  if (_error != null) ...[
-                    _ErrorCard(message: _error!, onRetry: _load),
-                    const SizedBox(height: 16),
-                  ],
-                  if (_error == null && _activationCode != null)
-                    ..._deviceTiles(),
-                  if (_error == null && _activationCode != null) ...[
-                    const SizedBox(height: 24),
-                    const Text(
-                      'Add more seats',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 18,
+      body: AppBackground(
+        child: RefreshIndicator(
+          onRefresh: _load,
+          child: _loading
+              ? const Center(child: CircularProgressIndicator())
+              : ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    if (_activationCode != null) ...[
+                      _HeaderCard(
+                        activationCodeMasked: _mask(_activationCode),
+                        seatsUsed: _seatsUsed,
+                        seatLimit: _seatLimit,
                       ),
-                    ),
-                    const SizedBox(height: 8),
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Bought extra seats from Umer? Paste the '
-                              'voucher code (starts with V-) below. It '
-                              'works once and permanently raises your seat '
-                              'limit for this activation code.',
-                            ),
-                            const SizedBox(height: 12),
-                            TextField(
-                              controller: _voucherController,
-                              enabled: !_redeeming,
-                              decoration: const InputDecoration(
-                                labelText: 'Voucher code',
-                                hintText: 'V-1A2B3C4D',
-                                border: OutlineInputBorder(),
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: FilledButton.icon(
-                                onPressed: _redeeming ? null : _redeemVoucher,
-                                icon: _redeeming
-                                    ? const SizedBox(
-                                        width: 16,
-                                        height: 16,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                    : const Icon(Icons.confirmation_number),
-                                label: const Text('Redeem'),
-                              ),
-                            ),
-                          ],
+                      const SizedBox(height: 16),
+                    ],
+                    if (_error != null) ...[
+                      _ErrorCard(message: _error!, onRetry: _load),
+                      const SizedBox(height: 16),
+                    ],
+                    if (_error == null && _activationCode != null)
+                      ..._deviceTiles(),
+                    if (_error == null && _activationCode != null) ...[
+                      const SizedBox(height: 24),
+                      const Text(
+                        'Add more seats',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 18,
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 24),
-                    const Text(
-                      'How seats work',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 18,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Card(
-                      child: const Padding(
-                        padding: EdgeInsets.all(16),
-                        child: Text(
-                          'Each device that redeems your activation code '
-                          'takes one seat. Your seat limit is the number '
-                          'of phones or PCs that can be active at the '
-                          'same time. Reinstalling the app on the same '
-                          'device reuses its existing seat. If a device '
-                          'is lost, deactivate it here and activate the '
-                          'replacement — no need to contact Umer.',
+                      const SizedBox(height: 8),
+                      GlassCard(
+                        padding: EdgeInsets.zero,
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Bought extra seats from Umer? Paste the '
+                                'voucher code (starts with V-) below. It '
+                                'works once and permanently raises your seat '
+                                'limit for this activation code.',
+                              ),
+                              const SizedBox(height: 12),
+                              TextField(
+                                controller: _voucherController,
+                                enabled: !_redeeming,
+                                decoration: const InputDecoration(
+                                  labelText: 'Voucher code',
+                                  hintText: 'V-1A2B3C4D',
+                                  border: OutlineInputBorder(),
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: FilledButton.icon(
+                                  onPressed: _redeeming ? null : _redeemVoucher,
+                                  icon: _redeeming
+                                      ? const SizedBox(
+                                          width: 16,
+                                          height: 16,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
+                                        )
+                                      : const Icon(Icons.confirmation_number),
+                                  label: const Text('Redeem'),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                    ),
+                      const SizedBox(height: 24),
+                      const Text(
+                        'How seats work',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 18,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      GlassCard(
+                        padding: EdgeInsets.zero,
+                        child: const Padding(
+                          padding: EdgeInsets.all(16),
+                          child: Text(
+                            'Each device that redeems your activation code '
+                            'takes one seat. Your seat limit is the number '
+                            'of phones or PCs that can be active at the '
+                            'same time. Reinstalling the app on the same '
+                            'device reuses its existing seat. If a device '
+                            'is lost, deactivate it here and activate the '
+                            'replacement — no need to contact Umer.',
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
-                ],
-              ),
+                ),
+        ),
       ),
     );
   }
@@ -320,7 +325,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
   List<Widget> _deviceTiles() {
     if (_devices.isEmpty) {
       return [
-        const Card(
+        const GlassCard(
           child: ListTile(
             leading: Icon(Icons.info_outline),
             title: Text('No devices listed yet.'),
@@ -334,8 +339,8 @@ class _DevicesScreenState extends State<DevicesScreen> {
         style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
       ),
       const SizedBox(height: 8),
-      Card(
-        margin: EdgeInsets.zero,
+      GlassCard(
+        padding: EdgeInsets.zero,
         child: Column(
           children: [
             for (var i = 0; i < _devices.length; i++) ...[
@@ -393,8 +398,8 @@ class _HeaderCard extends StatelessWidget {
     final usage = seatsUsed != null && seatLimit != null
         ? '$seatsUsed of $seatLimit seats in use'
         : 'Seat usage loading…';
-    return Card(
-      margin: EdgeInsets.zero,
+    return GlassCard(
+      padding: EdgeInsets.zero,
       child: ListTile(
         leading: const Icon(Icons.vpn_key),
         title: Text(
@@ -414,9 +419,9 @@ class _ErrorCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: EdgeInsets.zero,
-      color: AppTheme.danger.withValues(alpha: 0.08),
+    return GlassCard(
+      padding: EdgeInsets.zero,
+      border: Border.all(color: AppDesign.danger.withValues(alpha: 0.4)),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -456,14 +461,14 @@ class _ThisDeviceChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
-        color: AppTheme.primary.withValues(alpha: 0.15),
+        color: AppDesign.blue.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(12),
       ),
       child: const Text(
         'This device',
         style: TextStyle(
           fontSize: 11,
-          color: AppTheme.primary,
+          color: AppDesign.blueBright,
           fontWeight: FontWeight.bold,
         ),
       ),

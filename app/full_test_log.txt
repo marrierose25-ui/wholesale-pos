@@ -1,0 +1,1135 @@
+﻿00:00 +0: loading C:/Users/www/wholesale_pos/app/test/core/auth/session_store_test.dart
+00:00 +0: C:/Users/www/wholesale_pos/app/test/core/auth/session_store_test.dart: save then load round-trips the user id and token
+00:02 +1: C:/Users/www/wholesale_pos/app/test/core/auth/session_store_test.dart: load returns null when nothing was saved
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:02 +2: C:/Users/www/wholesale_pos/app/test/core/auth/session_store_test.dart: an expired session is dropped and returns null
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:02 +3: C:/Users/www/wholesale_pos/app/test/core/auth/session_store_test.dart: a tampered record is treated as no session and cleared
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:02 +4: C:/Users/www/wholesale_pos/app/test/core/auth/session_store_test.dart: clear removes the stored session
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:02 +5: C:/Users/www/wholesale_pos/app/test/core/auth/session_store_test.dart: UserRepository.getById returns an active user
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:02 +6: C:/Users/www/wholesale_pos/app/test/core/auth/session_store_test.dart: UserRepository.getById returns null for a deactivated account
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:02 +7: C:/Users/www/wholesale_pos/app/test/core/auth/session_store_test.dart: UserRepository.getById returns null for an unknown id
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:02 +8: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudApiClient call returns the decoded body on ok:true
+00:02 +9: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudApiClient call throws CloudApiException carrying the server error
+00:02 +10: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudApiClient attaches the bearer token once signed in
+00:02 +11: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudProductRepository getAllActive maps server rows to Products
+00:02 +12: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudProductRepository getAllInactive sends the inactive flag
+00:02 +13: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudProductRepository save posts the product map verbatim
+00:02 +14: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudUserRepository authenticate stores the session token and returns the user
+00:02 +15: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudUserRepository authenticate returns null when the server refuses
+00:02 +16: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudUserRepository getAllUsers maps active boolean rows without leaking secrets
+00:02 +17: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudUserRepository createUser posts the role/password contract
+00:02 +18: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudShiftRepository getShiftSummary casts server numbers to int
+00:02 +19: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudShiftRepository closeShift posts the counted cash under the tenant shift id
+00:02 +20: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudShiftRepository getActiveShift returns null when none is open
+00:02 +21: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudShiftRepository implements the shared ShiftRepository interface type
+00:02 +22: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudSaleRepository saveSale posts the sale aggregate
+00:02 +23: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudSaleRepository nextReceiptNumber returns the server-issued number
+00:02 +24: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudSaleRepository getSales rebuilds the hydrated Sale aggregate
+00:02 +25: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudSaleRepository getDashboardStats casts server numbers to int
+00:02 +26: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudSaleRepository getProductSalesSummary renames server keys to the native shape
+00:02 +27: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudSaleRepository getVoidedSalesForShift filters the local void-scoping rule
+00:02 +28: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudFinanceRepository getCategories maps FinanceCategory rows
+00:02 +29: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudFinanceRepository addEntry returns the hydrated FinanceEntry
+00:02 +30: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudFinanceRepository searchEntries forwards only the filters that are set
+00:02 +31: C:/Users/www/wholesale_pos/app/test/core/cloud/cloud_repositories_test.dart: CloudFinanceRepository getPersonTotals maps the server totals keys
+00:02 +32: C:/Users/www/wholesale_pos/app/test/core/database/local_database_test.dart: Database initializes and creates all required tables
+00:03 +33: C:/Users/www/wholesale_pos/app/test/core/database/local_database_test.dart: Registers and reuses a generated device ID
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:03 +34: C:/Users/www/wholesale_pos/app/test/core/database/migration_test.dart: Upgrades a v5 database to v6 without losing cash movements
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:04 +35: C:/Users/www/wholesale_pos/app/test/core/database/migration_test.dart: Upgrades a v6 database to v7, preserving sale items and adding finance tables
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:04 +36: C:/Users/www/wholesale_pos/app/test/core/database/migration_test.dart: Upgrades a v6 database to v7, preserving sale items and adding finance tables
+00:04 +37: C:/Users/www/wholesale_pos/app/test/core/licensing/activation_client_test.dart: ActivationClient activateDevice posts the right body and parses success
+00:04 +38: C:/Users/www/wholesale_pos/app/test/core/database/migration_test.dart: Upgrades a v7 database to v8, adding void_requests and its indexes
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:04 +39: C:/Users/www/wholesale_pos/app/test/core/database/migration_test.dart: Upgrades a v7 database to v8, adding void_requests and its indexes
+00:04 +40: C:/Users/www/wholesale_pos/app/test/core/database/migration_test.dart: Upgrades a v7 database to v8, adding void_requests and its indexes
+00:04 +41: C:/Users/www/wholesale_pos/app/test/core/database/migration_test.dart: Upgrades a v7 database to v8, adding void_requests and its indexes
+00:04 +42: C:/Users/www/wholesale_pos/app/test/core/database/migration_test.dart: Upgrades a v7 database to v8, adding void_requests and its indexes
+00:04 +43: C:/Users/www/wholesale_pos/app/test/core/database/migration_test.dart: Upgrades a v7 database to v8, adding void_requests and its indexes
+00:04 +44: C:/Users/www/wholesale_pos/app/test/core/database/migration_test.dart: Upgrades a v7 database to v8, adding void_requests and its indexes
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:04 +45: C:/Users/www/wholesale_pos/app/test/core/database/migration_test.dart: Upgrades a v8 database to v9, adding the sync_outbox queue
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:04 +46: C:/Users/www/wholesale_pos/app/test/core/database/migration_test.dart: Re-registers the persisted device ID after a restore
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:08 +47: C:/Users/www/wholesale_pos/app/test/core/licensing/device_fingerprint_test.dart: DeviceFingerprint returns the same value across repeated calls (idempotent)
+00:11 +48: C:/Users/www/wholesale_pos/app/test/core/licensing/device_fingerprint_test.dart: DeviceFingerprint is 64 hex chars (SHA-256 output)
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:12 +49: C:/Users/www/wholesale_pos/app/test/core/licensing/device_fingerprint_test.dart: DeviceFingerprint is 64 hex chars (SHA-256 output)
+00:12 +49: C:/Users/www/wholesale_pos/app/test/core/models/product_repository_test.dart: Returns null for a missing product
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:12 +50: C:/Users/www/wholesale_pos/app/test/core/licensing/device_fingerprint_test.dart: DeviceFingerprint is 64 hex chars (SHA-256 output)
+00:12 +50: C:/Users/www/wholesale_pos/app/test/core/models/product_repository_test.dart: Rejects a duplicate saved name (case-insensitive, trimmed)
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:12 +51: C:/Users/www/wholesale_pos/app/test/core/licensing/device_fingerprint_test.dart: DeviceFingerprint is 64 hex chars (SHA-256 output)
+00:12 +51: C:/Users/www/wholesale_pos/app/test/core/models/product_repository_test.dart: Update: keeping own name is fine, renaming onto another is blocked
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:12 +52: C:/Users/www/wholesale_pos/app/test/core/licensing/device_fingerprint_test.dart: DeviceFingerprint is 64 hex chars (SHA-256 output)
+00:12 +53: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: accepts a valid Ed25519 license
+00:12 +53: C:/Users/www/wholesale_pos/app/test/core/licensing/device_fingerprint_test.dart: DeviceFingerprint forTesting() is stable per seed and distinct across seeds
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:12 +54: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: accepts a valid Ed25519 license
+00:12 +55: C:/Users/www/wholesale_pos/app/test/core/repositories/dashboard_metrics_test.dart: getRevenueTrend groups completed revenue per calendar day
+00:12 +56: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a modified payload and wrong hardware ID
+00:12 +56: C:/Users/www/wholesale_pos/app/test/core/repositories/dashboard_metrics_test.dart: getRevenueTrend excludes voided sales
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:12 +57: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a modified payload and wrong hardware ID
+00:12 +57: C:/Users/www/wholesale_pos/app/test/core/repositories/dashboard_metrics_test.dart: dashboard stats report void and pending-request counts
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:12 +58: C:/Users/www/wholesale_pos/app/test/core/repositories/dashboard_metrics_test.dart: dashboard stats report void and pending-request counts
+00:12 +59: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects expired, malformed, and incomplete licenses
+00:12 +60: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: validates a license code supplied as text (mobile path, no file)
+00:13 +61: C:/Users/www/wholesale_pos/app/test/core/repositories/finance_repository_test.dart: owner-only enforcement a cashier is rejected by every finance method
+00:13 +62: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: accepts a v2 license whose fingerprint matches
+00:13 +62: C:/Users/www/wholesale_pos/app/test/core/repositories/finance_repository_test.dart: owner-only enforcement a deactivated owner is rejected
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:13 +63: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: accepts a v2 license whose fingerprint matches
+00:13 +63: C:/Users/www/wholesale_pos/app/test/core/repositories/finance_repository_test.dart: people (categories) creates and lists people; duplicate names are rejected
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:13 +64: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: accepts a v2 license whose fingerprint matches
+00:13 +64: C:/Users/www/wholesale_pos/app/test/core/repositories/finance_repository_test.dart: people (categories) renaming keeps all entries attached to the person
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:13 +65: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: accepts a v2 license whose fingerprint matches
+00:13 +65: C:/Users/www/wholesale_pos/app/test/core/repositories/finance_repository_test.dart: people (categories) empty names are rejected
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:13 +66: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: accepts a v2 license whose fingerprint matches
+00:13 +66: C:/Users/www/wholesale_pos/app/test/core/repositories/finance_repository_test.dart: entry lifecycle pending entry becomes completed and stays in history
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:13 +67: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: accepts a v2 license whose fingerprint matches
+00:13 +67: C:/Users/www/wholesale_pos/app/test/core/repositories/finance_repository_test.dart: entry lifecycle completed entries are immutable
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:14 +68: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: accepts a v2 license whose fingerprint matches
+00:14 +68: C:/Users/www/wholesale_pos/app/test/core/repositories/finance_repository_test.dart: entry lifecycle pending entries can be edited
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:14 +69: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: accepts a v2 license whose fingerprint matches
+00:14 +69: C:/Users/www/wholesale_pos/app/test/core/repositories/finance_repository_test.dart: entry lifecycle amounts must be positive and a source is required
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:14 +70: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: accepts a v2 license whose fingerprint matches
+00:14 +70: C:/Users/www/wholesale_pos/app/test/core/repositories/finance_repository_test.dart: search and totals matches source, description, and person name
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:14 +71: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: accepts a v2 license whose fingerprint matches
+00:14 +71: C:/Users/www/wholesale_pos/app/test/core/repositories/finance_repository_test.dart: search and totals wildcards in the query match literally
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:14 +72: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: accepts a v2 license whose fingerprint matches
+00:14 +72: C:/Users/www/wholesale_pos/app/test/core/repositories/finance_repository_test.dart: search and totals person totals separate pending from completed
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:14 +73: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: accepts a v2 license whose fingerprint matches
+00:14 +73: C:/Users/www/wholesale_pos/app/test/core/repositories/finance_repository_test.dart: search and totals every mutation is written to the audit log
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:14 +74: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: accepts a v2 license whose fingerprint matches
+00:14 +75: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: accepts a v2 license whose fingerprint matches
+00:14 +75: C:/Users/www/wholesale_pos/app/test/core/repositories/receipt_counter_test.dart: Dashboard reports whether a register shift is open
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:14 +76: C:/Users/www/wholesale_pos/app/test/core/repositories/receipt_counter_test.dart: Dashboard reports whether a register shift is open
+00:14 +77: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license bound to a different device
+00:15 +78: C:/Users/www/wholesale_pos/app/test/core/repositories/report_repository_test.dart: Dashboard stats split revenue by payment method
+00:15 +79: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:15 +79: C:/Users/www/wholesale_pos/app/test/core/repositories/report_repository_test.dart: Dashboard periods exclude older sales by date filtering
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:15 +80: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:15 +80: C:/Users/www/wholesale_pos/app/test/core/repositories/report_repository_test.dart: Product summary sums milliunit quantities and filters by period
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:15 +81: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:15 +81: C:/Users/www/wholesale_pos/app/test/core/repositories/report_repository_test.dart: Manual-amount lines report no numeric quantity
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:15 +82: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:15 +82: C:/Users/www/wholesale_pos/app/test/core/repositories/report_repository_test.dart: Cashier performance reports sales counts and revenue
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:15 +83: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:15 +84: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:15 +84: C:/Users/www/wholesale_pos/app/test/core/repositories/sale_repository_test.dart: Saves a descriptive quantity with a manually entered line amount
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:15 +85: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:15 +85: C:/Users/www/wholesale_pos/app/test/core/repositories/sale_repository_test.dart: Rejects a line total that does not match price and quantity
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:15 +86: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:15 +86: C:/Users/www/wholesale_pos/app/test/core/repositories/sale_repository_test.dart: Rejects a manual line amount of zero
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:15 +87: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:15 +87: C:/Users/www/wholesale_pos/app/test/core/repositories/sale_repository_test.dart: rejects a sale when its referenced shift is closed
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:15 +88: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:15 +88: C:/Users/www/wholesale_pos/app/test/core/repositories/sale_repository_test.dart: getSales search finds sales by product name
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:15 +89: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:15 +89: C:/Users/www/wholesale_pos/app/test/core/repositories/sale_repository_test.dart: getSales search finds sales by customer name
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:15 +90: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:15 +90: C:/Users/www/wholesale_pos/app/test/core/repositories/sale_repository_test.dart: getSales search finds sales by cashier username
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:15 +91: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:15 +91: C:/Users/www/wholesale_pos/app/test/core/repositories/sale_repository_test.dart: getSales search finds sales by quantity text and notes
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:15 +92: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:15 +92: C:/Users/www/wholesale_pos/app/test/core/repositories/sale_repository_test.dart: getSales search never matches receipt numbers
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:15 +93: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:15 +93: C:/Users/www/wholesale_pos/app/test/core/repositories/sale_repository_test.dart: getSales search LIKE wildcards in the query match literally
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:16 +94: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:16 +94: C:/Users/www/wholesale_pos/app/test/core/repositories/sale_repository_test.dart: getSales search filters by status
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:16 +95: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:16 +96: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:16 +96: C:/Users/www/wholesale_pos/app/test/core/repositories/shift_cash_math_test.dart: a cross-shift cash refund reduces expected cash
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:16 +97: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:16 +97: C:/Users/www/wholesale_pos/app/test/core/repositories/shift_cash_math_test.dart: a non-cash (bank) refund never touches the cash drawer
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:16 +98: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:16 +98: C:/Users/www/wholesale_pos/app/test/core/repositories/shift_cash_math_test.dart: deposits add and withdrawals subtract from expected cash
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:16 +99: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:16 +99: C:/Users/www/wholesale_pos/app/test/core/repositories/shift_cash_math_test.dart: closeShift stores the same expected figure as getShiftSummary
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:16 +100: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:16 +101: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:16 +101: C:/Users/www/wholesale_pos/app/test/core/repositories/shift_history_test.dart: filters by a single day (today) by opened date
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:16 +102: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:16 +102: C:/Users/www/wholesale_pos/app/test/core/repositories/shift_history_test.dart: filters by yesterday
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:17 +103: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:17 +103: C:/Users/www/wholesale_pos/app/test/core/repositories/shift_history_test.dart: status filter separates open and closed shifts
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:17 +104: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:17 +104: C:/Users/www/wholesale_pos/app/test/core/repositories/shift_history_test.dart: combined date + status filter
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:17 +105: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:17 +105: C:/Users/www/wholesale_pos/app/test/core/repositories/shift_history_test.dart: exposes the counted-minus-expected discrepancy
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:17 +106: C:/Users/www/wholesale_pos/app/test/core/licensing/license_validator_test.dart: rejects a v2 license missing customer_id / activation_code / fingerprint
+00:17 +107: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Sets up a first owner with a secure password
+00:18 +108: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Sets up a first owner with a secure password
+00:18 +108: C:/Users/www/wholesale_pos/app/test/core/repositories/void_request_test.dart: a duplicate pending request on the same sale is blocked
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:18 +109: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Sets up a first owner with a secure password
+00:18 +109: C:/Users/www/wholesale_pos/app/test/core/repositories/void_request_test.dart: a void request requires a reason
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:18 +110: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Sets up a first owner with a secure password
+00:18 +110: C:/Users/www/wholesale_pos/app/test/core/repositories/void_request_test.dart: a request cannot be filed on an already-voided sale
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:18 +111: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Sets up a first owner with a secure password
+00:18 +111: C:/Users/www/wholesale_pos/app/test/core/repositories/void_request_test.dart: a non-owner cannot approve or reject a request
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:18 +112: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Sets up a first owner with a secure password
+00:18 +112: C:/Users/www/wholesale_pos/app/test/core/repositories/void_request_test.dart: owner approval voids the sale and removes it from revenue
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:18 +113: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Sets up a first owner with a secure password
+00:18 +113: C:/Users/www/wholesale_pos/app/test/core/repositories/void_request_test.dart: owner rejection leaves the sale completed
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:18 +114: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Sets up a first owner with a secure password
+00:18 +114: C:/Users/www/wholesale_pos/app/test/core/repositories/void_request_test.dart: a decided request cannot be acted on again
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:18 +115: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Sets up a first owner with a secure password
+00:18 +115: C:/Users/www/wholesale_pos/app/test/core/repositories/void_request_test.dart: a direct owner void auto-closes any pending request
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:18 +116: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Sets up a first owner with a secure password
+00:19 +117: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Sets up a first owner with a secure password
+00:19 +117: C:/Users/www/wholesale_pos/app/test/core/repositories/void_sale_test.dart: Voiding the same sale twice is rejected
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:19 +118: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Sets up a first owner with a secure password
+00:19 +118: C:/Users/www/wholesale_pos/app/test/core/repositories/void_sale_test.dart: A cashier cannot void sales
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:19 +119: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Sets up a first owner with a secure password
+00:19 +119: C:/Users/www/wholesale_pos/app/test/core/repositories/void_sale_test.dart: A void reason is required
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:19 +120: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Sets up a first owner with a secure password
+00:19 +121: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Sets up a first owner with a secure password
+00:19 +122: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Sets up a first owner with a secure password
+00:19 +123: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Sets up a first owner with a secure password
+00:19 +124: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Sets up a first owner with a secure password
+00:20 +125: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:20 +126: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:20 +127: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:20 +128: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:20 +129: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:20 +130: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:20 +131: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:20 +132: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:20 +133: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:20 +134: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:20 +135: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:20 +136: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:20 +137: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:20 +138: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:20 +139: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:20 +140: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:21 +141: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:21 +142: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:21 +143: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:21 +144: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:21 +145: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:21 +145: C:/Users/www/wholesale_pos/app/test/core/sync/sync_outbox_test.dart: Voiding a sale enqueues a second sale entry (newer state wins)
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:21 +146: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:21 +146: C:/Users/www/wholesale_pos/app/test/core/sync/sync_outbox_test.dart: Requesting a void enqueues a void_request entry
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:21 +147: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:21 +147: C:/Users/www/wholesale_pos/app/test/core/sync/sync_outbox_test.dart: Shift open, cash movement and close each enqueue entries
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:21 +148: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:21 +148: C:/Users/www/wholesale_pos/app/test/core/sync/sync_outbox_test.dart: SyncService with no backend leaves everything queued
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:21 +149: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:21 +149: C:/Users/www/wholesale_pos/app/test/core/sync/sync_outbox_test.dart: SyncService pushes and marks entries synced
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:21 +150: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:21 +150: C:/Users/www/wholesale_pos/app/test/core/sync/sync_outbox_test.dart: SyncService keeps entries queued when the backend throws
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:21 +151: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:21 +151: C:/Users/www/wholesale_pos/app/test/core/sync/sync_outbox_test.dart: pruneSynced removes only synced rows
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:21 +152: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:21 +152: C:/Users/www/wholesale_pos/app/test/core/utils/data_importer_test.dart: imports a v7 backup with flexible quantities unchanged
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:22 +153: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +154: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +154: C:/Users/www/wholesale_pos/app/test/core/utils/data_importer_test.dart: rejects backups older than v6 instead of guessing
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:22 +155: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +156: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +157: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +158: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +158: C:/Users/www/wholesale_pos/app/test/core/utils/data_importer_test.dart: restores finance tables from a v7 backup
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:22 +159: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +160: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +161: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +162: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +163: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +164: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +165: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +165: C:/Users/www/wholesale_pos/app/test/core/utils/data_importer_test.dart: a cashier cannot restore a backup
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:22 +166: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +166: C:/Users/www/wholesale_pos/app/test/core/utils/data_importer_test.dart: restores void_requests from a v8 backup
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:22 +167: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +167: C:/Users/www/wholesale_pos/app/test/core/utils/data_importer_test.dart: v6 and v7 backups restore with an empty void_requests table
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:22 +168: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +168: C:/Users/www/wholesale_pos/app/test/core/utils/data_importer_test.dart: rejects a malformed void_requests record
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:22 +169: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +170: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +171: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +172: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +173: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +174: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +175: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +176: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +177: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:22 +178: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong owner password and repeat setup
+00:24 +179: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Creates a new cashier and lists all users
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:28 +180: C:/Users/www/wholesale_pos/app/test/features/licensing/activation_screen_phone_test.dart: Activation code entry lays out at phone width
+00:28 +180: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Authenticates and upgrades a legacy password hash
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:28 +181: C:/Users/www/wholesale_pos/app/test/features/phone_layout_test.dart: Sales history lays out at phone width
+00:31 +182: C:/Users/www/wholesale_pos/app/test/features/phone_layout_test.dart: Sales history lays out at phone width
+00:31 +183: C:/Users/www/wholesale_pos/app/test/features/phone_layout_test.dart: Sales history lays out at phone width
+00:31 +184: C:/Users/www/wholesale_pos/app/test/features/phone_layout_test.dart: Sales history lays out at phone width
+00:31 +185: C:/Users/www/wholesale_pos/app/test/features/phone_layout_test.dart: Sales history lays out at phone width
+00:31 +186: C:/Users/www/wholesale_pos/app/test/features/phone_layout_test.dart: Sales history lays out at phone width
+00:31 +187: C:/Users/www/wholesale_pos/app/test/features/phone_layout_test.dart: Sales history lays out at phone width
+00:31 +188: C:/Users/www/wholesale_pos/app/test/features/phone_layout_test.dart: Sales history lays out at phone width
+00:31 +189: C:/Users/www/wholesale_pos/app/test/features/phone_layout_test.dart: Sales history lays out at phone width
+00:31 +190: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Authenticates and upgrades a legacy password hash
+00:31 +190: C:/Users/www/wholesale_pos/app/test/features/phone_layout_test.dart: Product list lays out at phone width
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:32 +191: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Authenticates and upgrades a legacy password hash
+00:32 +191: C:/Users/www/wholesale_pos/app/test/features/phone_layout_test.dart: Dashboard lays out at phone width
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:32 +192: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Authenticates and upgrades a legacy password hash
+00:32 +192: C:/Users/www/wholesale_pos/app/test/features/phone_layout_test.dart: Reports lays out at phone width
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:33 +193: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Authenticates and upgrades a legacy password hash
+00:33 +193: C:/Users/www/wholesale_pos/app/test/features/phone_layout_test.dart: User management lays out at phone width
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:33 +194: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Authenticates and upgrades a legacy password hash
+00:34 +195: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Authenticates and upgrades a legacy password hash
+00:34 +195: C:/Users/www/wholesale_pos/app/test/features/phone_layout_test.dart: Audit log lays out at phone width
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:34 +196: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Authenticates and upgrades a legacy password hash
+00:34 +196: C:/Users/www/wholesale_pos/app/test/features/phone_layout_test.dart: Finance overview lays out at phone width
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:34 +197: C:/Users/www/wholesale_pos/app/test/features/phone_layout_test.dart: Finance overview lays out at phone width
+00:34 +197: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Authenticates usernames case-insensitively
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:35 +198: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Authenticates usernames case-insensitively
+00:35 +198: C:/Users/www/wholesale_pos/app/test/features/phone_layout_test.dart: Settings lays out at phone width
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:35 +199: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Authenticates usernames case-insensitively
+00:39 +200: C:/Users/www/wholesale_pos/app/test/features/sales/sales_screen_phone_test.dart: POS lays out at phone width without overflowing
+00:39 +200: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Changes a password and rejects the old one
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:41 +201: C:/Users/www/wholesale_pos/app/test/features/sales/sales_screen_phone_test.dart: POS lays out at phone width without overflowing
+00:41 +202: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Changes a password and rejects the old one
+00:42 +203: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Changes a password and rejects the old one
+00:42 +204: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Changes a password and rejects the old one
+00:42 +205: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Changes a password and rejects the old one
+00:42 +206: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Changes a password and rejects the old one
+00:42 +207: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Changes a password and rejects the old one
+00:46 +208: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Rejects a wrong current password and invalid roles
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:48 +209: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Owner can reset a cashier password and deactivate the account
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:52 +210: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Owner password needs 12 chars, cashier needs 8
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:54 +211: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: changePassword enforces the owner minimum
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:55 +212: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: resetPassword enforces the target user role minimum
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+00:58 +213: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: Locks a username for the cooldown after repeated failures
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+01:04 +214: C:/Users/www/wholesale_pos/app/test/core/repositories/user_repository_test.dart: A successful login clears the failed-attempt counter
+*** sqflite warning ***
+
+You are changing sqflite default factory.
+Be aware of the potential side effects. Any library using sqflite
+will have this factory as the default for all operations.
+
+*** sqflite warning ***
+
+01:15 +215: All tests passed!

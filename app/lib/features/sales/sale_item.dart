@@ -49,17 +49,24 @@ class SaleItem {
   }
 
   factory SaleItem.fromMap(Map<String, dynamic> map) {
+    // Money/quantity columns are integer-typed on both SQLite and Postgres, but
+    // the web JSON decoder can surface a whole number as a `double`. Read every
+    // numeric through `num` so a hydrated cloud row never throws the
+    // "double is not a subtype of int" cast that a bare `as int` would.
     return SaleItem(
       id: map['id'] as String,
       saleId: map['sale_id'] as String,
       productId: map['product_id'] as String,
       productNameSnapshot: map['product_name_snapshot'] as String,
       unitPriceSnapshotMinorUnits:
-          map['unit_price_snapshot_minor_units'] as int,
+          (map['unit_price_snapshot_minor_units'] as num?)?.toInt() ?? 0,
       quantityText: map['quantity_text'] as String,
-      billingQuantityMilliunits: map['billing_quantity_milliunits'] as int?,
-      lineDiscountMinorUnits: map['line_discount_minor_units'] as int,
-      lineTotalMinorUnits: map['line_total_minor_units'] as int,
+      billingQuantityMilliunits: (map['billing_quantity_milliunits'] as num?)
+          ?.toInt(),
+      lineDiscountMinorUnits:
+          (map['line_discount_minor_units'] as num?)?.toInt() ?? 0,
+      lineTotalMinorUnits:
+          (map['line_total_minor_units'] as num?)?.toInt() ?? 0,
       notes: map['notes'] as String?,
     );
   }

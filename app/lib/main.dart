@@ -18,6 +18,7 @@ import 'core/repositories/user_repository.dart';
 import 'core/sync/sync_gateway_backend.dart';
 import 'core/sync/sync_outbox_repository.dart';
 import 'core/sync/sync_service.dart';
+import 'core/theme/app_design.dart';
 import 'core/theme/app_theme.dart';
 import 'features/audit/audit_log_screen.dart';
 import 'features/auth/login_screen.dart';
@@ -80,7 +81,9 @@ Future<void> main() async {
       shiftRepository: shiftRepository,
       financeRepository: financeRepository,
       deviceId: deviceId,
-      initialDarkMode: themeSetting == 'dark',
+      // Dark is the flagship look; honour an explicit 'light' choice, but
+      // default to dark on fresh installs / when unset.
+      initialDarkMode: themeSetting != 'light',
     ),
   );
 }
@@ -152,6 +155,12 @@ class _WholesalePosAppState extends State<WholesalePosApp> {
 
   @override
   Widget build(BuildContext context) {
+    // Point the shared design tokens at the palette matching the active
+    // brightness BEFORE building the tree, so every `AppDesign.xxx` colour
+    // getter the screens read resolves to the right theme this frame.
+    AppDesign.setMode(
+      _themeMode == ThemeMode.light ? Brightness.light : Brightness.dark,
+    );
     return MaterialApp(
       title: 'Wholesale POS',
       debugShowCheckedModeBanner: false,
@@ -406,19 +415,30 @@ class _AuthWrapperState extends State<AuthWrapper> {
     _restoreSession();
   }
 
-  /// On launch, resume the previous sign-in only when the user opted into
-  /// "stay signed in" on this device and a valid, non-expired session exists
-  /// for an account that is still active. Otherwise the login screen shows.
+  /// On launch, resume the previous sign-in unless the user explicitly opted
+  /// OUT (a stored '0'). Persistent sign-in is ON by default so a shop till
+  /// that is simply closed and reopened does not demand the password again.
+  /// On a successful resume the session window is slid forward, so a till used
+  /// at least once per validity period never expires in normal daily use.
   Future<void> _restoreSession() async {
     User? restored;
     final remember = await LocalDatabase.getSetting(
       widget.db,
       SessionStore.rememberKey,
     );
-    if (remember == '1') {
+    if (remember != '0') {
       final session = await _sessions.load();
       if (session != null) {
         restored = await widget.userRepository.getById(session.userId);
+        if (restored != null) {
+          // Renew the token so continuous daily use keeps the sign-in alive.
+          await _sessions.save(
+            SessionData.create(
+              restored.id,
+              lifetime: SessionStore.defaultLifetime,
+            ),
+          );
+        }
       }
     }
     if (!mounted) return;
@@ -434,7 +454,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
       widget.db,
       SessionStore.rememberKey,
     );
-    if (remember == '1') {
+    if (remember != '0') {
       await _sessions.save(
         SessionData.create(user.id, lifetime: SessionStore.defaultLifetime),
       );
@@ -616,6 +636,10 @@ class _MainLayoutState extends State<MainLayout> {
               .label;
           return Scaffold(
             key: _scaffoldKey,
+            backgroundColor: AppDesign.bg,
+            // extendBody:false keeps each child screen's body (and its FAB) above
+            // the floating pill; extendBody:true let them drop behind the nav.
+            extendBody: false,
             appBar: AppBar(
               leading: IconButton(
                 icon: const Icon(Icons.menu),
@@ -625,6 +649,7 @@ class _MainLayoutState extends State<MainLayout> {
             ),
             drawer: _buildDrawer(context, isOwner, navItems),
             body: IndexedStack(index: _selectedIndex, children: screens),
+            bottomNavigationBar: _mobilePillNav(context, isOwner),
           );
         }
 
@@ -635,12 +660,9 @@ class _MainLayoutState extends State<MainLayout> {
               Container(
                 width: sidebarWidth,
                 decoration: BoxDecoration(
-                  color: Theme.of(context).cardColor,
+                  color: AppDesign.bgElevated,
                   border: Border(
-                    right: BorderSide(
-                      color: Theme.of(context).dividerColor,
-                      width: 1,
-                    ),
+                    right: BorderSide(color: AppDesign.stroke, width: 1),
                   ),
                 ),
                 child: Column(
@@ -653,13 +675,16 @@ class _MainLayoutState extends State<MainLayout> {
                           Container(
                             padding: const EdgeInsets.all(8),
                             decoration: BoxDecoration(
-                              color: Theme.of(context).colorScheme.primary,
-                              borderRadius: BorderRadius.circular(6),
+                              gradient: AppDesign.buttonGradient,
+                              borderRadius: BorderRadius.circular(10),
+                              boxShadow: [
+                                AppDesign.blueGlow(alpha: 0.5, blur: 16),
+                              ],
                             ),
-                            child: Icon(
+                            child: const Icon(
                               Icons.storefront,
-                              color: Theme.of(context).colorScheme.onPrimary,
-                              size: 16,
+                              color: AppDesign.onBlue,
+                              size: 18,
                             ),
                           ),
                           const SizedBox(width: 12),
@@ -715,44 +740,67 @@ class _MainLayoutState extends State<MainLayout> {
                       ),
                     ),
                     const Divider(),
-                    ListTile(
+                    InkWell(
                       onTap: () =>
                           setState(() => _selectedIndex = settingsIndex),
-                      leading: CircleAvatar(
-                        radius: 16,
-                        backgroundColor: Theme.of(context).colorScheme.primary,
-                        child: Text(
-                          widget.currentUser.username.isEmpty
-                              ? '?'
-                              : widget.currentUser.username[0].toUpperCase(),
-                          style: TextStyle(
-                            color: Theme.of(context).colorScheme.onPrimary,
-                            fontSize: 12,
-                          ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                          vertical: 12,
                         ),
-                      ),
-                      title: Text(
-                        widget.currentUser.username,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w500,
-                          fontSize: 13,
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 32,
+                              height: 32,
+                              decoration: const BoxDecoration(
+                                shape: BoxShape.circle,
+                                gradient: AppDesign.buttonGradient,
+                              ),
+                              child: Center(
+                                child: Text(
+                                  widget.currentUser.username.isEmpty
+                                      ? '?'
+                                      : widget.currentUser.username[0]
+                                            .toUpperCase(),
+                                  style: const TextStyle(
+                                    color: AppDesign.onBlue,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    widget.currentUser.username,
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 13,
+                                      color: AppDesign.textHi,
+                                    ),
+                                  ),
+                                  Text(
+                                    widget.currentUser.role,
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: AppDesign.textLo,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Icon(
+                              Icons.settings,
+                              size: 16,
+                              color: AppDesign.textLo,
+                            ),
+                          ],
                         ),
-                      ),
-                      subtitle: Text(
-                        widget.currentUser.role,
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Theme.of(context).textTheme.bodySmall?.color,
-                        ),
-                      ),
-                      trailing: Icon(
-                        Icons.settings,
-                        size: 16,
-                        color: Theme.of(context).textTheme.bodySmall?.color,
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 4,
                       ),
                     ),
                   ],
@@ -768,42 +816,147 @@ class _MainLayoutState extends State<MainLayout> {
     );
   }
 
+  /// Floating frosted-glass pill bottom nav for phones. Shows the primary
+  /// destinations plus a "More" button that opens the full drawer.
+  Widget _mobilePillNav(BuildContext context, bool isOwner) {
+    final items = <_NavItem>[
+      const _NavItem(0, Icons.shopping_cart_rounded, 'POS'),
+      const _NavItem(1, Icons.history_rounded, 'History'),
+      const _NavItem(2, Icons.point_of_sale_rounded, 'Register'),
+      if (isOwner) const _NavItem(4, Icons.dashboard_rounded, 'Stats'),
+    ];
+    // A custom bottomNavigationBar does not get the system bottom inset for
+    // free, so wrap in SafeArea(bottom: true) — otherwise the pill collides
+    // with the Android back/home/recents bar and becomes partly unclickable.
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+        child: Container(
+          height: 62,
+          decoration: BoxDecoration(
+            color: AppDesign.bgElevated.withValues(alpha: 0.92),
+            borderRadius: BorderRadius.circular(AppDesign.radiusPill),
+            border: Border.all(color: AppDesign.strokeStrong),
+            boxShadow: AppDesign.cardShadow(),
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            borderRadius: BorderRadius.circular(AppDesign.radiusPill),
+            child: Row(
+              children: [
+                for (final it in items) Expanded(child: _pillItem(it)),
+                _pillMore(),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _pillItem(_NavItem it) {
+    final sel = _selectedIndex == it.index;
+    return InkWell(
+      onTap: () => setState(() => _selectedIndex = it.index),
+      borderRadius: BorderRadius.circular(AppDesign.radiusPill),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            it.icon,
+            size: 22,
+            color: sel ? AppDesign.blueBright : AppDesign.textLo,
+          ),
+          const SizedBox(height: 3),
+          Text(
+            it.label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 10.5,
+              fontWeight: sel ? FontWeight.w700 : FontWeight.w500,
+              color: sel ? AppDesign.textHi : AppDesign.textLo,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _pillMore() {
+    final onMore = _selectedIndex >= 3 && _selectedIndex != 4;
+    return InkWell(
+      onTap: () => _scaffoldKey.currentState?.openDrawer(),
+      borderRadius: BorderRadius.circular(AppDesign.radiusPill),
+      child: SizedBox(
+        width: 52,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.grid_view_rounded,
+              size: 22,
+              color: onMore ? AppDesign.blueBright : AppDesign.textLo,
+            ),
+            const SizedBox(height: 3),
+            Text(
+              'More',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 10.5,
+                fontWeight: onMore ? FontWeight.w700 : FontWeight.w500,
+                color: onMore ? AppDesign.textHi : AppDesign.textLo,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildNavItem(int index, IconData icon, String label) {
     final isSelected = _selectedIndex == index;
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: InkWell(
         onTap: () => setState(() => _selectedIndex = index),
-        borderRadius: BorderRadius.circular(6),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        borderRadius: BorderRadius.circular(12),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
           decoration: BoxDecoration(
             color: isSelected
-                ? Theme.of(context).colorScheme.surface
+                ? AppDesign.blue.withValues(alpha: 0.16)
                 : Colors.transparent,
-            borderRadius: BorderRadius.circular(6),
-            border: isSelected
-                ? Border.all(color: Theme.of(context).dividerColor)
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isSelected
+                  ? AppDesign.blue.withValues(alpha: 0.35)
+                  : Colors.transparent,
+            ),
+            boxShadow: isSelected
+                ? [AppDesign.blueGlow(alpha: 0.18, blur: 16)]
                 : null,
           ),
           child: Row(
             children: [
               Icon(
                 icon,
-                size: 18,
-                color: isSelected
-                    ? Theme.of(context).colorScheme.onSurface
-                    : Theme.of(context).textTheme.bodySmall?.color,
+                size: 19,
+                color: isSelected ? AppDesign.blueBright : AppDesign.textLo,
               ),
               const SizedBox(width: 12),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-                  color: isSelected
-                      ? Theme.of(context).colorScheme.onSurface
-                      : Theme.of(context).textTheme.bodySmall?.color,
+              Expanded(
+                child: Text(
+                  label,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                    color: isSelected ? AppDesign.textHi : AppDesign.textLo,
+                  ),
                 ),
               ),
             ],

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/licensing/license_validator.dart';
+import '../../core/theme/app_design.dart';
 
 class ActivationScreen extends StatefulWidget {
   final VoidCallback onActivated;
@@ -67,59 +68,70 @@ class _ActivationScreenState extends State<ActivationScreen> {
   Widget build(BuildContext context) {
     final displayError = _submitError ?? widget.errorMessage;
     return Scaffold(
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          // ConstrainedBox (not a fixed width) so the card shrinks to fit a
-          // phone instead of overflowing at narrow widths.
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 500),
-            child: Container(
-              padding: const EdgeInsets.all(32),
-              decoration: BoxDecoration(
-                color: Theme.of(context).cardColor,
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.1),
-                    blurRadius: 20,
-                    offset: const Offset(0, 10),
-                  ),
-                ],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.lock_person, size: 64, color: Colors.orange),
-                  const SizedBox(height: 16),
-                  Text(
-                    'License Activation',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.headlineSmall,
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'This software requires a valid license to run.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.grey),
-                  ),
-                  if (displayError != null) ...[
-                    const SizedBox(height: 16),
-                    Text(
-                      displayError,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: Colors.red,
-                        fontWeight: FontWeight.bold,
+      body: AppBackground(
+        child: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              // ConstrainedBox (not a fixed width) so the card shrinks to fit a
+              // phone instead of overflowing at narrow widths.
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 500),
+                child: GlassCard(
+                  padding: const EdgeInsets.all(32),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 84,
+                        height: 84,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: AppDesign.buttonGradient,
+                          boxShadow: [AppDesign.blueGlow()],
+                        ),
+                        child: const Icon(
+                          Icons.lock_person_rounded,
+                          size: 42,
+                          color: Colors.white,
+                        ),
                       ),
-                    ),
-                  ],
-                  const SizedBox(height: 24),
-                  if (widget.showCodeEntry)
-                    ..._buildCodeEntry(context)
-                  else
-                    ..._buildDesktopInstructions(context),
-                ],
+                      const SizedBox(height: 22),
+                      Text(
+                        'License Activation',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: AppDesign.textHi,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.4,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'This software requires a valid license to run.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: AppDesign.textLo),
+                      ),
+                      if (displayError != null) ...[
+                        const SizedBox(height: 16),
+                        Text(
+                          displayError,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: AppDesign.danger,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 24),
+                      if (widget.showCodeEntry)
+                        ..._buildCodeEntry(context)
+                      else
+                        ..._buildDesktopInstructions(context),
+                    ],
+                  ),
+                ),
               ),
             ),
           ),
@@ -151,32 +163,41 @@ class _ActivationScreenState extends State<ActivationScreen> {
           hintText:
               'Your provider sends this code once per shop, e.g.\n'
               'MERCA-7Q2F-9K3X-4D8M-BN',
-          border: OutlineInputBorder(),
         ),
-        style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
-      ),
-      const SizedBox(height: 16),
-      SizedBox(
-        width: double.infinity,
-        height: 50,
-        child: FilledButton(
-          onPressed: _submitting ? null : _submit,
-          child: _submitting
-              ? const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Text('Activate'),
+        style: TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 13,
+          color: AppDesign.textHi,
         ),
       ),
       const SizedBox(height: 16),
-      const Text(
+      if (_submitting)
+        const SizedBox(
+          height: 52,
+          child: Center(
+            child: SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2.4),
+            ),
+          ),
+        )
+      else
+        GlowButton(
+          label: 'Activate',
+          icon: Icons.bolt_rounded,
+          onPressed: _submit,
+        ),
+      const SizedBox(height: 16),
+      Text(
         'One code covers the seats you bought (a shop PC plus phones). If you '
         'change device, deactivate an old one under Settings \u2192 Devices \u2014 no need '
         'to contact your provider.',
         textAlign: TextAlign.center,
-        style: TextStyle(fontSize: 12, color: Colors.grey),
+        style: TextStyle(
+          fontSize: 12,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
       ),
     ];
   }

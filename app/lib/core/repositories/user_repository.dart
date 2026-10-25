@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:isolate';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
@@ -8,10 +7,17 @@ import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/user.dart';
+import '../util/isolate_runner.dart'
+    if (dart.library.io) '../util/isolate_runner_native.dart';
 
-class UserRepository {
-  final Database _db;
-  UserRepository(this._db);
+/// Data-access contract for user accounts and authentication.
+///
+/// [SqfliteUserRepository] is the local-first implementation; the cloud
+/// implementation added in the PWA milestones honours the same contract.
+/// The shared role/password policy lives here as statics so both storage
+/// backends and every caller agree on the exact same rules.
+abstract class UserRepository {
+  factory UserRepository(Database db) = SqfliteUserRepository;
 
   static const int defaultIterations = 210000;
   static const Set<String> roles = {'OWNER', 'CASHIER'};
@@ -37,6 +43,45 @@ class UserRepository {
   /// SQLite file and cracks the PBKDF2 hashes offline.
   static const int maxFailedAttempts = 5;
   static const Duration loginCooldown = Duration(seconds: 30);
+
+  Future<bool> hasUsers();
+
+  Future<User> createFirstOwner(String username, String password);
+
+  Future<User?> authenticate(String username, String password);
+
+  Future<void> createUser(String username, String password, String role);
+
+  Future<void> changePassword({
+    required String userId,
+    required String currentPassword,
+    required String newPassword,
+  });
+
+  Future<void> resetPassword({
+    required String targetUserId,
+    required String newPassword,
+    required String actingUserId,
+  });
+
+  Future<void> setUserActive({
+    required String targetUserId,
+    required bool active,
+    required String actingUserId,
+  });
+
+  Future<List<User>> getAllUsers();
+
+  /// Rehydrates a user for a restored session. Returns null when the account
+  /// is missing or has been deactivated since sign-in, so a persisted session
+  /// can never resurrect a revoked login.
+  Future<User?> getById(String id);
+}
+
+class SqfliteUserRepository implements UserRepository {
+  final Database _db;
+  SqfliteUserRepository(this._db);
+
   final Map<String, _LoginGuard> _loginGuards = {};
 
   static const String _pbkdf2Prefix = 'pbkdf2-sha256\$v=1\$';
@@ -49,21 +94,30 @@ class UserRepository {
     return base64Url.encode(List<int>.generate(16, (i) => random.nextInt(256)));
   }
 
-  /// Derives a key with standard PBKDF2-HMAC-SHA256 on a background isolate so
-  /// the UI stays responsive during the 210k rounds.
+  /// Derives a key with standard PBKDF2-HMAC-SHA256. On native this runs on a
+  /// background isolate so the UI stays responsive during the 210k rounds; the
+  /// web build resolves [runIsolated] to an inline call (browsers have no
+  /// isolates, and web login is hashed server-side by `pos-api`, so this local
+  /// path never runs there).
   static Future<String> _derive(String password, String salt, int iterations) {
-    return Isolate.run(() async {
-      final algorithm = cryptography.Pbkdf2(
-        macAlgorithm: cryptography.Hmac(cryptography.Sha256()),
-        iterations: iterations,
-        bits: 256,
-      );
-      final key = await algorithm.deriveKey(
-        secretKey: cryptography.SecretKey(utf8.encode(password)),
-        nonce: utf8.encode(salt),
-      );
-      return base64.encode(await key.extractBytes());
-    });
+    return runIsolated(() => _deriveKey(password, salt, iterations));
+  }
+
+  static Future<String> _deriveKey(
+    String password,
+    String salt,
+    int iterations,
+  ) async {
+    final algorithm = cryptography.Pbkdf2(
+      macAlgorithm: cryptography.Hmac(cryptography.Sha256()),
+      iterations: iterations,
+      bits: 256,
+    );
+    final key = await algorithm.deriveKey(
+      secretKey: cryptography.SecretKey(utf8.encode(password)),
+      nonce: utf8.encode(salt),
+    );
+    return base64.encode(await key.extractBytes());
   }
 
   String _formatHash(int iterations, String derived) {
@@ -71,8 +125,12 @@ class UserRepository {
   }
 
   Future<String> _hashPassword(String password, String salt) async {
-    final derived = await _derive(password, salt, defaultIterations);
-    return _formatHash(defaultIterations, derived);
+    final derived = await _derive(
+      password,
+      salt,
+      UserRepository.defaultIterations,
+    );
+    return _formatHash(UserRepository.defaultIterations, derived);
   }
 
   /// Password format used by releases before schema 5: 10,000 rounds of
@@ -158,7 +216,7 @@ class UserRepository {
   }
 
   static void _validatePassword(String password, String role) {
-    final min = minPasswordLengthFor(role);
+    final min = UserRepository.minPasswordLengthFor(role);
     if (password.length < min) {
       throw Exception(
         'Password must be at least $min characters for a '
@@ -170,17 +228,19 @@ class UserRepository {
   void _recordFailedAttempt(String guardKey) {
     final guard = _loginGuards.putIfAbsent(guardKey, () => _LoginGuard());
     guard.failures += 1;
-    if (guard.failures >= maxFailedAttempts) {
-      guard.lockedUntil = DateTime.now().add(loginCooldown);
+    if (guard.failures >= UserRepository.maxFailedAttempts) {
+      guard.lockedUntil = DateTime.now().add(UserRepository.loginCooldown);
       guard.failures = 0;
     }
   }
 
+  @override
   Future<bool> hasUsers() async {
     final result = await _db.rawQuery('SELECT COUNT(*) as count FROM users');
     return (result.first['count'] as int) > 0;
   }
 
+  @override
   Future<User> createFirstOwner(String username, String password) async {
     final name = username.trim();
     if (name.isEmpty) {
@@ -216,6 +276,7 @@ class UserRepository {
     return user;
   }
 
+  @override
   Future<User?> authenticate(String username, String password) async {
     final name = username.trim();
     final guardKey = name.toLowerCase();
@@ -272,12 +333,13 @@ class UserRepository {
     return null;
   }
 
+  @override
   Future<void> createUser(String username, String password, String role) async {
     final name = username.trim();
     if (name.isEmpty) {
       throw Exception('Username cannot be empty.');
     }
-    if (!roles.contains(role)) {
+    if (!UserRepository.roles.contains(role)) {
       throw Exception('Invalid role.');
     }
     _validatePassword(password, role);
@@ -312,6 +374,7 @@ class UserRepository {
     );
   }
 
+  @override
   Future<void> changePassword({
     required String userId,
     required String currentPassword,
@@ -337,6 +400,7 @@ class UserRepository {
     );
   }
 
+  @override
   Future<void> resetPassword({
     required String targetUserId,
     required String newPassword,
@@ -371,6 +435,7 @@ class UserRepository {
     );
   }
 
+  @override
   Future<void> setUserActive({
     required String targetUserId,
     required bool active,
@@ -428,6 +493,7 @@ class UserRepository {
     });
   }
 
+  @override
   Future<List<User>> getAllUsers() async {
     final maps = await _db.query('users', orderBy: 'username ASC');
     return maps.map((m) => User.fromMap(m)).toList();
@@ -436,6 +502,7 @@ class UserRepository {
   /// Rehydrates a user for a restored session. Returns null when the account
   /// is missing or has been deactivated since sign-in, so a persisted session
   /// can never resurrect a revoked login.
+  @override
   Future<User?> getById(String id) async {
     final maps = await _db.query(
       'users',

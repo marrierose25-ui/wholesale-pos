@@ -61,7 +61,7 @@ class FinanceEntry {
       id: map['id'] as String,
       categoryId: map['category_id'] as String,
       source: map['source'] as String,
-      amountMinorUnits: map['amount_minor_units'] as int,
+      amountMinorUnits: (map['amount_minor_units'] as num?)?.toInt() ?? 0,
       description: map['description'] as String?,
       status: map['status'] as String,
       entryDate: DateTime.parse(map['entry_date'] as String),

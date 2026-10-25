@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/models/user.dart';
 import '../../core/repositories/user_repository.dart';
+import '../../core/theme/app_design.dart';
 import '../../core/theme/app_theme.dart';
 
 class UserManagementScreen extends StatefulWidget {
@@ -144,62 +145,74 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     }
 
     return Scaffold(
+      backgroundColor: AppDesign.bg,
       appBar: AppBar(
         title: const Text('User Management'),
         actions: [
           IconButton(icon: const Icon(Icons.refresh), onPressed: _loadUsers),
         ],
       ),
-      body: ListView.separated(
-        itemCount: _users.length,
-        separatorBuilder: (context, index) => const Divider(height: 1),
-        itemBuilder: (context, index) {
-          final user = _users[index];
-          final isSelf = user.id == widget.currentUser.id;
-          return ListTile(
-            leading: CircleAvatar(
-              backgroundColor: user.role == 'OWNER' ? Colors.blue : Colors.grey,
-              child: const Icon(Icons.person, color: Colors.white),
-            ),
-            title: Text(
-              user.username,
-              style: TextStyle(
-                color: user.isActive ? null : AppTheme.muted,
-                fontWeight: FontWeight.w500,
+      body: AppBackground(
+        child: ListView.separated(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+          itemCount: _users.length,
+          separatorBuilder: (context, index) => const SizedBox(height: 12),
+          itemBuilder: (context, index) {
+            final user = _users[index];
+            final isSelf = user.id == widget.currentUser.id;
+            return GlassCard(
+              padding: EdgeInsets.zero,
+              child: ListTile(
+              leading: CircleAvatar(
+                backgroundColor: user.role == 'OWNER'
+                    ? AppDesign.blue
+                    : AppDesign.textFaint,
+                foregroundColor: Colors.white,
+                child: const Icon(Icons.person),
               ),
-            ),
-            subtitle: Text(isSelf ? '${user.role} (you)' : user.role),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (!user.isActive)
-                  const Chip(
-                    label: Text('Disabled'),
-                    backgroundColor: AppTheme.danger,
-                    labelStyle: TextStyle(color: Colors.white, fontSize: 11),
-                  ),
-                PopupMenuButton<String>(
-                  tooltip: 'User actions',
-                  onSelected: (value) {
-                    if (value == 'reset') _resetPassword(user);
-                    if (value == 'toggle') _toggleActive(user);
-                  },
-                  itemBuilder: (context) => [
-                    const PopupMenuItem(
-                      value: 'reset',
-                      child: Text('Reset Password'),
-                    ),
-                    if (!isSelf)
-                      PopupMenuItem(
-                        value: 'toggle',
-                        child: Text(user.isActive ? 'Deactivate' : 'Activate'),
-                      ),
-                  ],
+              title: Text(
+                user.username,
+                style: TextStyle(
+                  color: user.isActive ? null : AppTheme.muted,
+                  fontWeight: FontWeight.w500,
                 ),
-              ],
-            ),
-          );
-        },
+              ),
+              subtitle: Text(isSelf ? '${user.role} (you)' : user.role),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (!user.isActive)
+                    const Chip(
+                      label: Text('Disabled'),
+                      backgroundColor: AppTheme.danger,
+                      labelStyle: TextStyle(color: Colors.white, fontSize: 11),
+                    ),
+                  PopupMenuButton<String>(
+                    tooltip: 'User actions',
+                    onSelected: (value) {
+                      if (value == 'reset') _resetPassword(user);
+                      if (value == 'toggle') _toggleActive(user);
+                    },
+                    itemBuilder: (context) => [
+                      const PopupMenuItem(
+                        value: 'reset',
+                        child: Text('Reset Password'),
+                      ),
+                      if (!isSelf)
+                        PopupMenuItem(
+                          value: 'toggle',
+                          child: Text(
+                            user.isActive ? 'Deactivate' : 'Activate',
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+              ),
+            );
+          },
+        ),
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _showAddUserDialog,

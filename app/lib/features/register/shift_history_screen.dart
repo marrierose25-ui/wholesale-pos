@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/repositories/shift_repository.dart';
+import '../../core/theme/app_design.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/date_range.dart';
 import '../../core/utils/money_utils.dart';
@@ -95,7 +96,7 @@ class _ShiftHistoryScreenState extends State<ShiftHistoryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      backgroundColor: AppDesign.bg,
       appBar: AppBar(
         title: const Text('Register History'),
         actions: [
@@ -103,15 +104,17 @@ class _ShiftHistoryScreenState extends State<ShiftHistoryScreen> {
           const SizedBox(width: 16),
         ],
       ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
-            child: _buildFilters(),
-          ),
-          const Divider(height: 1),
-          Expanded(child: _buildBody()),
-        ],
+      body: AppBackground(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+              child: _buildFilters(),
+            ),
+            const Divider(height: 1),
+            Expanded(child: _buildBody()),
+          ],
+        ),
       ),
     );
   }
@@ -156,7 +159,7 @@ class _ShiftHistoryScreenState extends State<ShiftHistoryScreen> {
         const SizedBox(height: 10),
         Row(
           children: [
-            const Text(
+            Text(
               'Status:  ',
               style: TextStyle(fontSize: 13, color: AppTheme.muted),
             ),
@@ -209,7 +212,9 @@ class _ShiftHistoryScreenState extends State<ShiftHistoryScreen> {
                 ? 'No register sessions recorded yet.'
                 : 'No register sessions match these filters.',
             textAlign: TextAlign.center,
-            style: TextStyle(color: Theme.of(context).textTheme.bodySmall?.color),
+            style: TextStyle(
+              color: Theme.of(context).textTheme.bodySmall?.color,
+            ),
           ),
         ),
       );
@@ -228,13 +233,10 @@ class _ShiftHistoryScreenState extends State<ShiftHistoryScreen> {
     return ListTile(
       onTap: () => _showDetail(shift),
       contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-      leading: CircleAvatar(
-        backgroundColor: (isOpen ? AppTheme.success : AppTheme.muted)
-            .withValues(alpha: 0.15),
-        child: Icon(
-          isOpen ? Icons.play_circle_outline : Icons.check_circle_outline,
-          color: isOpen ? AppTheme.success : AppTheme.muted,
-        ),
+      leading: IconChip(
+        icon: isOpen ? Icons.play_circle_outline : Icons.check_circle_outline,
+        size: 40,
+        color: isOpen ? AppDesign.success : AppDesign.textFaint,
       ),
       title: Row(
         children: [
@@ -350,7 +352,10 @@ class _ShiftHistoryScreenState extends State<ShiftHistoryScreen> {
                   summary['bank_sales'] ?? 0,
                 ),
                 if ((summary['voids'] ?? 0) > 0)
-                  _breakdownRow('Voids attributed to this shift', summary['voids']!),
+                  _breakdownRow(
+                    'Voids attributed to this shift',
+                    summary['voids']!,
+                  ),
                 if (!isOpen) ...[
                   const Divider(height: 24),
                   _breakdownRow(
@@ -386,10 +391,7 @@ class _ShiftHistoryScreenState extends State<ShiftHistoryScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(
-            label,
-            style: const TextStyle(fontSize: 13, color: AppTheme.muted),
-          ),
+          Text(label, style: TextStyle(fontSize: 13, color: AppTheme.muted)),
           Flexible(
             child: Text(
               value,
@@ -428,7 +430,8 @@ class _ShiftHistoryScreenState extends State<ShiftHistoryScreen> {
             style: TextStyle(
               fontSize: 13,
               fontWeight: emphasize ? FontWeight.bold : null,
-              color: color ??
+              color:
+                  color ??
                   (emphasize ? Theme.of(context).colorScheme.primary : null),
             ),
           ),

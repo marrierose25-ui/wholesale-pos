@@ -26,7 +26,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Enter your activation code:'), findsOneWidget);
-    expect(find.widgetWithText(FilledButton, 'Activate'), findsOneWidget);
+    // The primary action is the premium GlowButton; assert on its rendered
+    // label so the guard stays coupled to the UI, not the button widget type.
+    expect(find.text('Activate'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

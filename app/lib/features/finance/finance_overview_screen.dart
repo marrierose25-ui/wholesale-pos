@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/models/user.dart';
 import '../../core/repositories/finance_repository.dart';
+import '../../core/theme/app_design.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/money_utils.dart';
 import 'finance_person_screen.dart';
@@ -122,7 +123,7 @@ class _FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
     );
 
     return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      backgroundColor: AppDesign.bg,
       appBar: AppBar(
         title: const Text('Money Tracking'),
         actions: [
@@ -130,90 +131,98 @@ class _FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
           const SizedBox(width: 16),
         ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-          ? Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
+      body: AppBackground(
+        child: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : _error != null
+            ? Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(_error!),
+                    const SizedBox(height: 8),
+                    TextButton(onPressed: _load, child: const Text('Retry')),
+                  ],
+                ),
+              )
+            : ListView(
+                padding: const EdgeInsets.all(24),
                 children: [
-                  Text(_error!),
-                  const SizedBox(height: 8),
-                  TextButton(onPressed: _load, child: const Text('Retry')),
-                ],
-              ),
-            )
-          : ListView(
-              padding: const EdgeInsets.all(24),
-              children: [
-                Card(
-                  margin: EdgeInsets.zero,
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            const Icon(Icons.lock_outline, size: 16),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                'Private area — visible only to you. Manual '
-                                'records of money taken from banks or other '
-                                'sources, organized by person.',
-                                style: TextStyle(
-                                  color: Theme.of(context)
-                                      .textTheme
-                                      .bodySmall
-                                      ?.color,
-                                  fontSize: 12,
+                  GlassCard(
+                    padding: EdgeInsets.zero,
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const IconChip(
+                                icon: Icons.lock_rounded,
+                                size: 34,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Private area — visible only to you. Manual '
+                                  'records of money taken from banks or other '
+                                  'sources, organized by person.',
+                                  style: TextStyle(
+                                    color: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.color,
+                                    fontSize: 12,
+                                  ),
                                 ),
                               ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            'Pending Across Everyone',
+                            style: TextStyle(
+                              color: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.color,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
                             ),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          'Pending Across Everyone',
-                          style: TextStyle(
-                            color: Theme.of(context).textTheme.bodySmall?.color,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
                           ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          MoneyUtils.formatBr(totalPending),
-                          style: TextStyle(
-                            fontSize: 28,
-                            fontWeight: FontWeight.bold,
-                            color: Theme.of(context).colorScheme.primary,
+                          const SizedBox(height: 8),
+                          Text(
+                            MoneyUtils.formatBr(totalPending),
+                            style: TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.bold,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 24),
-                if (_summaries.isEmpty)
-                  Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(32),
-                      child: Text(
-                        'No people yet. Add the names you want to track '
-                        'money for.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: Theme.of(context).textTheme.bodySmall?.color,
-                        ),
+                        ],
                       ),
                     ),
-                  )
-                else
-                  ..._summaries.map(_buildPersonTile),
-              ],
-            ),
+                  ),
+                  const SizedBox(height: 24),
+                  if (_summaries.isEmpty)
+                    Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(32),
+                        child: Text(
+                          'No people yet. Add the names you want to track '
+                          'money for.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Theme.of(context).textTheme.bodySmall?.color,
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    ..._summaries.map(_buildPersonTile),
+                ],
+              ),
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _showAddPersonDialog,
         icon: const Icon(Icons.person_add),
@@ -227,31 +236,48 @@ class _FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
     final pendingCount = summary['pending_count'] as int? ?? 0;
     final pendingTotal = summary['pending_total'] as int? ?? 0;
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: Theme.of(context).colorScheme.primary,
-          child: Text(
-            name.isEmpty ? '?' : name[0].toUpperCase(),
-            style: const TextStyle(color: Colors.white, fontSize: 14),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: GlassCard(
+        padding: EdgeInsets.zero,
+        child: ListTile(
+          leading: Container(
+            width: 40,
+            height: 40,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: AppDesign.buttonGradient,
+            ),
+            child: Center(
+              child: Text(
+                name.isEmpty ? '?' : name[0].toUpperCase(),
+                style: const TextStyle(
+                  color: AppDesign.onBlue,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                ),
+              ),
+            ),
           ),
+          title: Text(
+            name,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          subtitle: Text(
+            pendingCount == 0
+                ? 'No pending entries'
+                : '$pendingCount pending • ${MoneyUtils.formatBr(pendingTotal)}',
+          ),
+          trailing: PopupMenuButton<String>(
+            onSelected: (value) {
+              if (value == 'rename') _showRenameDialog(summary);
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: 'rename', child: Text('Rename')),
+            ],
+          ),
+          onTap: () => _openPerson(summary),
         ),
-        title: Text(name, style: const TextStyle(fontWeight: FontWeight.w500)),
-        subtitle: Text(
-          pendingCount == 0
-              ? 'No pending entries'
-              : '$pendingCount pending • ${MoneyUtils.formatBr(pendingTotal)}',
-        ),
-        trailing: PopupMenuButton<String>(
-          onSelected: (value) {
-            if (value == 'rename') _showRenameDialog(summary);
-          },
-          itemBuilder: (context) => const [
-            PopupMenuItem(value: 'rename', child: Text('Rename')),
-          ],
-        ),
-        onTap: () => _openPerson(summary),
       ),
     );
   }
@@ -306,8 +332,8 @@ class _NameDialogState extends State<_NameDialog> {
             onSubmitted: (_) => _submit(),
           ),
           if (widget.title == 'Rename Person')
-            const Padding(
-              padding: EdgeInsets.only(top: 12),
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
               child: Text(
                 'Renaming keeps all existing entries and history.',
                 style: TextStyle(fontSize: 12, color: AppTheme.muted),

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/repositories/sale_repository.dart';
+import '../../core/theme/app_design.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/date_range.dart';
 import '../../core/utils/money_utils.dart';
@@ -162,7 +163,7 @@ class DashboardScreenState extends State<DashboardScreen> {
     }
 
     return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      backgroundColor: AppDesign.bg,
       appBar: AppBar(
         title: const Text('Dashboard'),
         actions: [
@@ -170,113 +171,82 @@ class DashboardScreenState extends State<DashboardScreen> {
           const SizedBox(width: 16),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: loadDashboard,
-        child: ListView(
-          padding: const EdgeInsets.all(24),
-          children: [
-            _buildPeriodBar(),
-            const SizedBox(height: 24),
-            Wrap(
-              spacing: 16,
-              runSpacing: 16,
-              children: [
-                _buildStatCard(
-                  'Sales Revenue',
-                  MoneyUtils.formatBr(_stats['revenue'] ?? 0),
-                  isPrimary: true,
-                ),
-                _buildStatCard(
-                  'Completed Sales',
-                  '${_stats['sales_count'] ?? 0}',
-                ),
-                _buildStatCard(
-                  'Cash Collected',
-                  MoneyUtils.formatBr(_stats['cash_revenue'] ?? 0),
-                ),
-                _buildStatCard(
-                  'Bank Collected',
-                  MoneyUtils.formatBr(_stats['bank_revenue'] ?? 0),
-                ),
-                _buildStatCard(
-                  'Average per Sale',
-                  MoneyUtils.formatBr(_stats['average_sale'] ?? 0),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Revenue from completed sales only. This app does not track '
-              'costs, so revenue is not profit.',
-              style: TextStyle(
-                color: Theme.of(context).textTheme.bodySmall?.color,
-                fontSize: 12,
+      body: AppBackground(
+        child: RefreshIndicator(
+          onRefresh: loadDashboard,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 32),
+            children: [
+              _buildHeroBalance(),
+              const SizedBox(height: 20),
+              _buildPeriodBar(),
+              const SizedBox(height: 20),
+              _buildStatGrid(),
+              const SizedBox(height: 20),
+              _buildComparisonStrip(),
+              const SizedBox(height: 24),
+              DashboardPanel(
+                title: 'Revenue Trend',
+                subtitle: _periodLabel,
+                child: RevenueTrendChart(points: _trend),
               ),
-            ),
-            const SizedBox(height: 20),
-            _buildComparisonStrip(),
-            const SizedBox(height: 24),
-            DashboardPanel(
-              title: 'Revenue Trend',
-              subtitle: _periodLabel,
-              child: RevenueTrendChart(points: _trend),
-            ),
-            const SizedBox(height: 16),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final split = DashboardPanel(
-                  title: 'Payment Split',
-                  subtitle: 'Cash vs bank collections',
-                  child: PaymentSplitBar(
-                    cashMinorUnits: _stats['cash_revenue'] ?? 0,
-                    bankMinorUnits: _stats['bank_revenue'] ?? 0,
-                  ),
-                );
-                final top = DashboardPanel(
-                  title: 'Top Products',
-                  subtitle: 'By revenue',
-                  child: TopProductsBar(rows: _topProducts),
-                );
-                if (constraints.maxWidth < 800) {
-                  return Column(
-                    children: [split, const SizedBox(height: 16), top],
+              const SizedBox(height: 16),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final split = DashboardPanel(
+                    title: 'Payment Split',
+                    subtitle: 'Cash vs bank collections',
+                    child: PaymentSplitBar(
+                      cashMinorUnits: _stats['cash_revenue'] ?? 0,
+                      bankMinorUnits: _stats['bank_revenue'] ?? 0,
+                    ),
                   );
-                }
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(child: split),
-                    const SizedBox(width: 16),
-                    Expanded(child: top),
-                  ],
-                );
-              },
-            ),
-            const SizedBox(height: 24),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final recentCard = _buildRecentSalesCard();
-                final statusCard = _buildStatusCard();
-                if (constraints.maxWidth < 900) {
-                  return Column(
+                  final top = DashboardPanel(
+                    title: 'Top Products',
+                    subtitle: 'By revenue',
+                    child: TopProductsBar(rows: _topProducts),
+                  );
+                  if (constraints.maxWidth < 800) {
+                    return Column(
+                      children: [split, const SizedBox(height: 16), top],
+                    );
+                  }
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      recentCard,
-                      const SizedBox(height: 24),
-                      statusCard,
+                      Expanded(child: split),
+                      const SizedBox(width: 16),
+                      Expanded(child: top),
                     ],
                   );
-                }
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(flex: 2, child: recentCard),
-                    const SizedBox(width: 24),
-                    Expanded(child: statusCard),
-                  ],
-                );
-              },
-            ),
-          ],
+                },
+              ),
+              const SizedBox(height: 24),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final recentCard = _buildRecentSalesCard();
+                  final statusCard = _buildStatusCard();
+                  if (constraints.maxWidth < 900) {
+                    return Column(
+                      children: [
+                        recentCard,
+                        const SizedBox(height: 24),
+                        statusCard,
+                      ],
+                    );
+                  }
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(flex: 2, child: recentCard),
+                      const SizedBox(width: 24),
+                      Expanded(child: statusCard),
+                    ],
+                  );
+                },
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -289,6 +259,104 @@ class DashboardScreenState extends State<DashboardScreen> {
           '${_formatDate(_customRange!.end)}';
     }
     return _period.label;
+  }
+
+  /// Big glowing balance figure at the top of the dashboard.
+  Widget _buildHeroBalance() {
+    final revenue = _stats['revenue'] ?? 0;
+    final pct = _prevRevenue > 0
+        ? (revenue - _prevRevenue) / _prevRevenue * 100
+        : 0.0;
+    return GlassCard(
+      padding: const EdgeInsets.all(22),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const IconChip(
+                icon: Icons.account_balance_wallet_rounded,
+                size: 38,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Total revenue',
+                  style: TextStyle(
+                    color: AppDesign.textLo,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              if (_prevRevenue > 0) TrendChip(percent: pct),
+            ],
+          ),
+          const SizedBox(height: 16),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              MoneyUtils.formatBr(revenue),
+              style: TextStyle(
+                color: AppDesign.textHi,
+                fontSize: 40,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -1,
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Revenue from completed sales only. This app does not track '
+            'costs, so revenue is not profit.',
+            style: TextStyle(color: AppDesign.textFaint, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Responsive grid of glass stat tiles.
+  Widget _buildStatGrid() {
+    final tiles = <Widget>[
+      _buildStatCard(
+        'Completed Sales',
+        '${_stats['sales_count'] ?? 0}',
+        Icons.receipt_long_rounded,
+      ),
+      _buildStatCard(
+        'Cash Collected',
+        MoneyUtils.formatBr(_stats['cash_revenue'] ?? 0),
+        Icons.payments_rounded,
+        color: AppDesign.success,
+      ),
+      _buildStatCard(
+        'Bank Collected',
+        MoneyUtils.formatBr(_stats['bank_revenue'] ?? 0),
+        Icons.account_balance_rounded,
+      ),
+      _buildStatCard(
+        'Average per Sale',
+        MoneyUtils.formatBr(_stats['average_sale'] ?? 0),
+        Icons.trending_up_rounded,
+      ),
+    ];
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns = constraints.maxWidth >= 720 ? 4 : 2;
+        const spacing = 14.0;
+        final itemWidth =
+            (constraints.maxWidth - spacing * (columns - 1)) / columns;
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          children: tiles
+              .map((t) => SizedBox(width: itemWidth, child: t))
+              .toList(),
+        );
+      },
+    );
   }
 
   /// A compact strip of comparison metrics: revenue vs the previous period,
@@ -317,8 +385,8 @@ class DashboardScreenState extends State<DashboardScreen> {
     final voidCount = _stats['void_count'] ?? 0;
     final pendingCount = _stats['pending_void_requests'] ?? 0;
 
-    return Card(
-      margin: EdgeInsets.zero,
+    return GlassCard(
+      padding: EdgeInsets.zero,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
         child: Wrap(
@@ -416,8 +484,8 @@ class DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildRecentSalesCard() {
-    return Card(
-      margin: EdgeInsets.zero,
+    return GlassCard(
+      padding: EdgeInsets.zero,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -494,8 +562,8 @@ class DashboardScreenState extends State<DashboardScreen> {
 
   Widget _buildStatusCard() {
     final isOpen = (_stats['is_shift_open'] ?? 0) == 1;
-    return Card(
-      margin: EdgeInsets.zero,
+    return GlassCard(
+      padding: EdgeInsets.zero,
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
@@ -537,38 +605,42 @@ class DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildStatCard(String title, String value, {bool isPrimary = false}) {
-    return SizedBox(
-      width: 240,
-      child: Card(
-        margin: EdgeInsets.zero,
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: TextStyle(
-                  color: Theme.of(context).textTheme.bodySmall?.color,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                value,
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  color: isPrimary
-                      ? Theme.of(context).colorScheme.primary
-                      : Theme.of(context).colorScheme.onSurface,
-                ),
-              ),
-            ],
+  Widget _buildStatCard(
+    String title,
+    String value,
+    IconData icon, {
+    Color? color,
+  }) {
+    return GlassCard(
+      radius: AppDesign.radiusCardSm,
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          IconChip(icon: icon, size: 34, color: color),
+          const SizedBox(height: 14),
+          Text(
+            title,
+            style: TextStyle(
+              color: AppDesign.textLo,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
           ),
-        ),
+          const SizedBox(height: 4),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              style: TextStyle(
+                color: AppDesign.textHi,
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

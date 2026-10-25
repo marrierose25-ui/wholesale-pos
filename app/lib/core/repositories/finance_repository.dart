@@ -11,10 +11,66 @@ import 'sale_repository.dart';
 /// reads included — verifies an active OWNER inside the query or transaction,
 /// so cashiers are blocked at the data layer, not just by hidden navigation.
 /// Financial entries are fully separate from sales and never affect revenue.
-class FinanceRepository {
+abstract class FinanceRepository {
+  factory FinanceRepository(Database db) = SqfliteFinanceRepository;
+
+  Future<List<FinanceCategory>> getCategories(String ownerId);
+
+  /// Categories with pending entry counts and pending totals, for the
+  /// overview list.
+  Future<List<Map<String, dynamic>>> getCategorySummaries(String ownerId);
+
+  Future<FinanceCategory> createCategory({
+    required String ownerId,
+    required String name,
+  });
+
+  /// Renames a person. Entries stay attached to the same row, so history is
+  /// preserved and remains searchable under the new name.
+  Future<void> renameCategory({
+    required String ownerId,
+    required String categoryId,
+    required String newName,
+  });
+
+  Future<FinanceEntry> addEntry({
+    required String ownerId,
+    required String categoryId,
+    required String source,
+    required int amountMinorUnits,
+    String? description,
+    DateTime? entryDate,
+  });
+
+  Future<void> updateEntry({
+    required String ownerId,
+    required String entryId,
+    required String source,
+    required int amountMinorUnits,
+    String? description,
+    DateTime? entryDate,
+  });
+
+  Future<void> markCompleted({
+    required String ownerId,
+    required String entryId,
+  });
+
+  Future<List<FinanceEntry>> searchEntries({
+    required String ownerId,
+    String? categoryId,
+    String? searchQuery,
+    String? status,
+    DateRange? dateRange,
+  });
+
+  Future<Map<String, int>> getPersonTotals(String ownerId, String categoryId);
+}
+
+class SqfliteFinanceRepository implements FinanceRepository {
   final Database _db;
 
-  FinanceRepository(this._db);
+  SqfliteFinanceRepository(this._db);
 
   static const int _maxNameLength = 80;
   static const int _maxSourceLength = 120;
@@ -72,6 +128,7 @@ class FinanceRepository {
   // Categories (people)
   // ------------------------------------------------------------------
 
+  @override
   Future<List<FinanceCategory>> getCategories(String ownerId) async {
     await _requireActiveOwner(_db, ownerId);
     final maps = await _db.query(
@@ -83,6 +140,7 @@ class FinanceRepository {
 
   /// Categories with pending entry counts and pending totals, for the
   /// overview list.
+  @override
   Future<List<Map<String, dynamic>>> getCategorySummaries(
     String ownerId,
   ) async {
@@ -101,6 +159,7 @@ class FinanceRepository {
     ''');
   }
 
+  @override
   Future<FinanceCategory> createCategory({
     required String ownerId,
     required String name,
@@ -139,6 +198,7 @@ class FinanceRepository {
 
   /// Renames a person. Entries stay attached to the same row, so history is
   /// preserved and remains searchable under the new name.
+  @override
   Future<void> renameCategory({
     required String ownerId,
     required String categoryId,
@@ -211,6 +271,7 @@ class FinanceRepository {
     return FinanceCategory.fromMap(maps.first);
   }
 
+  @override
   Future<FinanceEntry> addEntry({
     required String ownerId,
     required String categoryId,
@@ -264,6 +325,7 @@ class FinanceRepository {
 
   /// Edits a still-pending entry. Completed entries are immutable so the
   /// completion record stays a reliable audit trail.
+  @override
   Future<void> updateEntry({
     required String ownerId,
     required String entryId,
@@ -320,6 +382,7 @@ class FinanceRepository {
 
   /// Marks an entry as taken/completed. The entry leaves the pending list but
   /// stays stored permanently, searchable, and viewable in history.
+  @override
   Future<void> markCompleted({
     required String ownerId,
     required String entryId,
@@ -366,6 +429,7 @@ class FinanceRepository {
 
   /// Searches financial history. Matches person name, source, and
   /// description; filters by status and an optional entry-date range.
+  @override
   Future<List<FinanceEntry>> searchEntries({
     required String ownerId,
     String? categoryId,
@@ -429,6 +493,7 @@ class FinanceRepository {
   }
 
   /// Pending and completed totals for one person, used on the person page.
+  @override
   Future<Map<String, int>> getPersonTotals(
     String ownerId,
     String categoryId,

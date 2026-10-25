@@ -43,6 +43,13 @@ dependencies:
   file_selector: ^1.1.0
   http: ^1.6.0
   sqflite: ^2.4.5
+  # Browser localStorage + window access for the web/PWA build's session and
+  # preferences. Web-only (its conditional export is a no-op off the browser),
+  # so it never affects the native Windows/APK compile.
+  web: ^1.1.2
+  # Reads a reinstall-surviving platform id (ANDROID_ID / identifierForVendor)
+  # so the licensing device fingerprint stays stable across an app uninstall.
+  device_info_plus: ^11.0.0
 dev_dependencies:
   flutter_test:
     sdk: flutter

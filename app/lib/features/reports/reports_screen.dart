@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/repositories/sale_repository.dart';
+import '../../core/theme/app_design.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/date_range.dart';
 import '../../core/utils/money_utils.dart';
@@ -111,7 +112,7 @@ class ReportsScreenState extends State<ReportsScreen> {
     }
 
     return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      backgroundColor: AppDesign.bg,
       appBar: AppBar(
         title: const Text('Reports'),
         actions: [
@@ -119,46 +120,48 @@ class ReportsScreenState extends State<ReportsScreen> {
           const SizedBox(width: 16),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildPeriodBar(),
-            const SizedBox(height: 8),
-            Text(
-              'Revenue figures come from completed sales only. Voided sales '
-              'are excluded.',
-              style: TextStyle(
-                color: Theme.of(context).textTheme.bodySmall?.color,
-                fontSize: 12,
+      body: AppBackground(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildPeriodBar(),
+              const SizedBox(height: 8),
+              Text(
+                'Revenue figures come from completed sales only. Voided sales '
+                'are excluded.',
+                style: TextStyle(
+                  color: Theme.of(context).textTheme.bodySmall?.color,
+                  fontSize: 12,
+                ),
               ),
-            ),
-            const SizedBox(height: 24),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final productsCard = _buildProductsCard();
-                final cashiersCard = _buildCashiersCard();
-                if (constraints.maxWidth < 1000) {
-                  return Column(
+              const SizedBox(height: 24),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final productsCard = _buildProductsCard();
+                  final cashiersCard = _buildCashiersCard();
+                  if (constraints.maxWidth < 1000) {
+                    return Column(
+                      children: [
+                        productsCard,
+                        const SizedBox(height: 24),
+                        cashiersCard,
+                      ],
+                    );
+                  }
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      productsCard,
-                      const SizedBox(height: 24),
-                      cashiersCard,
+                      Expanded(child: productsCard),
+                      const SizedBox(width: 24),
+                      Expanded(child: cashiersCard),
                     ],
                   );
-                }
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(child: productsCard),
-                    const SizedBox(width: 24),
-                    Expanded(child: cashiersCard),
-                  ],
-                );
-              },
-            ),
-          ],
+                },
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -203,8 +206,8 @@ class ReportsScreenState extends State<ReportsScreen> {
   }
 
   Widget _buildProductsCard() {
-    return Card(
-      margin: EdgeInsets.zero,
+    return GlassCard(
+      padding: EdgeInsets.zero,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -212,15 +215,16 @@ class ReportsScreenState extends State<ReportsScreen> {
             padding: const EdgeInsets.all(24),
             child: Row(
               children: [
-                Icon(
-                  Icons.inventory_2_outlined,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
+                const IconChip(icon: Icons.inventory_2_rounded, size: 38),
                 const SizedBox(width: 12),
-                const Expanded(
+                Expanded(
                   child: Text(
                     'Top Products',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: AppDesign.textHi,
+                    ),
                   ),
                 ),
               ],
@@ -228,8 +232,8 @@ class ReportsScreenState extends State<ReportsScreen> {
           ),
           const Divider(height: 1),
           if (_products.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(24),
+            Padding(
+              padding: const EdgeInsets.all(24),
               child: Text(
                 'No completed sales in this period.',
                 style: TextStyle(color: AppTheme.muted, fontSize: 13),
@@ -246,14 +250,20 @@ class ReportsScreenState extends State<ReportsScreen> {
                   DataColumn(label: Text('Revenue'), numeric: true),
                 ],
                 rows: _products.map((row) {
-                  final revenue = (row['total_revenue'] as int?) ?? 0;
+                  // Cloud rows may omit or null a field (e.g. a product name
+                  // that was renamed away), and money can arrive as a JSON
+                  // double on web — normalise with num.toInt() and never a bare
+                  // `as String`/`as int` cast, which throws on the PWA.
+                  final revenue = (row['total_revenue'] as num?)?.toInt() ?? 0;
                   final qtyMilliunits =
-                      (row['total_qty_milliunits'] as int?) ?? 0;
-                  final lineCount = (row['line_count'] as int?) ?? 0;
+                      (row['total_qty_milliunits'] as num?)?.toInt() ?? 0;
+                  final lineCount = (row['line_count'] as num?)?.toInt() ?? 0;
                   final manualLines = qtyMilliunits == 0 && lineCount > 0;
                   return DataRow(
                     cells: [
-                      DataCell(Text(row['product_name_snapshot'] as String)),
+                      DataCell(
+                        Text(row['product_name_snapshot']?.toString() ?? ''),
+                      ),
                       DataCell(
                         Text(
                           manualLines
@@ -273,8 +283,8 @@ class ReportsScreenState extends State<ReportsScreen> {
   }
 
   Widget _buildCashiersCard() {
-    return Card(
-      margin: EdgeInsets.zero,
+    return GlassCard(
+      padding: EdgeInsets.zero,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -282,15 +292,16 @@ class ReportsScreenState extends State<ReportsScreen> {
             padding: const EdgeInsets.all(24),
             child: Row(
               children: [
-                Icon(
-                  Icons.people_outline,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
+                const IconChip(icon: Icons.people_alt_rounded, size: 38),
                 const SizedBox(width: 12),
-                const Expanded(
+                Expanded(
                   child: Text(
                     'Cashier Performance',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: AppDesign.textHi,
+                    ),
                   ),
                 ),
               ],
@@ -298,8 +309,8 @@ class ReportsScreenState extends State<ReportsScreen> {
           ),
           const Divider(height: 1),
           if (_cashiers.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(24),
+            Padding(
+              padding: const EdgeInsets.all(24),
               child: Text(
                 'No completed sales in this period.',
                 style: TextStyle(color: AppTheme.muted, fontSize: 13),
@@ -316,11 +327,15 @@ class ReportsScreenState extends State<ReportsScreen> {
                   DataColumn(label: Text('Revenue'), numeric: true),
                 ],
                 rows: _cashiers.map((row) {
-                  final revenue = (row['total_revenue'] as int?) ?? 0;
+                  // A synced sale's cashier_id may not resolve to a pos_users
+                  // row yet (the table is new), so `username` can be null —
+                  // fall back to a label instead of a crashing `as String`.
+                  final revenue = (row['total_revenue'] as num?)?.toInt() ?? 0;
+                  final salesCount = (row['total_sales'] as num?)?.toInt() ?? 0;
                   return DataRow(
                     cells: [
-                      DataCell(Text(row['username'] as String)),
-                      DataCell(Text('${row['total_sales'] ?? 0}')),
+                      DataCell(Text(row['username']?.toString() ?? 'Unknown')),
+                      DataCell(Text('$salesCount')),
                       DataCell(Text(MoneyUtils.formatBr(revenue))),
                     ],
                   );

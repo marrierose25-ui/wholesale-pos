@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/models/finance_entry.dart';
 import '../../core/models/user.dart';
 import '../../core/repositories/finance_repository.dart';
+import '../../core/theme/app_design.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/money_utils.dart';
 
@@ -172,51 +173,53 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      backgroundColor: AppDesign.bg,
       appBar: AppBar(title: Text(widget.personName)),
-      body: Column(
-        children: [
-          _buildSummary(),
-          _buildTabsAndSearch(),
-          const Divider(height: 1),
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _error != null
-                ? Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(_error!),
-                        const SizedBox(height: 8),
-                        TextButton(
-                          onPressed: _load,
-                          child: const Text('Retry'),
-                        ),
-                      ],
-                    ),
-                  )
-                : _entries.isEmpty
-                ? Center(
-                    child: Text(
-                      _statusFilter == 'PENDING'
-                          ? 'No pending entries.'
-                          : _statusFilter == 'COMPLETED'
-                          ? 'No completed entries yet.'
-                          : 'No entries yet.',
-                      style: TextStyle(
-                        color: Theme.of(context).textTheme.bodySmall?.color,
+      body: AppBackground(
+        child: Column(
+          children: [
+            _buildSummary(),
+            _buildTabsAndSearch(),
+            const Divider(height: 1),
+            Expanded(
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _error != null
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(_error!),
+                          const SizedBox(height: 8),
+                          TextButton(
+                            onPressed: _load,
+                            child: const Text('Retry'),
+                          ),
+                        ],
                       ),
+                    )
+                  : _entries.isEmpty
+                  ? Center(
+                      child: Text(
+                        _statusFilter == 'PENDING'
+                            ? 'No pending entries.'
+                            : _statusFilter == 'COMPLETED'
+                            ? 'No completed entries yet.'
+                            : 'No entries yet.',
+                        style: TextStyle(
+                          color: Theme.of(context).textTheme.bodySmall?.color,
+                        ),
+                      ),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.all(16),
+                      itemCount: _entries.length,
+                      itemBuilder: (context, index) =>
+                          _buildEntryCard(_entries[index]),
                     ),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: _entries.length,
-                    itemBuilder: (context, index) =>
-                        _buildEntryCard(_entries[index]),
-                  ),
-          ),
-        ],
+            ),
+          ],
+        ),
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _showAddEntryDialog(),
@@ -232,8 +235,8 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
       child: Row(
         children: [
           Expanded(
-            child: Card(
-              margin: EdgeInsets.zero,
+            child: GlassCard(
+              padding: EdgeInsets.zero,
               child: Padding(
                 padding: const EdgeInsets.all(20),
                 child: Column(
@@ -262,8 +265,8 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
           ),
           const SizedBox(width: 16),
           Expanded(
-            child: Card(
-              margin: EdgeInsets.zero,
+            child: GlassCard(
+              padding: EdgeInsets.zero,
               child: Padding(
                 padding: const EdgeInsets.all(20),
                 child: Column(
@@ -338,59 +341,62 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
 
   Widget _buildEntryCard(FinanceEntry entry) {
     final isPending = !entry.isCompleted;
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        leading: Icon(
-          isPending ? Icons.schedule : Icons.check_circle_outline,
-          color: isPending ? AppTheme.danger : AppTheme.success,
-        ),
-        title: Text(
-          entry.source,
-          style: const TextStyle(fontWeight: FontWeight.w500),
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('${_formatDate(entry.entryDate)} • ${entry.status}'),
-            if (entry.description != null &&
-                entry.description!.trim().isNotEmpty)
-              Text(
-                entry.description!,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            if (entry.isCompleted && entry.completedAt != null)
-              Text(
-                'Taken on ${_formatDate(entry.completedAt!)}',
-                style: const TextStyle(fontSize: 11, color: AppTheme.muted),
-              ),
-          ],
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              MoneyUtils.formatBr(entry.amountMinorUnits),
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-            if (isPending) ...[
-              const SizedBox(width: 4),
-              PopupMenuButton<String>(
-                onSelected: (value) {
-                  if (value == 'complete') _markCompleted(entry);
-                  if (value == 'edit') _showAddEntryDialog(editing: entry);
-                },
-                itemBuilder: (context) => const [
-                  PopupMenuItem(
-                    value: 'complete',
-                    child: Text('Mark as Taken'),
-                  ),
-                  PopupMenuItem(value: 'edit', child: Text('Edit')),
-                ],
-              ),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: GlassCard(
+        padding: EdgeInsets.zero,
+        child: ListTile(
+          leading: Icon(
+            isPending ? Icons.schedule_rounded : Icons.check_circle_rounded,
+            color: isPending ? AppDesign.warning : AppDesign.success,
+          ),
+          title: Text(
+            entry.source,
+            style: const TextStyle(fontWeight: FontWeight.w500),
+          ),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('${_formatDate(entry.entryDate)} • ${entry.status}'),
+              if (entry.description != null &&
+                  entry.description!.trim().isNotEmpty)
+                Text(
+                  entry.description!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              if (entry.isCompleted && entry.completedAt != null)
+                Text(
+                  'Taken on ${_formatDate(entry.completedAt!)}',
+                  style: TextStyle(fontSize: 11, color: AppTheme.muted),
+                ),
             ],
-          ],
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                MoneyUtils.formatBr(entry.amountMinorUnits),
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              if (isPending) ...[
+                const SizedBox(width: 4),
+                PopupMenuButton<String>(
+                  onSelected: (value) {
+                    if (value == 'complete') _markCompleted(entry);
+                    if (value == 'edit') _showAddEntryDialog(editing: entry);
+                  },
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(
+                      value: 'complete',
+                      child: Text('Mark as Taken'),
+                    ),
+                    PopupMenuItem(value: 'edit', child: Text('Edit')),
+                  ],
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );

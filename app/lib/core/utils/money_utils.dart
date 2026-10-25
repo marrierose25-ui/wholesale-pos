@@ -107,7 +107,12 @@ class MoneyUtils {
         product ~/ billingQuantityMilliunits != unitPriceMinorUnits) {
       return null;
     }
-    if (product > 9223372036854775807 - 500) return null;
+    // Cap the result at JS MAX_SAFE_INTEGER (2^53-1). On the web build Dart
+    // `int` is a double, so any product above this can no longer be divided
+    // back down exactly — refusing it here guarantees the identical line total
+    // is accepted on web as on native, instead of silently drifting. Real-world
+    // amounts (guarded well below 2^53 by the input parsers) are never affected.
+    if (product > 9007199254740991 - 500) return null;
     return (product + 500) ~/ 1000;
   }
 }

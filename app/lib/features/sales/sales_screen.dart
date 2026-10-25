@@ -6,8 +6,8 @@ import '../../core/models/user.dart';
 import '../../core/repositories/product_repository.dart';
 import '../../core/repositories/sale_repository.dart';
 import '../../core/repositories/shift_repository.dart';
+import '../../core/theme/app_design.dart';
 import '../../core/theme/app_theme.dart';
-import '../../core/utils/date_range.dart';
 import '../../core/utils/money_utils.dart';
 import '../../core/utils/receipt_pdf_generator.dart';
 import 'cart.dart';
@@ -47,14 +47,11 @@ class SalesScreenState extends State<SalesScreen> {
   List<Product> _savedNames = [];
   bool _savedNamesLoading = true;
 
-  List<Sale> _recentSales = [];
-
   @override
   void initState() {
     super.initState();
     loadShift();
     _loadSavedNames();
-    _loadRecentSales();
   }
 
   @override
@@ -91,24 +88,6 @@ class SalesScreenState extends State<SalesScreen> {
   void _showMessage(String message) {
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text(message)));
-  }
-
-  /// Loads today's and yesterday's sales for the POS recent-sales panel so the
-  /// cashier can see recent history without leaving the register.
-  Future<void> _loadRecentSales() async {
-    final now = DateTime.now();
-    final range = DateRange.custom(now.subtract(const Duration(days: 1)), now);
-    try {
-      final sales = await widget.saleRepository.getSales(
-        period: range,
-        status: 'ALL',
-        limit: 40,
-      );
-      if (!mounted) return;
-      setState(() => _recentSales = sales);
-    } catch (_) {
-      // Recent sales are informational; ignore load failures.
-    }
   }
 
   Future<void> _showLineDialog({
@@ -268,7 +247,6 @@ class SalesScreenState extends State<SalesScreen> {
         _cart.clear();
         _customerNameController.clear();
       });
-      _loadRecentSales();
     } catch (e) {
       if (!mounted) return;
       _showMessage(
@@ -281,36 +259,15 @@ class SalesScreenState extends State<SalesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        // Shared pieces: the order-entry column and the live cart.
-        final entryArea = Container(
-          color: Theme.of(context).scaffoldBackgroundColor,
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (_activeShift == null) ...[
-                _buildClosedRegisterBanner(),
-                const SizedBox(height: 16),
-              ],
-              _buildAddItemCard(),
-              const SizedBox(height: 16),
-              Expanded(flex: 3, child: _buildSavedNamesCard()),
-              const SizedBox(height: 16),
-              Expanded(flex: 2, child: _buildRecentSalesCard()),
-            ],
-          ),
-        );
-        final cart = _buildCartPanel(context);
-
-        // Phones / narrow portrait: a single vertical scroll (entry, quick
-        // pickers, then the cart) so nothing has to fit the screen exactly.
-        if (constraints.maxWidth < 700) {
-          return SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
+    return AppBackground(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // Shared pieces: the order-entry column and the live cart.
+          final entryArea = Container(
+            color: Colors.transparent,
+            padding: const EdgeInsets.all(24),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (_activeShift == null) ...[
                   _buildClosedRegisterBanner(),
@@ -318,39 +275,58 @@ class SalesScreenState extends State<SalesScreen> {
                 ],
                 _buildAddItemCard(),
                 const SizedBox(height: 16),
-                SizedBox(height: 240, child: _buildSavedNamesCard()),
-                const SizedBox(height: 16),
-                SizedBox(height: 200, child: _buildRecentSalesCard()),
-                const SizedBox(height: 16),
-                DecoratedBox(
-                  decoration: BoxDecoration(
-                    border: Border(
-                      top: BorderSide(
-                        color: Theme.of(context).dividerColor,
-                        width: 1,
-                      ),
-                    ),
-                  ),
-                  child: SizedBox(height: 440, child: cart),
-                ),
+                Expanded(child: _buildSavedNamesCard()),
               ],
             ),
           );
-        }
+          final cart = _buildCartPanel(context);
 
-        // Tablet / desktop: entry beside a fixed-width cart, as before.
-        final cartWidth = constraints.maxWidth >= 1200
-            ? 420.0
-            : constraints.maxWidth >= 900
-            ? 360.0
-            : 320.0;
-        return Row(
-          children: [
-            Expanded(child: entryArea),
-            SizedBox(width: cartWidth, child: cart),
-          ],
-        );
-      },
+          // Phones / narrow portrait: a single vertical scroll (entry, quick
+          // pickers, then the cart) so nothing has to fit the screen exactly.
+          if (constraints.maxWidth < 700) {
+            return SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (_activeShift == null) ...[
+                    _buildClosedRegisterBanner(),
+                    const SizedBox(height: 16),
+                  ],
+                  _buildAddItemCard(),
+                  const SizedBox(height: 16),
+                  SizedBox(height: 280, child: _buildSavedNamesCard()),
+                  const SizedBox(height: 16),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      border: Border(
+                        top: BorderSide(
+                          color: Theme.of(context).dividerColor,
+                          width: 1,
+                        ),
+                      ),
+                    ),
+                    child: SizedBox(height: 440, child: cart),
+                  ),
+                ],
+              ),
+            );
+          }
+
+          // Tablet / desktop: entry beside a fixed-width cart, as before.
+          final cartWidth = constraints.maxWidth >= 1200
+              ? 420.0
+              : constraints.maxWidth >= 900
+              ? 360.0
+              : 320.0;
+          return Row(
+            children: [
+              Expanded(child: entryArea),
+              SizedBox(width: cartWidth, child: cart),
+            ],
+          );
+        },
+      ),
     );
   }
 
@@ -379,8 +355,8 @@ class SalesScreenState extends State<SalesScreen> {
   }
 
   Widget _buildAddItemCard() {
-    return Card(
-      margin: EdgeInsets.zero,
+    return GlassCard(
+      padding: EdgeInsets.zero,
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
@@ -443,19 +419,46 @@ class SalesScreenState extends State<SalesScreen> {
   }
 
   Widget _buildSavedNamesCard() {
-    return Card(
-      margin: EdgeInsets.zero,
+    final scheme = Theme.of(context).colorScheme;
+    return GlassCard(
+      padding: EdgeInsets.zero,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(24, 20, 12, 12),
+            padding: const EdgeInsets.fromLTRB(20, 18, 12, 12),
             child: Row(
               children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: scheme.primary.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    Icons.bookmark_border,
+                    size: 20,
+                    color: scheme.primary,
+                  ),
+                ),
+                const SizedBox(width: 12),
                 const Expanded(
-                  child: Text(
-                    'Saved Names',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Saved Names',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        'Tap a name to add it to the sale',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ],
                   ),
                 ),
                 IconButton(
@@ -473,337 +476,68 @@ class SalesScreenState extends State<SalesScreen> {
     );
   }
 
+  /// Opens the add-line dialog prefilled with a saved name and its price.
+  void _addSavedName(Product product) {
+    _showLineDialog(
+      editing: null,
+      prefillName: product.name,
+      prefillPriceMinorUnits: product.sellingPriceMinorUnits > 0
+          ? product.sellingPriceMinorUnits
+          : null,
+    );
+  }
+
   Widget _buildSavedNamesList() {
     if (_savedNamesLoading) {
       return const Center(child: CircularProgressIndicator());
     }
     if (_savedNames.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(
-            'No saved names yet. Names are optional — you can always type '
-            'new ones on each sale. The owner can save frequent names from '
-            'the Saved Names screen.',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Theme.of(context).textTheme.bodySmall?.color,
-            ),
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.bookmark_add_outlined,
+                size: 40,
+                color: Theme.of(context).disabledColor,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'No saved names yet. Names are optional — you can always type '
+                'new ones on each sale. The owner can save frequent names from '
+                'the Saved Names screen.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Theme.of(context).textTheme.bodySmall?.color,
+                ),
+              ),
+            ],
           ),
         ),
       );
     }
 
-    return ListView.separated(
-      padding: const EdgeInsets.only(bottom: 12),
+    return GridView.builder(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: 200,
+        mainAxisSpacing: 12,
+        crossAxisSpacing: 12,
+        // Fixed tile height (width-independent) so the card never overflows on
+        // narrow phone layouts, where an aspect-ratio delegate would shrink the
+        // height below the badge + name + price stack.
+        mainAxisExtent: 96,
+      ),
       itemCount: _savedNames.length,
-      separatorBuilder: (context, index) => const Divider(height: 1),
       itemBuilder: (context, index) {
         final product = _savedNames[index];
-        return ListTile(
-          dense: true,
-          leading: const Icon(Icons.add_circle_outline),
-          title: Text(product.name),
-          trailing: Text(
-            MoneyUtils.formatBr(product.sellingPriceMinorUnits),
-            style: const TextStyle(fontWeight: FontWeight.w600),
-          ),
-          onTap: () => _showLineDialog(
-            editing: null,
-            prefillName: product.name,
-            prefillPriceMinorUnits: product.sellingPriceMinorUnits > 0
-                ? product.sellingPriceMinorUnits
-                : null,
-          ),
+        return _SavedNameTile(
+          product: product,
+          onTap: () => _addSavedName(product),
         );
       },
-    );
-  }
-
-  /// DineFlow-style recent-sales panel: today + yesterday at a glance so the
-  /// cashier can verify a mistake without leaving the register.
-  Widget _buildRecentSalesCard() {
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 20, 12, 12),
-            child: Row(
-              children: [
-                const Expanded(
-                  child: Text(
-                    'Recent Sales',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'Reload recent sales',
-                  onPressed: _loadRecentSales,
-                  icon: const Icon(Icons.refresh),
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1),
-          Expanded(
-            child: _recentSales.isEmpty
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Text(
-                        'No sales today or yesterday yet.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: Theme.of(context).textTheme.bodySmall?.color,
-                        ),
-                      ),
-                    ),
-                  )
-                : ListView.separated(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    itemCount: _recentSales.length,
-                    separatorBuilder: (context, index) =>
-                        const Divider(height: 1),
-                    itemBuilder: (context, index) =>
-                        _buildRecentSaleRow(_recentSales[index]),
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildRecentSaleRow(Sale sale) {
-    final isVoid = sale.status == 'VOIDED';
-    final timeLabel =
-        '${sale.createdAt.hour.toString().padLeft(2, '0')}:'
-        '${sale.createdAt.minute.toString().padLeft(2, '0')}';
-    final amountStyle = TextStyle(
-      fontWeight: FontWeight.w600,
-      color: isVoid ? Theme.of(context).textTheme.bodySmall?.color : null,
-      decoration: isVoid ? TextDecoration.lineThrough : null,
-    );
-    return InkWell(
-      onTap: () => _showRecentSaleDetail(sale),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        child: Row(
-          children: [
-            SizedBox(
-              width: 44,
-              child: Text(
-                timeLabel,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Theme.of(context).textTheme.bodySmall?.color,
-                ),
-              ),
-            ),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _recentHeadline(sale),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 13),
-                  ),
-                  const SizedBox(height: 2),
-                  Row(
-                    children: [
-                      Text(
-                        _recentDayLabel(sale.createdAt),
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Theme.of(context).textTheme.bodySmall?.color,
-                        ),
-                      ),
-                      if (sale.customerName != null &&
-                          sale.customerName!.isNotEmpty) ...[
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            sale.customerName!,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Theme.of(context)
-                                  .textTheme
-                                  .bodySmall
-                                  ?.color,
-                            ),
-                          ),
-                        ),
-                      ],
-                      if (sale.hasPendingVoidRequest) ...[
-                        const SizedBox(width: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 1,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppTheme.warning.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: const Text(
-                            'REQ',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              color: AppTheme.warning,
-                            ),
-                          ),
-                        ),
-                      ],
-                      if (isVoid) ...[
-                        const SizedBox(width: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 1,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppTheme.danger.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: const Text(
-                            'VOID',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              color: AppTheme.danger,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text(MoneyUtils.formatBr(sale.totalMinorUnits), style: amountStyle),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// A short headline for a row: first item name plus a count of extra lines.
-  String _recentHeadline(Sale sale) {
-    if (sale.items.isEmpty) return 'Sale';
-    final first = sale.items.first.productNameSnapshot;
-    final extra = sale.items.length - 1;
-    if (extra > 0) return '$first +$extra more';
-    return first;
-  }
-
-  String _recentDayLabel(DateTime moment) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final day = DateTime(moment.year, moment.month, moment.day);
-    final diff = today.difference(day).inDays;
-    if (diff == 0) return 'Today';
-    if (diff == 1) return 'Yesterday';
-    return '${day.year}-${day.month.toString().padLeft(2, '0')}-'
-        '${day.day.toString().padLeft(2, '0')}';
-  }
-
-  Future<void> _showRecentSaleDetail(Sale sale) {
-    return showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(_recentDayLabel(sale.createdAt)),
-        content: SizedBox(
-          width: 360,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Time: ${sale.createdAt.hour.toString().padLeft(2, '0')}:'
-                '${sale.createdAt.minute.toString().padLeft(2, '0')}  •  '
-                '${sale.paymentMethod}',
-                style: TextStyle(
-                  color: Theme.of(context).textTheme.bodySmall?.color,
-                ),
-              ),
-              if (sale.customerName != null && sale.customerName!.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text('Customer: ${sale.customerName}'),
-                ),
-              const SizedBox(height: 12),
-              if (sale.items.isEmpty)
-                const Text('No item detail recorded.')
-              else
-                ...sale.items.map(
-                  (item) => Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 3),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            '${item.productNameSnapshot}  (${item.quantityText})',
-                          ),
-                        ),
-                        Text(MoneyUtils.formatBr(item.lineTotalMinorUnits)),
-                      ],
-                    ),
-                  ),
-                ),
-              const Divider(height: 24),
-              Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      'Total',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                  Text(
-                    MoneyUtils.formatBr(sale.totalMinorUnits),
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                ],
-              ),
-              if (sale.status == 'VOIDED')
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(
-                    'Voided${sale.voidReason != null ? ': ${sale.voidReason}' : ''}',
-                    style: const TextStyle(
-                      color: AppTheme.danger,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              if (sale.hasPendingVoidRequest)
-                const Padding(
-                  padding: EdgeInsets.only(top: 8),
-                  child: Text(
-                    'A void has been requested and is awaiting owner approval.',
-                    style: TextStyle(
-                      color: AppTheme.warning,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
     );
   }
 
@@ -1058,6 +792,92 @@ class SalesScreenState extends State<SalesScreen> {
           ],
         ),
       ],
+    );
+  }
+}
+
+/// A compact, tappable card for one saved name in the POS grid. Shows an
+/// initial badge, the name, and the selling price (or a "Set price" hint when
+/// the name has no stored price yet).
+class _SavedNameTile extends StatelessWidget {
+  final Product product;
+  final VoidCallback onTap;
+
+  const _SavedNameTile({required this.product, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final hasPrice = product.sellingPriceMinorUnits > 0;
+    final trimmed = product.name.trim();
+    final initial = trimmed.isNotEmpty ? trimmed[0].toUpperCase() : '?';
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Ink(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: scheme.outlineVariant),
+            color: scheme.surface,
+          ),
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 30,
+                    height: 30,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: scheme.primary.withValues(alpha: 0.14),
+                    ),
+                    child: Text(
+                      initial,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: scheme.primary,
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  Icon(Icons.add_rounded, size: 18, color: scheme.primary),
+                ],
+              ),
+              const Spacer(),
+              Text(
+                product.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                hasPrice
+                    ? MoneyUtils.formatBr(product.sellingPriceMinorUnits)
+                    : 'Set price',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: hasPrice ? FontWeight.w700 : FontWeight.w400,
+                  color: hasPrice
+                      ? scheme.primary
+                      : Theme.of(context).textTheme.bodySmall?.color,
+                  fontStyle: hasPrice ? FontStyle.normal : FontStyle.italic,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

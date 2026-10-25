@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/models/user.dart';
 import '../../core/repositories/user_repository.dart';
-import '../../core/theme/app_theme.dart';
+import '../../core/theme/app_design.dart';
 
 class LoginScreen extends StatefulWidget {
   final UserRepository userRepository;
@@ -119,117 +119,146 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     if (_checkingFirstRun) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(
+        body: AppBackground(child: Center(child: CircularProgressIndicator())),
+      );
     }
 
-    final title = _isFirstRun
-        ? 'Create Owner Account'
+    final title = _isFirstRun ? 'Create Owner Account' : 'Welcome back';
+    final subtitle = _isFirstRun
+        ? 'Set up the first owner account for this business.'
         : 'Sign in to your account';
     final buttonLabel = _isFirstRun ? 'Create Account' : 'Sign In';
 
     return Scaffold(
-      backgroundColor: AppTheme.background,
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Container(
-            width: 400,
-            padding: const EdgeInsets.all(40),
-            decoration: BoxDecoration(
-              color: AppTheme.surface,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppTheme.border),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.storefront, size: 48, color: AppTheme.primary),
-                const SizedBox(height: 24),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                if (_isFirstRun) ...[
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Set up the first owner account for this business.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: AppTheme.muted, fontSize: 13),
-                  ),
-                ],
-                const SizedBox(height: 32),
-                TextField(
-                  controller: _usernameController,
-                  decoration: const InputDecoration(labelText: 'Username'),
-                  textInputAction: TextInputAction.next,
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _passwordController,
-                  obscureText: _obscurePassword,
-                  decoration: InputDecoration(
-                    labelText: 'Password',
-                    suffixIcon: IconButton(
-                      tooltip: _obscurePassword
-                          ? 'Show password'
-                          : 'Hide password',
-                      icon: Icon(
-                        _obscurePassword
-                            ? Icons.visibility
-                            : Icons.visibility_off,
-                        size: 20,
+      body: AppBackground(
+        child: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: GlassCard(
+                  padding: const EdgeInsets.all(32),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 74,
+                        height: 74,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: AppDesign.buttonGradient,
+                          boxShadow: [AppDesign.blueGlow()],
+                        ),
+                        child: const Icon(
+                          Icons.storefront_rounded,
+                          size: 34,
+                          color: Colors.white,
+                        ),
                       ),
-                      onPressed: () =>
-                          setState(() => _obscurePassword = !_obscurePassword),
-                    ),
-                  ),
-                  onSubmitted: (_) {
-                    if (!_isFirstRun) _submit();
-                  },
-                ),
-                if (_isFirstRun) ...[
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: _confirmController,
-                    obscureText: _obscurePassword,
-                    decoration: const InputDecoration(
-                      labelText: 'Confirm Password',
-                    ),
-                    onSubmitted: (_) => _submit(),
-                  ),
-                ],
-                if (_errorMessage != null) ...[
-                  const SizedBox(height: 16),
-                  Text(
-                    _errorMessage!,
-                    style: const TextStyle(
-                      color: AppTheme.danger,
-                      fontSize: 13,
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: double.infinity,
-                  height: 48,
-                  child: ElevatedButton(
-                    onPressed: _isLoading ? null : _submit,
-                    child: _isLoading
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
+                      const SizedBox(height: 22),
+                      Text(
+                        title,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: AppDesign.textHi,
+                          fontSize: 23,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.5,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        subtitle,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: AppDesign.textLo,
+                          fontSize: 13.5,
+                        ),
+                      ),
+                      const SizedBox(height: 30),
+                      TextField(
+                        controller: _usernameController,
+                        style: TextStyle(color: AppDesign.textHi),
+                        decoration: const InputDecoration(
+                          labelText: 'Username',
+                        ),
+                        textInputAction: TextInputAction.next,
+                      ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: _passwordController,
+                        obscureText: _obscurePassword,
+                        style: TextStyle(color: AppDesign.textHi),
+                        decoration: InputDecoration(
+                          labelText: 'Password',
+                          suffixIcon: IconButton(
+                            tooltip: _obscurePassword
+                                ? 'Show password'
+                                : 'Hide password',
+                            icon: Icon(
+                              _obscurePassword
+                                  ? Icons.visibility
+                                  : Icons.visibility_off,
+                              size: 20,
                             ),
-                          )
-                        : Text(buttonLabel),
+                            onPressed: () => setState(
+                              () => _obscurePassword = !_obscurePassword,
+                            ),
+                          ),
+                        ),
+                        onSubmitted: (_) {
+                          if (!_isFirstRun) _submit();
+                        },
+                      ),
+                      if (_isFirstRun) ...[
+                        const SizedBox(height: 16),
+                        TextField(
+                          controller: _confirmController,
+                          obscureText: _obscurePassword,
+                          style: TextStyle(color: AppDesign.textHi),
+                          decoration: const InputDecoration(
+                            labelText: 'Confirm Password',
+                          ),
+                          onSubmitted: (_) => _submit(),
+                        ),
+                      ],
+                      if (_errorMessage != null) ...[
+                        const SizedBox(height: 16),
+                        Text(
+                          _errorMessage!,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: AppDesign.danger,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 26),
+                      if (_isLoading)
+                        const SizedBox(
+                          height: 52,
+                          child: Center(
+                            child: SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.4,
+                              ),
+                            ),
+                          ),
+                        )
+                      else
+                        GlowButton(
+                          label: buttonLabel,
+                          icon: Icons.login_rounded,
+                          onPressed: _submit,
+                        ),
+                    ],
                   ),
                 ),
-              ],
+              ),
             ),
           ),
         ),

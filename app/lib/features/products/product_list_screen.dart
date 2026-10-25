@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/models/product.dart';
 import '../../core/repositories/product_repository.dart';
-import '../../core/theme/app_theme.dart';
+import '../../core/theme/app_design.dart';
 import '../../core/utils/money_utils.dart';
 import 'add_product_dialog.dart';
 
@@ -129,7 +129,7 @@ class _ProductListScreenState extends State<ProductListScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      backgroundColor: AppDesign.bg,
       appBar: AppBar(
         title: const Text('Saved Names'),
         actions: [
@@ -137,83 +137,56 @@ class _ProductListScreenState extends State<ProductListScreen> {
           const SizedBox(width: 16),
         ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-          ? Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
+      body: AppBackground(
+        child: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : _error != null
+            ? Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(_error!),
+                    const SizedBox(height: 8),
+                    TextButton(
+                      onPressed: _loadNames,
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              )
+            : ListView(
+                padding: const EdgeInsets.all(24),
                 children: [
-                  Text(_error!),
-                  const SizedBox(height: 8),
-                  TextButton(onPressed: _loadNames, child: const Text('Retry')),
-                ],
-              ),
-            )
-          : ListView(
-              padding: const EdgeInsets.all(24),
-              children: [
-                Card(
-                  margin: EdgeInsets.zero,
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.info_outline, size: 16),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'Saved names are optional shortcuts for the POS '
-                            'screen — tapping one pre-fills the name and '
-                            'default price. Cashiers can always type any '
-                            'product name without saving it here.',
-                            style: TextStyle(
-                              color: Theme.of(context)
-                                  .textTheme
-                                  .bodySmall
-                                  ?.color,
-                              fontSize: 12,
+                  GlassCard(
+                    padding: EdgeInsets.zero,
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Row(
+                        children: [
+                          const IconChip(icon: Icons.info_outline, size: 32),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Saved names are optional shortcuts for the POS '
+                              'screen — tapping one pre-fills the name and '
+                              'default price. Cashiers can always type any '
+                              'product name without saving it here.',
+                              style: TextStyle(
+                                color: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.color,
+                                fontSize: 12,
+                              ),
                             ),
                           ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 24),
-                Text(
-                  'ACTIVE NAMES',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: Theme.of(context).textTheme.bodySmall?.color,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                if (_activeNames.isEmpty)
-                  Card(
-                    margin: EdgeInsets.zero,
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Center(
-                        child: Text(
-                          'No saved names yet. Sales never require them — '
-                          'add one only if you want a shortcut.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: Theme.of(context).textTheme.bodySmall?.color,
-                            fontSize: 13,
-                          ),
-                        ),
+                        ],
                       ),
                     ),
-                  )
-                else
-                  ..._activeNames.map(_buildActiveTile),
-                if (_inactiveNames.isNotEmpty) ...[
+                  ),
                   const SizedBox(height: 24),
                   Text(
-                    'DEACTIVATED',
+                    'ACTIVE NAMES',
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
@@ -221,10 +194,45 @@ class _ProductListScreenState extends State<ProductListScreen> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  ..._inactiveNames.map(_buildInactiveTile),
+                  if (_activeNames.isEmpty)
+                    GlassCard(
+                      padding: EdgeInsets.zero,
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Center(
+                          child: Text(
+                            'No saved names yet. Sales never require them — '
+                            'add one only if you want a shortcut.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.color,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    ..._activeNames.map(_buildActiveTile),
+                  if (_inactiveNames.isNotEmpty) ...[
+                    const SizedBox(height: 24),
+                    Text(
+                      'DEACTIVATED',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: Theme.of(context).textTheme.bodySmall?.color,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    ..._inactiveNames.map(_buildInactiveTile),
+                  ],
                 ],
-              ],
-            ),
+              ),
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _showAddDialog,
         icon: const Icon(Icons.add),
@@ -234,49 +242,61 @@ class _ProductListScreenState extends State<ProductListScreen> {
   }
 
   Widget _buildActiveTile(Product product) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        leading: const Icon(Icons.label_outline),
-        title: Text(
-          product.name,
-          style: const TextStyle(fontWeight: FontWeight.w500),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: GlassCard(
+        padding: EdgeInsets.zero,
+        child: ListTile(
+          leading: const IconChip(icon: Icons.label_rounded, size: 38),
+          title: Text(
+            product.name,
+            style: const TextStyle(fontWeight: FontWeight.w500),
+          ),
+          subtitle: Text(
+            product.sellingPriceMinorUnits > 0
+                ? 'Default: ${MoneyUtils.formatBr(product.sellingPriceMinorUnits)}'
+                : 'No default price',
+            style: const TextStyle(fontSize: 12),
+          ),
+          trailing: PopupMenuButton<String>(
+            onSelected: (value) {
+              if (value == 'edit') _showEditDialog(product);
+              if (value == 'deactivate') _deactivate(product);
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: 'edit', child: Text('Edit')),
+              PopupMenuItem(value: 'deactivate', child: Text('Deactivate')),
+            ],
+          ),
+          onTap: () => _showEditDialog(product),
         ),
-        subtitle: Text(
-          product.sellingPriceMinorUnits > 0
-              ? 'Default: ${MoneyUtils.formatBr(product.sellingPriceMinorUnits)}'
-              : 'No default price',
-          style: const TextStyle(fontSize: 12),
-        ),
-        trailing: PopupMenuButton<String>(
-          onSelected: (value) {
-            if (value == 'edit') _showEditDialog(product);
-            if (value == 'deactivate') _deactivate(product);
-          },
-          itemBuilder: (context) => const [
-            PopupMenuItem(value: 'edit', child: Text('Edit')),
-            PopupMenuItem(value: 'deactivate', child: Text('Deactivate')),
-          ],
-        ),
-        onTap: () => _showEditDialog(product),
       ),
     );
   }
 
   Widget _buildInactiveTile(Product product) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        dense: true,
-        leading: Icon(Icons.label_outline, color: AppTheme.muted),
-        title: Text(
-          product.name,
-          style: TextStyle(color: Theme.of(context).textTheme.bodySmall?.color),
-        ),
-        trailing: TextButton.icon(
-          onPressed: () => _reactivate(product),
-          icon: const Icon(Icons.restore, size: 16),
-          label: const Text('Restore'),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: GlassCard(
+        padding: EdgeInsets.zero,
+        child: ListTile(
+          dense: true,
+          leading: IconChip(
+            icon: Icons.label_off_rounded,
+            size: 36,
+            color: AppDesign.textFaint,
+          ),
+          title: Text(
+            product.name,
+            style: TextStyle(
+              color: Theme.of(context).textTheme.bodySmall?.color,
+            ),
+          ),
+          trailing: TextButton.icon(
+            onPressed: () => _reactivate(product),
+            icon: const Icon(Icons.restore, size: 16),
+            label: const Text('Restore'),
+          ),
         ),
       ),
     );

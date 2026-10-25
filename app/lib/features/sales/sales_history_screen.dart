@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/models/user.dart';
 import '../../core/repositories/sale_repository.dart';
+import '../../core/theme/app_design.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/date_range.dart';
 import '../../core/utils/money_utils.dart';
@@ -384,7 +385,7 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: AppDesign.bg,
       appBar: AppBar(
         title: const Text('Sales History'),
         actions: [
@@ -392,43 +393,45 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
           const SizedBox(width: 16),
         ],
       ),
-      body: Column(
-        children: [
-          _buildFilterBar(),
-          const Divider(height: 1),
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _error != null
-                ? Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(_error!),
-                        const SizedBox(height: 8),
-                        TextButton(
-                          onPressed: _loadSales,
-                          child: const Text('Retry'),
-                        ),
-                      ],
-                    ),
-                  )
-                : _sales.isEmpty
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Text(
-                        _hasActiveFilters
-                            ? 'No sales match these filters.'
-                            : 'No sales recorded yet.',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: AppTheme.muted),
+      body: AppBackground(
+        child: Column(
+          children: [
+            _buildFilterBar(),
+            const Divider(height: 1),
+            Expanded(
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _error != null
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(_error!),
+                          const SizedBox(height: 8),
+                          TextButton(
+                            onPressed: _loadSales,
+                            child: const Text('Retry'),
+                          ),
+                        ],
                       ),
-                    ),
-                  )
-                : _buildSalesList(),
-          ),
-        ],
+                    )
+                  : _sales.isEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Text(
+                          _hasActiveFilters
+                              ? 'No sales match these filters.'
+                              : 'No sales recorded yet.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: AppTheme.muted),
+                        ),
+                      ),
+                    )
+                  : _buildSalesList(),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -470,7 +473,7 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
               Expanded(
                 child: Text(
                   '${_sales.length} ${_sales.length == 1 ? 'sale' : 'sales'}',
-                  style: const TextStyle(color: AppTheme.muted, fontSize: 12),
+                  style: TextStyle(color: AppTheme.muted, fontSize: 12),
                 ),
               ),
             ],
@@ -496,7 +499,7 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
       child: Text(
         label.toUpperCase(),
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 11,
           fontWeight: FontWeight.w700,
           color: AppTheme.muted,
@@ -518,7 +521,7 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
       onTap: () => _showSaleDetails(sale),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           border: Border(bottom: BorderSide(color: AppTheme.border)),
         ),
         child: Row(

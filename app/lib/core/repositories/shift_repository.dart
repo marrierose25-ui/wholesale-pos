@@ -6,11 +6,42 @@ import '../sync/sync_outbox.dart';
 import '../sync/sync_outbox_entry.dart';
 import '../utils/date_range.dart';
 
-class ShiftRepository {
+/// Data-access contract for register shifts and cash movements.
+///
+/// [SqfliteShiftRepository] is the local-first implementation; the cloud
+/// implementation added in the PWA milestones honours the same contract so the
+/// register and shift-history screens stay storage-agnostic.
+abstract class ShiftRepository {
+  factory ShiftRepository(Database db) = SqfliteShiftRepository;
+
+  Future<Shift?> getActiveShift();
+
+  /// Past and present register sessions, newest first, each carrying the
+  /// cashier username for display. Filter by the day the shift was *opened*
+  /// ([period], a half-open local range) and/or [status] (`OPEN`/`CLOSED`).
+  Future<List<Shift>> getShiftHistory({DateRange? period, String? status});
+
+  Future<void> openShift(String cashierId, int openingCash);
+
+  Future<void> addCashMovement(
+    String shiftId,
+    String type,
+    int amount,
+    String reason, {
+    String? userId,
+  });
+
+  Future<Map<String, int>> getShiftSummary(Shift shift);
+
+  Future<void> closeShift(Shift shift, int closingCash, {String? userId});
+}
+
+class SqfliteShiftRepository implements ShiftRepository {
   final Database _db;
 
-  ShiftRepository(this._db);
+  SqfliteShiftRepository(this._db);
 
+  @override
   Future<Shift?> getActiveShift() async {
     final maps = await _db.query(
       'shifts',
@@ -27,6 +58,7 @@ class ShiftRepository {
   /// ([period], a half-open local range) and/or [status] (`OPEN`/`CLOSED`).
   /// Closed shifts keep their stored expected/counted figures even if sales are
   /// later voided, so the historical reconciliation is never rewritten.
+  @override
   Future<List<Shift>> getShiftHistory({
     DateRange? period,
     String? status,
@@ -54,6 +86,7 @@ class ShiftRepository {
     return maps.map(Shift.fromMap).toList();
   }
 
+  @override
   Future<void> openShift(String cashierId, int openingCash) async {
     if (openingCash < 0) throw Exception('Opening cash cannot be negative.');
     final shift = Shift(
@@ -82,6 +115,7 @@ class ShiftRepository {
     });
   }
 
+  @override
   Future<void> addCashMovement(
     String shiftId,
     String type,
@@ -137,6 +171,7 @@ class ShiftRepository {
     });
   }
 
+  @override
   Future<Map<String, int>> getShiftSummary(Shift shift) async {
     final cashSales = await _db.rawQuery(
       '''
@@ -219,6 +254,7 @@ class ShiftRepository {
     return rows.first['total'] as int;
   }
 
+  @override
   Future<void> closeShift(
     Shift shift,
     int closingCash, {

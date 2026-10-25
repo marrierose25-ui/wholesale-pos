@@ -16,7 +16,12 @@ class LicenseValidator {
     'WHOLESALE_POS_DEV_UNLICENSED',
   );
 
-  static Future<String> getHardwareId() async {
+  /// Resolves the stable motherboard UUID, or returns null if it could not be
+  /// read this run (CIM timed out, was blocked by AV, or a non-Windows host).
+  /// Callers that must never see null use [getHardwareId]; callers that need to
+  /// distinguish "real UUID" from "unavailable" (e.g. to avoid caching a junk
+  /// value into the device fingerprint) use this directly.
+  static Future<String?> tryGetHardwareId() async {
     try {
       if (Platform.isWindows) {
         final result = await Process.run('powershell', [
@@ -28,10 +33,14 @@ class LicenseValidator {
           return uuid;
         }
       }
-      return Platform.localHostname;
     } catch (_) {
-      return Platform.localHostname;
+      // Treated the same as a non-zero exit: unavailable.
     }
+    return null;
+  }
+
+  static Future<String> getHardwareId() async {
+    return await tryGetHardwareId() ?? Platform.localHostname;
   }
 
   static Future<Map<String, dynamic>?> validateLicense({

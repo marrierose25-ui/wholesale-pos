@@ -2,11 +2,40 @@ import 'package:sqflite/sqflite.dart';
 
 import '../models/product.dart';
 
-class ProductRepository {
+/// Data-access contract for saved names / products.
+///
+/// The [SqfliteProductRepository] implementation is the local-first default
+/// used on Android and Windows. The cloud (web/PWA) implementation added in the
+/// PWA milestones implements the same contract over HTTP so every screen can
+/// depend on this abstract type without knowing where the rows live.
+abstract class ProductRepository {
+  factory ProductRepository(Database db) = SqfliteProductRepository;
+
+  Future<void> save(Product product);
+
+  /// Updates name, default price and active flag. Used by the Saved Names
+  /// screen for rename, price edits and deactivate/reactivate.
+  Future<void> update(Product product);
+
+  Future<void> deactivate(String id);
+
+  Future<void> reactivate(String id);
+
+  Future<Product?> getById(String id);
+
+  Future<List<Product>> getAllActive();
+
+  /// Deactivated names are kept for history; the Saved Names screen can
+  /// bring them back instead of recreating them.
+  Future<List<Product>> getAllInactive();
+}
+
+class SqfliteProductRepository implements ProductRepository {
   final Database _db;
 
-  ProductRepository(this._db);
+  SqfliteProductRepository(this._db);
 
+  @override
   Future<void> save(Product product) async {
     await _ensureNameIsUnique(product.name, excludeId: null);
     await _db.insert('products', product.toMap());
@@ -14,6 +43,7 @@ class ProductRepository {
 
   /// Updates name, default price and active flag. Used by the Saved Names
   /// screen for rename, price edits and deactivate/reactivate.
+  @override
   Future<void> update(Product product) async {
     await _ensureNameIsUnique(product.name, excludeId: product.id);
     await _db.update(
@@ -49,6 +79,7 @@ class ProductRepository {
     }
   }
 
+  @override
   Future<void> deactivate(String id) async {
     await _db.update(
       'products',
@@ -58,6 +89,7 @@ class ProductRepository {
     );
   }
 
+  @override
   Future<void> reactivate(String id) async {
     await _db.update(
       'products',
@@ -67,6 +99,7 @@ class ProductRepository {
     );
   }
 
+  @override
   Future<Product?> getById(String id) async {
     final maps = await _db.query(
       'products',
@@ -79,6 +112,7 @@ class ProductRepository {
     return Product.fromMap(maps.first);
   }
 
+  @override
   Future<List<Product>> getAllActive() async {
     final maps = await _db.query(
       'products',
@@ -92,6 +126,7 @@ class ProductRepository {
 
   /// Deactivated names are kept for history; the Saved Names screen can
   /// bring them back instead of recreating them.
+  @override
   Future<List<Product>> getAllInactive() async {
     final maps = await _db.query(
       'products',

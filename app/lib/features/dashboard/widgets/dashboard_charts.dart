@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/theme/app_design.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/money_utils.dart';
 
@@ -40,8 +41,8 @@ class DashboardPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: EdgeInsets.zero,
+    return GlassCard(
+      padding: EdgeInsets.zero,
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -49,7 +50,11 @@ class DashboardPanel extends StatelessWidget {
           children: [
             Text(
               title,
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: AppDesign.textHi,
+              ),
             ),
             if (subtitle != null) ...[
               const SizedBox(height: 2),
@@ -137,10 +142,13 @@ class RevenueTrendChart extends StatelessWidget {
                                 width: barWidth,
                                 height: barHeight,
                                 decoration: BoxDecoration(
-                                  color: Theme.of(context).colorScheme.primary,
+                                  gradient: AppDesign.buttonGradient,
                                   borderRadius: const BorderRadius.vertical(
-                                    top: Radius.circular(3),
+                                    top: Radius.circular(4),
                                   ),
+                                  boxShadow: [
+                                    AppDesign.blueGlow(alpha: 0.35, blur: 12),
+                                  ],
                                 ),
                               ),
                             ],

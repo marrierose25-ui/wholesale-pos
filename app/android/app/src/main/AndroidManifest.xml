@@ -1,4 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Release builds need this explicitly: the Flutter template only puts it
+         in the debug/profile manifests, so without it the signed APK cannot
+         reach the licensing Edge Function ("Could not reach the licensing
+         server"). Harmless in debug (already granted there). -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="wholesale_pos_app"
         android:name="${applicationName}"

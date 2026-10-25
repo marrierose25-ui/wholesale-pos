@@ -11,10 +11,14 @@ import '../utils/date_range.dart';
 import '../utils/money_utils.dart';
 import 'shift_repository.dart';
 
-class SaleRepository {
-  final Database _db;
-
-  SaleRepository(this._db);
+/// Data-access contract for sales, voids, receipts, dashboards, reports and
+/// audit history.
+///
+/// [SqfliteSaleRepository] is the local-first implementation; the cloud
+/// implementation added in the PWA milestones honours the same contract so the
+/// sales, dashboard and report screens stay storage-agnostic.
+abstract class SaleRepository {
+  factory SaleRepository(Database db) = SqfliteSaleRepository;
 
   /// Escapes LIKE wildcards so user search text matches literally.
   static String escapeLike(String value) {
@@ -24,6 +28,52 @@ class SaleRepository {
         .replaceAll('_', '\\_');
   }
 
+  Future<void> saveSale(Sale sale);
+
+  Future<String> nextReceiptNumber();
+
+  Future<void> voidSale(String saleId, String userId, String reason);
+
+  Future<List<Sale>> getSales({
+    String? searchQuery,
+    DateRange? period,
+    String? status,
+    int? limit,
+  });
+
+  Future<List<Sale>> getRecentSales({int limit = 5});
+
+  Future<List<Sale>> getVoidedSalesForShift(String shiftId);
+
+  Future<void> requestVoid(String saleId, String userId, String reason);
+
+  Future<List<VoidRequest>> getPendingVoidRequests();
+
+  Future<void> approveVoidRequest(String requestId, String ownerId);
+
+  Future<void> rejectVoidRequest(String requestId, String ownerId);
+
+  Future<List<Map<String, dynamic>>> getRevenueTrend(DateRange period);
+
+  Future<Map<String, int>> getDashboardStats({DateRange? period});
+
+  Future<List<Map<String, dynamic>>> getAuditLogs({int limit = 500});
+
+  Future<int> getTodayRevenue();
+
+  Future<List<Map<String, dynamic>>> getProductSalesSummary({
+    DateRange? period,
+  });
+
+  Future<List<Map<String, dynamic>>> getCashierPerformance({DateRange? period});
+}
+
+class SqfliteSaleRepository implements SaleRepository {
+  final Database _db;
+
+  SqfliteSaleRepository(this._db);
+
+  @override
   Future<void> saveSale(Sale sale) async {
     await _db.transaction((txn) async {
       final shifts = await txn.query(
@@ -124,6 +174,7 @@ class SaleRepository {
   /// `REC-20261021-0007`. Numbers are allocated in a transaction so a retail
   /// audit can follow them in order. They are internal identifiers only and
   /// are never shown in the sales-history interface.
+  @override
   Future<String> nextReceiptNumber() async {
     final now = DateTime.now();
     final day =
@@ -151,6 +202,7 @@ class SaleRepository {
     return 'REC-$day-${next.toString().padLeft(4, '0')}';
   }
 
+  @override
   Future<void> voidSale(String saleId, String userId, String reason) async {
     if (reason.trim().isEmpty || reason.trim().length > 240) {
       throw Exception('A void reason of 1 to 240 characters is required.');
@@ -235,6 +287,7 @@ class SaleRepository {
   /// Queries historical sales. Search matches product names, quantity
   /// descriptions, notes, customer name, cashier username, and void reason —
   /// never receipt numbers. [period] and [status] are optional filters.
+  @override
   Future<List<Sale>> getSales({
     String? searchQuery,
     DateRange? period,
@@ -256,7 +309,7 @@ class SaleRepository {
 
     final query = searchQuery?.trim();
     if (query != null && query.isNotEmpty) {
-      final pattern = '%${escapeLike(query.toLowerCase())}%';
+      final pattern = '%${SaleRepository.escapeLike(query.toLowerCase())}%';
       const escape = r" ESCAPE '\'";
       where.add('''
         (LOWER(COALESCE(sales.customer_name, '')) LIKE ?$escape
@@ -292,12 +345,14 @@ class SaleRepository {
     return _hydrate(saleMaps);
   }
 
+  @override
   Future<List<Sale>> getRecentSales({int limit = 5}) {
     return getSales(limit: limit);
   }
 
   /// Voids that must be reviewed at shift close. Mirrors the cash calculation
   /// in [ShiftRepository.getShiftSummary] exactly.
+  @override
   Future<List<Sale>> getVoidedSalesForShift(String shiftId) async {
     final saleMaps = await _db.query(
       'sales',
@@ -313,6 +368,7 @@ class SaleRepository {
   /// A cashier (or owner) flags a completed sale for voiding. The sale is left
   /// `COMPLETED` until an owner approves the request, so revenue and the drawer
   /// are unchanged in the meantime.
+  @override
   Future<void> requestVoid(String saleId, String userId, String reason) async {
     if (reason.trim().isEmpty || reason.trim().length > 240) {
       throw Exception('A void reason of 1 to 240 characters is required.');
@@ -371,6 +427,7 @@ class SaleRepository {
 
   /// Pending void requests, newest first, each with the targeted sale hydrated
   /// for display. Owner-only surface, but readable by any caller.
+  @override
   Future<List<VoidRequest>> getPendingVoidRequests() async {
     final rows = await _db.rawQuery(
       '''
@@ -409,6 +466,7 @@ class SaleRepository {
 
   /// Owner approves a pending request: the sale is voided exactly as a direct
   /// owner void would be, then the request is closed out.
+  @override
   Future<void> approveVoidRequest(String requestId, String ownerId) async {
     await _db.transaction((txn) async {
       final owner = await txn.query(
@@ -502,6 +560,7 @@ class SaleRepository {
   }
 
   /// Owner rejects a pending request; the sale is left untouched.
+  @override
   Future<void> rejectVoidRequest(String requestId, String ownerId) async {
     await _db.transaction((txn) async {
       final owner = await txn.query(
@@ -568,6 +627,7 @@ class SaleRepository {
 
   /// Completed revenue and sale count per calendar day across [period],
   /// ordered oldest to newest, for the dashboard trend chart.
+  @override
   Future<List<Map<String, dynamic>>> getRevenueTrend(DateRange period) async {
     return _db.rawQuery(
       '''
@@ -685,6 +745,7 @@ class SaleRepository {
   /// Revenue figures for the dashboard. Voided sales are always excluded.
   /// Defaults to today so the dashboard resets at local midnight purely by
   /// date filtering — records are never deleted.
+  @override
   Future<Map<String, int>> getDashboardStats({DateRange? period}) async {
     final range = period ?? DateRange.today();
     final rangeArgs = [
@@ -753,6 +814,7 @@ class SaleRepository {
     };
   }
 
+  @override
   Future<List<Map<String, dynamic>>> getAuditLogs({int limit = 500}) async {
     return _db.rawQuery(
       '''
@@ -766,6 +828,7 @@ class SaleRepository {
     );
   }
 
+  @override
   Future<int> getTodayRevenue() async {
     final stats = await getDashboardStats();
     return stats['revenue']!;
@@ -774,6 +837,7 @@ class SaleRepository {
   /// Revenue by entered product name for the reports screen. Quantities are
   /// summed in milliunits; lines with manual totals contribute revenue but no
   /// numeric quantity.
+  @override
   Future<List<Map<String, dynamic>>> getProductSalesSummary({
     DateRange? period,
   }) async {
@@ -796,6 +860,7 @@ class SaleRepository {
     ''', rangeArgs);
   }
 
+  @override
   Future<List<Map<String, dynamic>>> getCashierPerformance({
     DateRange? period,
   }) async {
