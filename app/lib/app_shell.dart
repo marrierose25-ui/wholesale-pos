@@ -498,7 +498,10 @@ class _MainScaffoldState extends State<MainScaffold> {
     return SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+        // Extra bottom clearance lifts the pill above the phone's home-indicator
+        // / gesture zone (and any mobile-browser bottom bar), so its buttons and
+        // the "More" dots stay tappable instead of having taps swallowed by the OS.
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
         child: Container(
           height: 62,
           decoration: BoxDecoration(
