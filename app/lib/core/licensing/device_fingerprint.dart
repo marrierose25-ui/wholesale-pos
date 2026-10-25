@@ -35,11 +35,24 @@ class DeviceFingerprint {
   static const String installUuidKey = 'device_install_uuid';
   static const String _settingsTable = 'settings';
 
+  /// Memoized fingerprint for the lifetime of this process. A device's
+  /// identity cannot change while the app is running, so we compute it once and
+  /// reuse it. Without this, a transient Windows CIM timeout (see
+  /// [LicenseValidator.tryGetHardwareId]) could make two calls in the same
+  /// session disagree — one returning the `win|<hostname>` fallback and the
+  /// next the real `win|<uuid>` — which both flips the idempotency test and,
+  /// in production, would wrongly fail license validation mid-session.
+  static String? _memo;
+
   /// Returns the current device's fingerprint. Requires the SQLite [db] so
   /// the mobile install-UUID fallback can be created / read.
   static Future<String> get(Database db) async {
+    final memo = _memo;
+    if (memo != null) return memo;
     final raw = await _rawValue(db);
-    return sha256.convert(utf8.encode(raw)).toString();
+    final hash = sha256.convert(utf8.encode(raw)).toString();
+    _memo = hash;
+    return hash;
   }
 
   static Future<String> _rawValue(Database db) async {

@@ -241,36 +241,48 @@ void main() {
     );
   });
 
-  test('Locks a username for the cooldown after repeated failures', () async {
-    await repository.createFirstOwner('owner', 'long-strong-password');
-    for (var i = 0; i < UserRepository.maxFailedAttempts; i++) {
-      expect(await repository.authenticate('owner', 'nope'), isNull);
-    }
-    // The next attempt throws even with the correct password.
-    await expectLater(
-      repository.authenticate('owner', 'long-strong-password'),
-      throwsException,
-    );
-  });
+  test(
+    'Locks a username for the cooldown after repeated failures',
+    () async {
+      await repository.createFirstOwner('owner', 'long-strong-password');
+      for (var i = 0; i < UserRepository.maxFailedAttempts; i++) {
+        expect(await repository.authenticate('owner', 'nope'), isNull);
+      }
+      // The next attempt throws even with the correct password.
+      await expectLater(
+        repository.authenticate('owner', 'long-strong-password'),
+        throwsException,
+      );
+    },
+    // Each authenticate runs 210k PBKDF2 rounds; under full-suite CPU
+    // contention this can exceed the 30s default, so give it headroom.
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
 
-  test('A successful login clears the failed-attempt counter', () async {
-    await repository.createFirstOwner('owner', 'long-strong-password');
-    // Four failures (one short of the lockout threshold).
-    for (var i = 0; i < UserRepository.maxFailedAttempts - 1; i++) {
-      await repository.authenticate('owner', 'nope');
-    }
-    // Success resets the counter...
-    expect(
-      await repository.authenticate('owner', 'long-strong-password'),
-      isNotNull,
-    );
-    // ...so another four failures still do not lock the account.
-    for (var i = 0; i < UserRepository.maxFailedAttempts - 1; i++) {
-      expect(await repository.authenticate('owner', 'nope'), isNull);
-    }
-    expect(
-      await repository.authenticate('owner', 'long-strong-password'),
-      isNotNull,
-    );
-  });
+  test(
+    'A successful login clears the failed-attempt counter',
+    () async {
+      await repository.createFirstOwner('owner', 'long-strong-password');
+      // Four failures (one short of the lockout threshold).
+      for (var i = 0; i < UserRepository.maxFailedAttempts - 1; i++) {
+        await repository.authenticate('owner', 'nope');
+      }
+      // Success resets the counter...
+      expect(
+        await repository.authenticate('owner', 'long-strong-password'),
+        isNotNull,
+      );
+      // ...so another four failures still do not lock the account.
+      for (var i = 0; i < UserRepository.maxFailedAttempts - 1; i++) {
+        expect(await repository.authenticate('owner', 'nope'), isNull);
+      }
+      expect(
+        await repository.authenticate('owner', 'long-strong-password'),
+        isNotNull,
+      );
+    },
+    // Eleven 210k-round PBKDF2 derivations run here (see the lockout test
+    // above); without an explicit timeout a contended suite can time this out.
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
 }
