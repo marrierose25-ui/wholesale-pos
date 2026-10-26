@@ -382,7 +382,33 @@ async function searchSales(db: any, ctx: Ctx, body: any): Promise<Response> {
   if (body.period_start) q = q.gte('created_at', body.period_start);
   if (body.period_end) q = q.lt('created_at', body.period_end);
   const query = str(body.search_query);
-  if (query) q = q.or(`customer_name.ilike.%${query}%,void_reason.ilike.%${query}%`);
+  if (query) {
+    // Mirror the native getSales search: match customer name and void reason on
+    // the sale, cashier username on pos_users, and product / quantity / notes on
+    // the line items. PostgREST cannot express the cross-table EXISTS in one
+    // filter, so resolve the item- and cashier-matching sale ids first and OR
+    // them into the main query via id.in.(...).
+    const esc = query.replace(/[%_,()]/g, ' ');
+    const { data: itemRows } = await db.from('sale_items').select('sale_id')
+      .eq('customer_id', ctx.customerId)
+      .or(`product_name_snapshot.ilike.%${esc}%,quantity_text.ilike.%${esc}%,notes.ilike.%${esc}%`);
+    const { data: userRows } = await db.from('pos_users').select('id')
+      .eq('customer_id', ctx.customerId).ilike('username', `%${esc}%`);
+    const userIds = strip(userRows).map((r: any) => r.id);
+    let cashierSaleIds: string[] = [];
+    if (userIds.length) {
+      const { data: cs } = await db.from('sales').select('id')
+        .eq('customer_id', ctx.customerId).in('cashier_id', userIds);
+      cashierSaleIds = strip(cs).map((r: any) => r.id);
+    }
+    const matchedIds = Array.from(new Set<string>([
+      ...strip(itemRows).map((r: any) => r.sale_id),
+      ...cashierSaleIds,
+    ]));
+    const orParts = [`customer_name.ilike.%${esc}%`, `void_reason.ilike.%${esc}%`];
+    if (matchedIds.length) orParts.push(`id.in.(${matchedIds.map((id) => `"${id}"`).join(',')})`);
+    q = q.or(orParts.join(','));
+  }
   if (body.limit) q = q.limit(Number(body.limit));
   const { data, error } = await q;
   if (error) throw new Error(error.message);
@@ -874,7 +900,7 @@ async function financeUpdateEntry(db: any, ctx: Ctx, body: any): Promise<Respons
     source: str(body.source), amount_minor_units: amount,
     description, payment_method: paymentMethod, entry_date: body.entry_date ?? new Date().toISOString(),
     updated_at: new Date().toISOString(),
-  }).eq('customer_id', ctx.customerId).eq('id', String(body.entry_id ?? '')).eq('status', 'PENDING');
+  }).eq('customer_id', ctx.customerId).eq('id', String(body.entry_id ?? '')).eq('status', 'PENDING').select('id');
   if (up.error) throw new Error(up.error.message);
   if (!up.data || up.data.length === 0) {
     return json({ ok: false, error: 'Entry not found or already completed.' }, 409);
@@ -889,7 +915,7 @@ async function financeMarkCompleted(db: any, ctx: Ctx, body: any): Promise<Respo
   if (!entry) return json({ ok: false, error: 'Entry is not pending.' }, 409);
   const up = await db.from('pos_finance_entries').update({
     status: 'COMPLETED', completed_at: now, completed_by: ctx.userId, updated_at: now,
-  }).eq('customer_id', ctx.customerId).eq('id', String(body.entry_id ?? '')).eq('status', 'PENDING');
+  }).eq('customer_id', ctx.customerId).eq('id', String(body.entry_id ?? '')).eq('status', 'PENDING').select('id');
   if (up.error) throw new Error(up.error.message);
   if (!up.data || up.data.length === 0) {
     return json({ ok: false, error: 'Entry is not pending.' }, 409);

@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS pos_finance_categories (
   name        text        NOT NULL,
   created_at  timestamptz NOT NULL,
   updated_at  timestamptz,
+  deleted_at  timestamptz,
   PRIMARY KEY (customer_id, id)
 );
 CREATE TABLE IF NOT EXISTS pos_finance_entries (
@@ -109,10 +110,18 @@ CREATE TABLE IF NOT EXISTS pos_finance_entries (
   completed_at        timestamptz,
   completed_by        text,
   updated_at          timestamptz,
+  payment_method      text,
   PRIMARY KEY (customer_id, id)
 );
 CREATE INDEX IF NOT EXISTS pos_finance_entries_customer_cat
   ON pos_finance_entries (customer_id, category_id);
+
+-- Idempotent upgrade for databases created before the recycle-bin / cash-deposit
+-- redesign: pos-api reads categories with .is('deleted_at', null) and stores a
+-- payment_method on entries. Fresh installs already have both from the CREATE
+-- TABLE above; pre-existing tables gain the columns here.
+ALTER TABLE pos_finance_categories ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+ALTER TABLE pos_finance_entries    ADD COLUMN IF NOT EXISTS payment_method text;
 
 -- The web's tamper-evident trail. pos-api writes one row per meaningful action
 -- (login-adjacent, sale, shift, void, finance) and lists them back for the

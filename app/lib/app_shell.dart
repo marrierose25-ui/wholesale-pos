@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
 
 import 'core/auth/session_store.dart';
 import 'core/backend/app_backend.dart';
@@ -10,6 +13,8 @@ import 'features/finance/finance_overview_screen.dart';
 import 'features/auth/login_screen.dart';
 import 'features/register/register_screen.dart';
 import 'features/reports/reports_screen.dart';
+import 'features/sales/sale.dart';
+import 'features/sales/sale_item.dart';
 import 'features/sales/sales_history_screen.dart';
 import 'features/sales/sales_screen.dart';
 import 'features/users/user_management_screen.dart';
@@ -25,6 +30,26 @@ import 'features/audit/audit_log_screen.dart';
 /// handing it a [NativeBackend]; the web entry (`main_web.dart`) hands it a
 /// [CloudBackend] directly (its activation code is captured by the seam's
 /// [AppBackend.buildActivationGate]).
+/// Dev-only sample-data seeder. When the app is launched with
+/// `--dart-define=SEED_SALES=<n>`, the signed-in shell creates `n` one-item
+/// sales through the normal [AppBackend.sales] save path (cloud `insert_sale`
+/// on web, SQLite on native) so the dashboard / register / history can be
+/// eyeballed with real rows. Default 0 => completely inert in normal builds.
+const int _devSeedSales = int.fromEnvironment('SEED_SALES', defaultValue: 0);
+bool _devSeedStarted = false;
+
+const List<({String name, String unit, int unitPriceMinor})> _devSeedProducts =
+    [
+      (name: 'Teff (Berbere) 1kg', unit: 'kg', unitPriceMinor: 12000),
+      (name: 'Wheat Flour Bag 25kg', unit: 'bag', unitPriceMinor: 550000),
+      (name: 'Cooking Oil 5L', unit: 'bottle', unitPriceMinor: 980000),
+      (name: 'Sugar 1kg', unit: 'kg', unitPriceMinor: 11000),
+      (name: 'Rice 5kg', unit: 'pack', unitPriceMinor: 1450000),
+      (name: 'Salt 1kg', unit: 'kg', unitPriceMinor: 4500),
+      (name: 'Pasta 500g', unit: 'pack', unitPriceMinor: 78000),
+      (name: 'Tomato Paste Tin', unit: 'tin', unitPriceMinor: 65000),
+    ];
+
 class PosRoot extends StatefulWidget {
   final AppBackend backend;
   final bool initialDarkMode;
@@ -215,6 +240,72 @@ class _MainScaffoldState extends State<MainScaffold> {
   final GlobalKey<ReportsScreenState> _reportsKey =
       GlobalKey<ReportsScreenState>();
   final GlobalKey<SalesScreenState> _salesKey = GlobalKey<SalesScreenState>();
+
+  @override
+  void initState() {
+    super.initState();
+    _maybeRunDevSeed();
+  }
+
+  void _maybeRunDevSeed() {
+    if (_devSeedSales <= 0 || _devSeedStarted) return;
+    _devSeedStarted = true;
+    unawaited(_runDevSeed(_devSeedSales));
+  }
+
+  /// Creates [count] one-item sales via the backend's normal save path so the
+  /// redesigned screens can be tested with real data. Best-effort: any failure
+  /// (offline, unauthenticated) is logged and swallowed, never crash the shell.
+  Future<void> _runDevSeed(int count) async {
+    const uid = Uuid();
+    try {
+      final shift = await widget.backend.shifts.ensureActiveShift(
+        widget.currentUser.id,
+      );
+      var done = 0;
+      for (var i = 0; i < count; i++) {
+        final p = _devSeedProducts[i % _devSeedProducts.length];
+        final qtyMilli = (1 + (i % 4)) * 1000; // 1..4 whole units
+        final lineTotal = (p.unitPriceMinor * qtyMilli / 1000).round();
+        final saleId = uid.v4();
+        final receipt = await widget.backend.sales.nextReceiptNumber();
+        final item = SaleItem(
+          id: uid.v4(),
+          saleId: saleId,
+          productId: 'dev-seed',
+          productNameSnapshot: p.name,
+          unitPriceSnapshotMinorUnits: p.unitPriceMinor,
+          quantityText: '${qtyMilli ~/ 1000} ${p.unit}',
+          billingQuantityMilliunits: qtyMilli,
+          lineDiscountMinorUnits: 0,
+          lineTotalMinorUnits: lineTotal,
+        );
+        final sale = Sale(
+          id: saleId,
+          receiptNumber: receipt,
+          cashierId: widget.currentUser.id,
+          deviceId: widget.backend.deviceId,
+          shiftId: shift.id,
+          paymentMethod: i % 3 == 0 ? 'BANK' : 'CASH',
+          subtotalMinorUnits: lineTotal,
+          discountMinorUnits: 0,
+          totalMinorUnits: lineTotal,
+          amountPaidMinorUnits: lineTotal,
+          changeMinorUnits: 0,
+          createdAt: DateTime.now(),
+          items: [item],
+        );
+        await widget.backend.sales.saveSale(sale);
+        done++;
+      }
+      // ignore: avoid_print
+      print('[dev-seed] created $done/$count sample sales');
+      if (mounted) _refreshDataScreens();
+    } catch (e) {
+      // ignore: avoid_print
+      print('[dev-seed] aborted: $e');
+    }
+  }
 
   void _refreshDataScreens() {
     _registerKey.currentState?.loadData();
