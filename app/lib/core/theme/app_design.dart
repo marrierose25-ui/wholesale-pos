@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../utils/date_range.dart';
+
 /// Premium "fintech" design system — theme-aware.
 ///
 /// A single source of truth for the look the owner asked for. The surface and
@@ -518,6 +520,96 @@ class SectionHeader extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// Compact period selector used by the dashboard and history screens. Lists
+/// the [ReportPeriod] presets; picking `Custom` opens a date-range picker and
+/// reports the chosen range back through [onChanged].
+class PeriodDropdown extends StatelessWidget {
+  final ReportPeriod value;
+  final DateTimeRange? customRange;
+  final void Function(ReportPeriod period, DateTimeRange? customRange)
+  onChanged;
+
+  const PeriodDropdown({
+    super.key,
+    required this.value,
+    this.customRange,
+    required this.onChanged,
+  });
+
+  static String _fmt(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-'
+      '${d.day.toString().padLeft(2, '0')}';
+
+  String get _label {
+    if (value == ReportPeriod.custom) {
+      final r = customRange;
+      return r == null ? 'Custom' : '${_fmt(r.start)} – ${_fmt(r.end)}';
+    }
+    return value.label;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<ReportPeriod>(
+      initialValue: value,
+      tooltip: 'Period',
+      color: AppDesign.card,
+      onSelected: (period) async {
+        if (period != ReportPeriod.custom) {
+          onChanged(period, null);
+          return;
+        }
+        final now = DateTime.now();
+        final picked = await showDateRangePicker(
+          context: context,
+          firstDate: DateTime(2020),
+          lastDate: DateTime(now.year + 1, 12, 31),
+          initialDateRange:
+              customRange ??
+              DateTimeRange(
+                start: DateTime(
+                  now.year,
+                  now.month,
+                  now.day,
+                ).subtract(const Duration(days: 6)),
+                end: DateTime(now.year, now.month, now.day),
+              ),
+        );
+        if (picked != null) onChanged(ReportPeriod.custom, picked);
+      },
+      itemBuilder: (context) => [
+        for (final p in ReportPeriod.values)
+          PopupMenuItem<ReportPeriod>(value: p, child: Text(p.label)),
+      ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: AppDesign.card,
+          borderRadius: BorderRadius.circular(AppDesign.radiusButton),
+          border: Border.all(color: AppDesign.stroke),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.date_range, size: 16, color: AppDesign.textLo),
+            const SizedBox(width: 6),
+            Text(
+              _label,
+              style: TextStyle(
+                color: AppDesign.textHi,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 4),
+            Icon(Icons.expand_more, size: 16, color: AppDesign.textLo),
+          ],
+        ),
+      ),
     );
   }
 }

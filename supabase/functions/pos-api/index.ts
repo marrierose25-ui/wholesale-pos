@@ -119,6 +119,8 @@ Deno.serve(async (req) => {
 
       // Shifts + cash
       case 'get_shift': return await getActiveShift(db, ctx);
+      case 'ensure_shift': return await ensureShift(db, ctx);
+      case 'register_snapshot': return await registerSnapshot(db, ctx, body);
       case 'shift_history': return await shiftHistory(db, ctx, body);
       case 'shift_summary': return await shiftSummary(db, ctx, body);
       case 'open_shift': return await openShift(db, ctx, body);
@@ -134,9 +136,13 @@ Deno.serve(async (req) => {
 
       // Finance
       case 'finance_categories': return await financeCategories(db, ctx);
+      case 'finance_deleted_categories': return await financeDeletedCategories(db, ctx);
       case 'finance_summaries': return await financeSummaries(db, ctx);
       case 'finance_create_category': return await financeCreateCategory(db, ctx, body);
       case 'finance_rename_category': return await financeRenameCategory(db, ctx, body);
+      case 'finance_delete_category': return await financeDeleteCategory(db, ctx, body);
+      case 'finance_restore_category': return await financeRestoreCategory(db, ctx, body);
+      case 'finance_permanently_delete_category': return await financePermanentlyDeleteCategory(db, ctx, body);
       case 'finance_add_entry': return await financeAddEntry(db, ctx, body);
       case 'finance_update_entry': return await financeUpdateEntry(db, ctx, body);
       case 'finance_mark_completed': return await financeMarkCompleted(db, ctx, body);
@@ -481,6 +487,61 @@ async function getActiveShift(db: any, ctx: Ctx): Promise<Response> {
   return json({ ok: true, shift: data ? deSnake(data) : null });
 }
 
+// Returns the perpetual open shift, creating one (opening cash 0) if none
+// exists so the register screen always has a balance to show. Racy double-open
+// is prevented server-side by re-checking inside the insert guard.
+async function ensureShift(db: any, ctx: Ctx): Promise<Response> {
+  const { data: existing } = await db.from('shifts').select('*')
+    .eq('customer_id', ctx.customerId).eq('status', 'OPEN').limit(1).maybeSingle();
+  if (existing) return json({ ok: true, shift: deSnake(existing) });
+  const id = crypto.randomUUID();
+  const ins = await db.from('shifts').insert({
+    id, customer_id: ctx.customerId, cashier_id: ctx.userId,
+    opening_cash_minor_units: 0, status: 'OPEN', opened_at: new Date().toISOString(),
+  }).select().maybeSingle();
+  if (ins.error) throw new Error(ins.error.message);
+  // Another request may have opened a shift concurrently; prefer the OPEN row.
+  const { data: open } = await db.from('shifts').select('*')
+    .eq('customer_id', ctx.customerId).eq('status', 'OPEN').limit(1).maybeSingle();
+  return json({ ok: true, shift: deSnake(open ?? ins.data) });
+}
+
+// Register balance (all-time expected cash) plus today's activity counters,
+// date-filtered so the counters reset each calendar day. Mirrors
+// ShiftRepository.getRegisterSnapshot. Zeros when no shift is open.
+async function registerSnapshot(db: any, ctx: Ctx, body: any): Promise<Response> {
+  const { data: shift } = await db.from('shifts').select('*')
+    .eq('customer_id', ctx.customerId).eq('status', 'OPEN').limit(1).maybeSingle();
+  if (!shift) {
+    return json({ ok: true, snapshot: {
+      balance: 0, today_cash_sales: 0, today_bank_sales: 0,
+      today_deposits: 0, today_withdrawals: 0 } });
+  }
+  const balance = await computeExpectedCash(db, ctx.customerId, shift);
+  const start = body.period_start; const end = body.period_end;
+  const inDay = (q: any) => { if (start) q = q.gte('created_at', start); if (end) q = q.lt('created_at', end); return q; };
+  const sumSales = async (method: string) => {
+    let q = db.from('sales').select('total_minor_units')
+      .eq('customer_id', ctx.customerId).eq('shift_id', shift.id)
+      .eq('status', 'COMPLETED').eq('payment_method', method);
+    q = inDay(q);
+    const { data } = await q;
+    return (data ?? []).reduce((s: number, r: any) => s + Number(r.total_minor_units), 0);
+  };
+  let mq = db.from('cash_movements').select('type, amount_minor_units')
+    .eq('customer_id', ctx.customerId).eq('shift_id', shift.id);
+  mq = inDay(mq);
+  const { data: mvs } = await mq;
+  let deposits = 0, withdrawals = 0;
+  for (const m of mvs ?? []) {
+    if (m.type === 'DEPOSIT') deposits += Number(m.amount_minor_units);
+    else withdrawals += Number(m.amount_minor_units);
+  }
+  return json({ ok: true, snapshot: {
+    balance, today_cash_sales: await sumSales('CASH'), today_bank_sales: await sumSales('BANK'),
+    today_deposits: deposits, today_withdrawals: withdrawals } });
+}
+
 async function shiftHistory(db: any, ctx: Ctx, body: any): Promise<Response> {
   let q = db.from('shifts').select('*').eq('customer_id', ctx.customerId)
     .order('opened_at', { ascending: false });
@@ -690,16 +751,25 @@ async function loadActiveUser(db: any, customerId: string, userId: string): Prom
 // ===========================================================================
 async function financeCategories(db: any, ctx: Ctx): Promise<Response> {
   const { data, error } = await db.from('pos_finance_categories').select('*')
-    .eq('customer_id', ctx.customerId).order('name');
+    .eq('customer_id', ctx.customerId).is('deleted_at', null).order('name');
   if (error) throw new Error(error.message);
   // FinanceCategory.fromMap parses updated_at; back-fill it from created_at for
   // rows whose name has never been edited (updated_at is null in the table).
   const cats = strip(data).map((c: any) => ({ ...c, updated_at: c.updated_at ?? c.created_at }));
   return json({ ok: true, categories: cats });
 }
+// People in the recycle bin, newest trashed first.
+async function financeDeletedCategories(db: any, ctx: Ctx): Promise<Response> {
+  const { data, error } = await db.from('pos_finance_categories').select('*')
+    .eq('customer_id', ctx.customerId).not('deleted_at', 'is', null)
+    .order('deleted_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  const cats = strip(data).map((c: any) => ({ ...c, updated_at: c.updated_at ?? c.created_at }));
+  return json({ ok: true, categories: cats });
+}
 async function financeSummaries(db: any, ctx: Ctx): Promise<Response> {
   const { data: cats } = await db.from('pos_finance_categories').select('id, name')
-    .eq('customer_id', ctx.customerId).order('name');
+    .eq('customer_id', ctx.customerId).is('deleted_at', null).order('name');
   const { data: entries } = await db.from('pos_finance_entries').select('category_id, amount_minor_units')
     .eq('customer_id', ctx.customerId).eq('status', 'PENDING');
   const totals: Record<string, { count: number; total: number }> = {};
@@ -736,15 +806,59 @@ async function financeRenameCategory(db: any, ctx: Ctx, body: any): Promise<Resp
   await audit(db, ctx.customerId, ctx.userId, 'FINANCE_CATEGORY_RENAMED', `Person ${body.category_id} renamed.`);
   return json({ ok: true });
 }
+// Soft-delete: move a person to the recycle bin, keeping their history.
+async function financeDeleteCategory(db: any, ctx: Ctx, body: any): Promise<Response> {
+  const id = String(body.category_id ?? '');
+  const { data: existing } = await db.from('pos_finance_categories').select('id, name, deleted_at')
+    .eq('customer_id', ctx.customerId).eq('id', id).maybeSingle();
+  if (!existing) return json({ ok: false, error: 'Person not found.' }, 404);
+  if (existing.deleted_at) return json({ ok: false, error: 'Person is already in the recycle bin.' }, 409);
+  const now = new Date().toISOString();
+  const up = await db.from('pos_finance_categories').update({ deleted_at: now, updated_at: now })
+    .eq('customer_id', ctx.customerId).eq('id', id);
+  if (up.error) throw new Error(up.error.message);
+  await audit(db, ctx.customerId, ctx.userId, 'FINANCE_CATEGORY_DELETED', `Person "${existing.name}" to recycle bin.`);
+  return json({ ok: true });
+}
+async function financeRestoreCategory(db: any, ctx: Ctx, body: any): Promise<Response> {
+  const id = String(body.category_id ?? '');
+  const { data: existing } = await db.from('pos_finance_categories').select('id, name, deleted_at')
+    .eq('customer_id', ctx.customerId).eq('id', id).maybeSingle();
+  if (!existing) return json({ ok: false, error: 'Person not found.' }, 404);
+  if (!existing.deleted_at) return json({ ok: false, error: 'Person is not in the recycle bin.' }, 409);
+  const now = new Date().toISOString();
+  const up = await db.from('pos_finance_categories').update({ deleted_at: null, updated_at: now })
+    .eq('customer_id', ctx.customerId).eq('id', id);
+  if (up.error) throw new Error(up.error.message);
+  await audit(db, ctx.customerId, ctx.userId, 'FINANCE_CATEGORY_RESTORED', `Person "${existing.name}" restored.`);
+  return json({ ok: true });
+}
+// Permanent delete: only for a binned person; drops their entries then the row.
+async function financePermanentlyDeleteCategory(db: any, ctx: Ctx, body: any): Promise<Response> {
+  const id = String(body.category_id ?? '');
+  const { data: existing } = await db.from('pos_finance_categories').select('id, name, deleted_at')
+    .eq('customer_id', ctx.customerId).eq('id', id).maybeSingle();
+  if (!existing) return json({ ok: false, error: 'Person not found.' }, 404);
+  if (!existing.deleted_at) return json({ ok: false, error: 'Move the person to the recycle bin first.' }, 409);
+  const delEntries = await db.from('pos_finance_entries').delete()
+    .eq('customer_id', ctx.customerId).eq('category_id', id);
+  if (delEntries.error) throw new Error(delEntries.error.message);
+  const delCat = await db.from('pos_finance_categories').delete()
+    .eq('customer_id', ctx.customerId).eq('id', id);
+  if (delCat.error) throw new Error(delCat.error.message);
+  await audit(db, ctx.customerId, ctx.userId, 'FINANCE_CATEGORY_PERMANENTLY_DELETED', `Person "${existing.name}" permanently deleted.`);
+  return json({ ok: true });
+}
 async function financeAddEntry(db: any, ctx: Ctx, body: any): Promise<Response> {
   const amount = Number(body.amount_minor_units ?? 0);
   if (amount <= 0) return json({ ok: false, error: 'Amount must be positive.' }, 400);
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const description = body.description == null ? null : str(body.description) || null;
+  const paymentMethod = body.payment_method == null ? null : str(body.payment_method).toUpperCase() || null;
   const { data, error } = await db.from('pos_finance_entries').insert({
     id, customer_id: ctx.customerId, category_id: body.category_id, source: str(body.source),
-    amount_minor_units: amount, description, status: 'PENDING',
+    amount_minor_units: amount, description, status: 'PENDING', payment_method: paymentMethod,
     entry_date: body.entry_date ?? now, created_at: now, created_by: ctx.userId, updated_at: now,
   }).select().single();
   if (error) throw new Error(error.message);
@@ -755,9 +869,10 @@ async function financeUpdateEntry(db: any, ctx: Ctx, body: any): Promise<Respons
   const amount = Number(body.amount_minor_units ?? 0);
   if (amount <= 0) return json({ ok: false, error: 'Amount must be positive.' }, 400);
   const description = body.description == null ? null : str(body.description) || null;
+  const paymentMethod = body.payment_method == null ? null : str(body.payment_method).toUpperCase() || null;
   const up = await db.from('pos_finance_entries').update({
     source: str(body.source), amount_minor_units: amount,
-    description, entry_date: body.entry_date ?? new Date().toISOString(),
+    description, payment_method: paymentMethod, entry_date: body.entry_date ?? new Date().toISOString(),
     updated_at: new Date().toISOString(),
   }).eq('customer_id', ctx.customerId).eq('id', String(body.entry_id ?? '')).eq('status', 'PENDING');
   if (up.error) throw new Error(up.error.message);
@@ -769,12 +884,38 @@ async function financeUpdateEntry(db: any, ctx: Ctx, body: any): Promise<Respons
 }
 async function financeMarkCompleted(db: any, ctx: Ctx, body: any): Promise<Response> {
   const now = new Date().toISOString();
+  const { data: entry } = await db.from('pos_finance_entries').select('*')
+    .eq('customer_id', ctx.customerId).eq('id', String(body.entry_id ?? '')).eq('status', 'PENDING').maybeSingle();
+  if (!entry) return json({ ok: false, error: 'Entry is not pending.' }, 409);
   const up = await db.from('pos_finance_entries').update({
     status: 'COMPLETED', completed_at: now, completed_by: ctx.userId, updated_at: now,
   }).eq('customer_id', ctx.customerId).eq('id', String(body.entry_id ?? '')).eq('status', 'PENDING');
   if (up.error) throw new Error(up.error.message);
   if (!up.data || up.data.length === 0) {
     return json({ ok: false, error: 'Entry is not pending.' }, 409);
+  }
+  // A cash collection physically puts money into the drawer, so deposit it onto
+  // the open (perpetual) shift. Bank/non-cash collections never touch it.
+  if (entry.payment_method === 'CASH') {
+    const { data: cats } = await db.from('pos_finance_categories').select('name')
+      .eq('customer_id', ctx.customerId).eq('id', entry.category_id).maybeSingle();
+    let { data: shift } = await db.from('shifts').select('id')
+      .eq('customer_id', ctx.customerId).eq('status', 'OPEN').limit(1).maybeSingle();
+    if (!shift) {
+      const sid = crypto.randomUUID();
+      const ins = await db.from('shifts').insert({
+        id: sid, customer_id: ctx.customerId, cashier_id: ctx.userId,
+        opening_cash_minor_units: 0, status: 'OPEN', opened_at: now,
+      }).select('id').maybeSingle();
+      if (ins.error) throw new Error(ins.error.message);
+      shift = { id: sid };
+    }
+    const mv = await db.from('cash_movements').insert({
+      id: crypto.randomUUID(), customer_id: ctx.customerId, shift_id: shift!.id, user_id: ctx.userId,
+      type: 'DEPOSIT', amount_minor_units: Number(entry.amount_minor_units),
+      reason: `Collected from ${cats?.name ?? 'a person'}`, created_at: now,
+    });
+    if (mv.error) throw new Error(mv.error.message);
   }
   await audit(db, ctx.customerId, ctx.userId, 'FINANCE_ENTRY_COMPLETED', `Entry ${body.entry_id} taken.`);
   return json({ ok: true });
@@ -795,7 +936,11 @@ async function financeSearchEntries(db: any, ctx: Ctx, body: any): Promise<Respo
   }
   const { data, error } = await q;
   if (error) throw new Error(error.message);
-  const entries = strip(data);
+  // Drop entries that belong to binned people so they leave the active area.
+  const { data: activeRows } = await db.from('pos_finance_categories').select('id')
+    .eq('customer_id', ctx.customerId).is('deleted_at', null);
+  const activeSet = new Set<string>((activeRows ?? []).map((c: any) => c.id));
+  const entries = strip(data).filter((e: any) => activeSet.has(e.category_id));
   const cats = await categoryNames(db, ctx);
   for (const e of entries) {
     e.category_name = cats[e.category_id] ?? null;
@@ -817,6 +962,11 @@ async function financeSearchEntries(db: any, ctx: Ctx, body: any): Promise<Respo
   return json({ ok: true, entries });
 }
 async function financePersonTotals(db: any, ctx: Ctx, body: any): Promise<Response> {
+  const { data: cat } = await db.from('pos_finance_categories').select('deleted_at')
+    .eq('customer_id', ctx.customerId).eq('id', String(body.category_id ?? '')).maybeSingle();
+  if (!cat || cat.deleted_at) {
+    return json({ ok: true, totals: { pending_total: 0, completed_total: 0 } });
+  }
   const { data } = await db.from('pos_finance_entries').select('status, amount_minor_units')
     .eq('customer_id', ctx.customerId).eq('category_id', String(body.category_id ?? ''));
   let pending = 0, completed = 0;

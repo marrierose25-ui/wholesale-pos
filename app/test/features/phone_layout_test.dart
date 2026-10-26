@@ -4,13 +4,11 @@ import 'package:sqflite/sqflite.dart';
 import 'package:wholesale_pos_app/core/database/local_database.dart';
 import 'package:wholesale_pos_app/core/models/user.dart';
 import 'package:wholesale_pos_app/core/repositories/finance_repository.dart';
-import 'package:wholesale_pos_app/core/repositories/product_repository.dart';
 import 'package:wholesale_pos_app/core/repositories/sale_repository.dart';
 import 'package:wholesale_pos_app/core/repositories/user_repository.dart';
 import 'package:wholesale_pos_app/features/audit/audit_log_screen.dart';
 import 'package:wholesale_pos_app/features/dashboard/dashboard_screen.dart';
 import 'package:wholesale_pos_app/features/finance/finance_overview_screen.dart';
-import 'package:wholesale_pos_app/features/products/product_list_screen.dart';
 import 'package:wholesale_pos_app/features/reports/reports_screen.dart';
 import 'package:wholesale_pos_app/features/sales/sales_history_screen.dart';
 import 'package:wholesale_pos_app/features/settings/settings_screen.dart';
@@ -157,13 +155,6 @@ void main() {
         currentUser: owner,
         onSaleVoided: () {},
       ),
-    );
-  });
-
-  testWidgets('Product list lays out at phone width', (tester) async {
-    await pumpAtPhone(
-      tester,
-      ProductListScreen(repository: ProductRepository(db)),
     );
   });
 

@@ -6,12 +6,19 @@ class FinanceCategory {
   final DateTime createdAt;
   final DateTime updatedAt;
 
+  /// Non-null once the person has been moved to the recycle bin. Active views
+  /// filter these out; only the recycle bin lists them.
+  final DateTime? deletedAt;
+
   FinanceCategory({
     required this.id,
     required this.name,
     required this.createdAt,
     required this.updatedAt,
+    this.deletedAt,
   });
+
+  bool get isDeleted => deletedAt != null;
 
   Map<String, dynamic> toMap() {
     return {
@@ -19,6 +26,7 @@ class FinanceCategory {
       'name': name,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
+      'deleted_at': deletedAt?.toIso8601String(),
     };
   }
 
@@ -28,6 +36,9 @@ class FinanceCategory {
       name: map['name'] as String,
       createdAt: DateTime.parse(map['created_at'] as String),
       updatedAt: DateTime.parse(map['updated_at'] as String),
+      deletedAt: map['deleted_at'] == null
+          ? null
+          : DateTime.parse(map['deleted_at'] as String),
     );
   }
 }

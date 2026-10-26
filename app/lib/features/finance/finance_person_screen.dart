@@ -114,6 +114,7 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
           amountMinorUnits: result['amount'] as int,
           description: result['description'] as String?,
           entryDate: result['date'] as DateTime,
+          paymentMethod: result['paymentMethod'] as String?,
         );
       } else {
         await widget.financeRepository.updateEntry(
@@ -123,6 +124,7 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
           amountMinorUnits: result['amount'] as int,
           description: result['description'] as String?,
           entryDate: result['date'] as DateTime,
+          paymentMethod: result['paymentMethod'] as String?,
         );
       }
       await _load();
@@ -137,7 +139,8 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Mark as Taken?'),
         content: Text(
-          'Mark ${entry.source} (${MoneyUtils.formatBr(entry.amountMinorUnits)}) as taken? It will leave the pending list but stay in history.',
+          'Mark ${entry.source} (${MoneyUtils.formatBr(entry.amountMinorUnits)}) as taken? It will leave the pending list but stay in history.'
+          '${entry.isCash ? ' As a cash collection, the amount is also added to the register balance.' : ''}',
         ),
         actions: [
           TextButton(
@@ -357,7 +360,10 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
           subtitle: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('${_formatDate(entry.entryDate)} • ${entry.status}'),
+              Text(
+                '${_formatDate(entry.entryDate)} • ${entry.status}'
+                '${entry.paymentMethod == null ? '' : ' • ${entry.paymentMethod == 'CASH' ? 'Cash' : 'Bank'}'}',
+              ),
               if (entry.description != null &&
                   entry.description!.trim().isNotEmpty)
                 Text(
@@ -417,6 +423,7 @@ class _EntryDialogState extends State<_EntryDialog> {
   late final TextEditingController _amountController;
   late final TextEditingController _descriptionController;
   late DateTime _selectedDate;
+  late String _paymentMethod;
   String? _error;
   bool _isSaving = false;
 
@@ -434,6 +441,7 @@ class _EntryDialogState extends State<_EntryDialog> {
       text: initial?.description ?? '',
     );
     _selectedDate = initial?.entryDate ?? DateTime.now();
+    _paymentMethod = initial?.paymentMethod ?? 'CASH';
   }
 
   @override
@@ -474,17 +482,23 @@ class _EntryDialogState extends State<_EntryDialog> {
       'amount': amount,
       'description': _descriptionController.text.trim(),
       'date': _selectedDate,
+      'paymentMethod': _paymentMethod,
     });
   }
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      // Tighter horizontal insets keep the dialog inside a phone's width.
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       title: Text(widget.initial == null ? 'Add Entry' : 'Edit Entry'),
-      content: SizedBox(
-        width: 420,
+      content: ConstrainedBox(
+        // Cap at 420 on wide screens; shrink to the viewport on a phone so the
+        // fixed 420 never overflows a narrow width.
+        constraints: const BoxConstraints(maxWidth: 420),
         child: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             TextField(
               controller: _sourceController,
@@ -524,6 +538,41 @@ class _EntryDialogState extends State<_EntryDialog> {
                 labelText: 'Description / Notes (optional)',
               ),
             ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Payment Method',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).textTheme.bodySmall?.color,
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(
+                  value: 'CASH',
+                  label: Text('Cash'),
+                  icon: Icon(Icons.money),
+                ),
+                ButtonSegment(
+                  value: 'BANK',
+                  label: Text('Bank Transfer'),
+                  icon: Icon(Icons.account_balance),
+                ),
+              ],
+              selected: {_paymentMethod},
+              onSelectionChanged: (selection) =>
+                  setState(() => _paymentMethod = selection.first),
+            ),
+            const SizedBox(height: 8),
+            if (_paymentMethod == 'CASH')
+              Text(
+                'Cash collections are added to the register when marked taken.',
+                style: TextStyle(fontSize: 11, color: AppTheme.muted),
+              ),
             if (_error != null) ...[
               const SizedBox(height: 12),
               Text(

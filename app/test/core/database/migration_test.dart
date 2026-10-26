@@ -412,6 +412,106 @@ void main() {
     await db.close();
   });
 
+  test(
+    'Upgrades a v9 database to v10, adding deleted_at + payment_method',
+    () async {
+      var db = await LocalDatabase.openAt(dbPath);
+      final now = DateTime.now().toIso8601String();
+      await db.insert('users', {
+        'id': 'user-1',
+        'username': 'owner',
+        'password_hash': 'x',
+        'salt': 'x',
+        'role': 'OWNER',
+        'is_active': 1,
+        'created_at': now,
+      });
+
+      // Rewind the finance tables to their v9 shape: no deleted_at on people
+      // and no payment_method on entries. Existing rows must survive the
+      // additive upgrade reading back as active / no-method.
+      await db.execute('DROP TABLE IF EXISTS finance_entries');
+      await db.execute('DROP TABLE IF EXISTS finance_categories');
+      await db.execute('''
+        CREATE TABLE finance_categories (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      ''');
+      await db.execute('''
+        CREATE TABLE finance_entries (
+          id TEXT PRIMARY KEY,
+          category_id TEXT NOT NULL,
+          source TEXT NOT NULL,
+          amount_minor_units INTEGER NOT NULL,
+          description TEXT,
+          status TEXT NOT NULL DEFAULT 'PENDING',
+          entry_date TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          created_by TEXT NOT NULL,
+          completed_at TEXT,
+          completed_by TEXT,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(category_id) REFERENCES finance_categories(id),
+          FOREIGN KEY(created_by) REFERENCES users(id),
+          FOREIGN KEY(completed_by) REFERENCES users(id)
+        )
+      ''');
+      await db.insert('finance_categories', {
+        'id': 'cat-1',
+        'name': 'Transport',
+        'created_at': now,
+        'updated_at': now,
+      });
+      await db.insert('finance_entries', {
+        'id': 'entry-1',
+        'category_id': 'cat-1',
+        'source': 'ABC Shipping',
+        'amount_minor_units': 120000,
+        'status': 'PENDING',
+        'entry_date': now,
+        'created_at': now,
+        'created_by': 'user-1',
+        'updated_at': now,
+      });
+      await db.execute('PRAGMA user_version = 9');
+      await db.close();
+
+      db = await LocalDatabase.openAt(dbPath);
+
+      final version = await db.rawQuery('PRAGMA user_version');
+      expect(version.first.values.first, LocalDatabase.schemaVersion);
+
+      final catCols = (await db.rawQuery(
+        'PRAGMA table_info(finance_categories)',
+      )).map((row) => row['name']);
+      expect(catCols, contains('deleted_at'));
+
+      final entryCols = (await db.rawQuery(
+        'PRAGMA table_info(finance_entries)',
+      )).map((row) => row['name']);
+      expect(entryCols, contains('payment_method'));
+
+      final category = (await db.query(
+        'finance_categories',
+        where: 'id = ?',
+        whereArgs: ['cat-1'],
+      )).single;
+      expect(category['deleted_at'], isNull);
+
+      final entry = (await db.query(
+        'finance_entries',
+        where: 'id = ?',
+        whereArgs: ['entry-1'],
+      )).single;
+      expect(entry['payment_method'], isNull);
+
+      await db.close();
+    },
+  );
+
   test('Re-registers the persisted device ID after a restore', () async {
     var db = await LocalDatabase.openAt(dbPath);
     final deviceId = await LocalDatabase.registerCurrentDevice(db);

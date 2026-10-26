@@ -6,6 +6,7 @@ import '../../core/theme/app_design.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/money_utils.dart';
 import 'finance_person_screen.dart';
+import 'finance_recycle_bin_screen.dart';
 
 /// Owner-only overview of people tracked in the private money area. Cashier
 /// access is blocked in [FinanceRepository] at the data layer, not just here.
@@ -101,6 +102,53 @@ class _FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
     );
   }
 
+  Future<void> _confirmDelete(Map<String, dynamic> summary) async {
+    final name = summary['name'] as String;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Move to recycle bin?'),
+        content: Text(
+          'Move "$name" to the recycle bin? Their entries stay saved and can '
+          'be restored later, or deleted for good from the recycle bin.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Move to bin'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await widget.financeRepository.deleteCategory(
+        ownerId: widget.currentUser.id,
+        categoryId: summary['id'] as String,
+      );
+      await _load();
+    } catch (e) {
+      if (mounted) _showError(e);
+    }
+  }
+
+  Future<void> _openRecycleBin() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => FinanceRecycleBinScreen(
+          financeRepository: widget.financeRepository,
+          currentUser: widget.currentUser,
+        ),
+      ),
+    );
+    _load();
+  }
+
   Future<void> _openPerson(Map<String, dynamic> summary) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -127,6 +175,11 @@ class _FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
       appBar: AppBar(
         title: const Text('Money Tracking'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            tooltip: 'Recycle Bin',
+            onPressed: _openRecycleBin,
+          ),
           IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
           const SizedBox(width: 16),
         ],
@@ -270,10 +323,18 @@ class _FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
           ),
           trailing: PopupMenuButton<String>(
             onSelected: (value) {
-              if (value == 'rename') _showRenameDialog(summary);
+              if (value == 'rename') {
+                _showRenameDialog(summary);
+              } else if (value == 'delete') {
+                _confirmDelete(summary);
+              }
             },
             itemBuilder: (context) => const [
               PopupMenuItem(value: 'rename', child: Text('Rename')),
+              PopupMenuItem(
+                value: 'delete',
+                child: Text('Move to recycle bin'),
+              ),
             ],
           ),
           onTap: () => _openPerson(summary),

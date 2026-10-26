@@ -8,7 +8,7 @@ import 'package:uuid/uuid.dart';
 
 class LocalDatabase {
   static const String databaseName = 'wholesale_pos.db';
-  static const int schemaVersion = 9;
+  static const int schemaVersion = 10;
   static const String deviceIdFileName = 'device_id.txt';
   static const String themeSettingKey = 'theme_mode';
 
@@ -275,6 +275,26 @@ class LocalDatabase {
       ''');
       await _createIndexesAndTriggers(db);
     }
+    if (oldVersion < 10) {
+      // Money tracking gains a recycle bin (soft delete on people) and a
+      // payment method on entries so cash collections can deposit to the
+      // register. Both are additive ALTERs, guarded so a re-run is a no-op.
+      final catCols = await db.rawQuery(
+        'PRAGMA table_info(finance_categories)',
+      );
+      if (!catCols.any((column) => column['name'] == 'deleted_at')) {
+        await db.execute(
+          'ALTER TABLE finance_categories ADD COLUMN deleted_at TEXT',
+        );
+      }
+      final entryCols = await db.rawQuery('PRAGMA table_info(finance_entries)');
+      if (!entryCols.any((column) => column['name'] == 'payment_method')) {
+        await db.execute(
+          "ALTER TABLE finance_entries ADD COLUMN payment_method TEXT",
+        );
+      }
+      await _createIndexesAndTriggers(db);
+    }
   }
 
   /// Schema 6 stored quantities as plain integers. Schema 7 keeps the exact
@@ -529,7 +549,8 @@ class LocalDatabase {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT
       )
     ''');
 
@@ -547,6 +568,7 @@ class LocalDatabase {
         completed_at TEXT,
         completed_by TEXT,
         updated_at TEXT NOT NULL,
+        payment_method TEXT,
         FOREIGN KEY(category_id) REFERENCES finance_categories(id),
         FOREIGN KEY(created_by) REFERENCES users(id),
         FOREIGN KEY(completed_by) REFERENCES users(id)

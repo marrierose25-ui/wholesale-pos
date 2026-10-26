@@ -5,12 +5,15 @@ import '../../core/repositories/sale_repository.dart';
 import '../../core/repositories/shift_repository.dart';
 import '../../core/theme/app_design.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/date_range.dart';
 import '../../core/utils/money_utils.dart';
-import '../sales/sale.dart';
 import '../sales/shift.dart';
 import '../sales/void_request.dart';
-import 'shift_history_screen.dart';
 
+/// The register ("Money in the drawer"). The redesign drops the open/close
+/// shift ritual in favour of a persistent balance: the hero card shows the
+/// all-time cash in the drawer, while a "Today" row of counters resets each
+/// calendar day. Deposits and withdrawals are added by tapping their cards.
 class RegisterScreen extends StatefulWidget {
   final User currentUser;
   final ShiftRepository shiftRepository;
@@ -30,29 +33,17 @@ class RegisterScreen extends StatefulWidget {
 }
 
 class RegisterScreenState extends State<RegisterScreen> {
-  Shift? _activeShift;
-  Map<String, int>? _summary;
-  List<Sale> _voids = [];
+  Shift? _shift;
+  Map<String, int> _snapshot = const {};
   List<VoidRequest> _pendingRequests = [];
   bool _isLoading = true;
   bool _isProcessing = false;
-  bool _voidsVerified = false;
   String? _loadError;
-
-  final _openingCashController = TextEditingController();
-  final _actualCashController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     loadData();
-  }
-
-  @override
-  void dispose() {
-    _openingCashController.dispose();
-    _actualCashController.dispose();
-    super.dispose();
   }
 
   Future<void> loadData() async {
@@ -62,42 +53,23 @@ class RegisterScreenState extends State<RegisterScreen> {
     });
 
     try {
-      final shift = await widget.shiftRepository.getActiveShift();
-      if (shift == null) {
-        if (!mounted) return;
-        setState(() {
-          _activeShift = null;
-          _summary = null;
-          _voids = [];
-          _voidsVerified = false;
-          _isLoading = false;
-        });
-        return;
-      }
-
-      final summary = await widget.shiftRepository.getShiftSummary(shift);
-      final voids = await widget.saleRepository.getVoidedSalesForShift(
-        shift.id,
+      // A shift always exists: create the perpetual one on first visit.
+      final shift = await widget.shiftRepository.ensureActiveShift(
+        widget.currentUser.id,
+      );
+      final snapshot = await widget.shiftRepository.getRegisterSnapshot(
+        DateRange.today(),
       );
       final isOwner = widget.currentUser.role == 'OWNER';
       final pending = isOwner
           ? await widget.saleRepository.getPendingVoidRequests()
           : <VoidRequest>[];
 
-      final oldVoidIds = _voids.map((sale) => sale.id).toSet();
-      final newVoidIds = voids.map((sale) => sale.id).toSet();
-      if (!oldVoidIds.containsAll(newVoidIds) ||
-          !newVoidIds.containsAll(oldVoidIds)) {
-        _voidsVerified = false;
-      }
-
       if (!mounted) return;
       setState(() {
-        _activeShift = shift;
-        _summary = summary;
-        _voids = voids;
+        _shift = shift;
+        _snapshot = snapshot;
         _pendingRequests = pending;
-        if (voids.isEmpty) _voidsVerified = true;
         _isLoading = false;
       });
     } catch (e) {
@@ -114,84 +86,32 @@ class RegisterScreenState extends State<RegisterScreen> {
         .showSnackBar(SnackBar(content: Text(message)));
   }
 
-  Future<void> _openRegister() async {
-    if (_isProcessing) return;
-    final cash = MoneyUtils.stringToMinorUnits(_openingCashController.text);
-    if (cash == null) {
-      _showMessage('Please enter a valid starting cash amount.');
-      return;
-    }
-
-    setState(() => _isProcessing = true);
-    try {
-      await widget.shiftRepository.openShift(widget.currentUser.id, cash);
-      widget.onShiftUpdated();
-      _openingCashController.clear();
-      await loadData();
-    } catch (e) {
-      if (mounted) {
-        _showMessage(e.toString().replaceAll('Exception: ', ''));
-      }
-    } finally {
-      if (mounted) setState(() => _isProcessing = false);
-    }
-  }
-
-  Future<void> _closeRegister() async {
-    if (_activeShift == null || _isProcessing) return;
-    if (!_voidsVerified) {
-      _showMessage('You must verify the voided payments before closing.');
-      return;
-    }
-
-    final actualCash = MoneyUtils.stringToMinorUnits(
-      _actualCashController.text,
-    );
-    if (actualCash == null) {
-      _showMessage('Please enter the actual cash counted.');
-      return;
-    }
-
-    setState(() => _isProcessing = true);
-    try {
-      await widget.shiftRepository.closeShift(
-        _activeShift!,
-        actualCash,
-        userId: widget.currentUser.id,
-      );
-      widget.onShiftUpdated();
-      _actualCashController.clear();
-      await loadData();
-    } catch (e) {
-      if (mounted) {
-        _showMessage(e.toString().replaceAll('Exception: ', ''));
-      }
-    } finally {
-      if (mounted) setState(() => _isProcessing = false);
-    }
-  }
-
-  Future<void> _showCashMovementDialog() async {
-    if (_activeShift == null) return;
+  Future<void> _showCashMovement(String presetType) async {
+    final shift = _shift;
+    if (shift == null || _isProcessing) return;
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (context) => const _CashMovementDialog(),
+      builder: (context) => _CashMovementDialog(initialType: presetType),
     );
     if (result == null || !mounted) return;
 
+    setState(() => _isProcessing = true);
     try {
       await widget.shiftRepository.addCashMovement(
-        _activeShift!.id,
+        shift.id,
         result['type'] as String,
         result['amount'] as int,
         result['reason'] as String,
         userId: widget.currentUser.id,
       );
+      widget.onShiftUpdated();
       await loadData();
     } catch (e) {
       if (mounted) {
         _showMessage(e.toString().replaceAll('Exception: ', ''));
       }
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
     }
   }
 
@@ -267,24 +187,6 @@ class RegisterScreenState extends State<RegisterScreen> {
       appBar: AppBar(
         title: const Text('Cash Register'),
         actions: [
-          if (widget.currentUser.role == 'OWNER')
-            IconButton(
-              icon: const Icon(Icons.receipt_long),
-              tooltip: 'Register History',
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => ShiftHistoryScreen(
-                    shiftRepository: widget.shiftRepository,
-                  ),
-                ),
-              ),
-            ),
-          if (_activeShift != null)
-            IconButton(
-              icon: const Icon(Icons.add_card),
-              tooltip: 'Add Cash Movement',
-              onPressed: _showCashMovementDialog,
-            ),
           IconButton(icon: const Icon(Icons.refresh), onPressed: loadData),
           const SizedBox(width: 16),
         ],
@@ -292,122 +194,65 @@ class RegisterScreenState extends State<RegisterScreen> {
       body: AppBackground(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
-          child: _activeShift == null
-              ? _buildOpenRegisterCard()
-              : _buildActiveRegisterCard(),
+          child: _buildRegister(),
         ),
       ),
     );
   }
 
-  Widget _buildOpenRegisterCard() {
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 500),
-        child: GlassCard(
-          padding: EdgeInsets.zero,
-          child: Padding(
-            padding: const EdgeInsets.all(32),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Open Register',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Enter the starting cash in the drawer to begin your shift.',
-                  style: TextStyle(color: AppTheme.muted),
-                ),
-                const SizedBox(height: 24),
-                TextField(
-                  controller: _openingCashController,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  decoration: const InputDecoration(
-                    labelText: 'Starting Cash (Br)',
-                  ),
-                  onSubmitted: (_) => _openRegister(),
-                ),
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: _isProcessing ? null : _openRegister,
-                    child: _isProcessing
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Text('Open Register'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildActiveRegisterCard() {
-    final expectedCash = _summary!['expected_cash']!;
-    final cashSales = _summary!['cash_sales']!;
-    final bankSales = _summary!['bank_sales']!;
-    final deposits = _summary!['deposits']!;
-    final withdrawals = _summary!['withdrawals']!;
-
-    final actualCash =
-        MoneyUtils.stringToMinorUnits(_actualCashController.text) ?? 0;
-    final discrepancy = actualCash - expectedCash;
+  Widget _buildRegister() {
+    final balance = _snapshot['balance'] ?? 0;
+    final cashSales = _snapshot['today_cash_sales'] ?? 0;
+    final bankSales = _snapshot['today_bank_sales'] ?? 0;
+    final deposits = _snapshot['today_deposits'] ?? 0;
+    final withdrawals = _snapshot['today_withdrawals'] ?? 0;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildExpectedCashHero(expectedCash),
+        _buildBalanceHero(balance),
+        const SizedBox(height: 20),
+        const SectionHeader(title: 'Today'),
+        const SizedBox(height: 4),
+        Text(
+          'Counters reset each calendar day.',
+          style: TextStyle(color: AppDesign.textLo, fontSize: 12),
+        ),
         const SizedBox(height: 12),
         LayoutBuilder(
           builder: (context, constraints) {
-            final columns = constraints.maxWidth >= 560 ? 3 : 2;
+            final columns = constraints.maxWidth >= 560 ? 2 : 2;
             const spacing = 12.0;
             final itemWidth =
                 (constraints.maxWidth - spacing * (columns - 1)) / columns;
             final stats = <_RegStat>[
               _RegStat(
-                'Opening Cash',
-                _activeShift!.openingCashMinorUnits,
-                Icons.lock_outline_rounded,
-                AppDesign.textLo,
-              ),
-              _RegStat(
-                'Cash Sales',
+                'Today Cash Sales',
                 cashSales,
                 Icons.payments_rounded,
                 AppDesign.success,
               ),
               _RegStat(
-                'Bank Sales',
+                'Today Bank Sales',
                 bankSales,
                 Icons.account_balance_rounded,
                 AppDesign.blueBright,
               ),
               _RegStat(
-                'Withdrawals',
-                withdrawals,
-                Icons.south_west_rounded,
-                AppDesign.warning,
-              ),
-              _RegStat(
-                'Deposits',
+                'Today Deposits',
                 deposits,
                 Icons.north_east_rounded,
                 AppDesign.blue,
+                onTap: () => _showCashMovement('DEPOSIT'),
+                hint: 'Tap to add a deposit',
+              ),
+              _RegStat(
+                'Today Withdrawals',
+                withdrawals,
+                Icons.south_west_rounded,
+                AppDesign.warning,
+                onTap: () => _showCashMovement('WITHDRAWAL'),
+                hint: 'Tap to record a withdrawal',
               ),
             ];
             return Wrap(
@@ -415,15 +260,7 @@ class RegisterScreenState extends State<RegisterScreen> {
               runSpacing: spacing,
               children: [
                 for (final s in stats)
-                  SizedBox(
-                    width: itemWidth,
-                    child: _buildStatCard(
-                      s.title,
-                      s.value,
-                      s.icon,
-                      color: s.color,
-                    ),
-                  ),
+                  SizedBox(width: itemWidth, child: _buildStatCard(s)),
               ],
             );
           },
@@ -432,27 +269,114 @@ class RegisterScreenState extends State<RegisterScreen> {
           const SizedBox(height: 24),
           _buildPendingRequestsCard(),
         ],
-        const SizedBox(height: 24),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final closeCard = _buildCloseCard(discrepancy);
-            final voidsCard = _buildVoidsCard();
-            if (constraints.maxWidth < 900) {
-              return Column(
-                children: [closeCard, const SizedBox(height: 24), voidsCard],
-              );
-            }
-            return Row(
+      ],
+    );
+  }
+
+  Widget _buildBalanceHero(int balance) {
+    return GlassCard(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 22),
+      gradient: const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [AppDesign.blueDeep, AppDesign.blue],
+      ),
+      border: Border.all(color: AppDesign.blueBright.withValues(alpha: 0.5)),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(flex: 2, child: closeCard),
-                const SizedBox(width: 24),
-                Expanded(child: voidsCard),
+                const Text(
+                  'Register Balance',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.4,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    MoneyUtils.formatBr(balance),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 34,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -1,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Cash in the drawer. Changes only when money moves.',
+                  style: TextStyle(color: Colors.white70, fontSize: 12),
+                ),
               ],
-            );
-          },
-        ),
-      ],
+            ),
+          ),
+          const Icon(
+            Icons.account_balance_wallet_rounded,
+            color: Colors.white,
+            size: 34,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatCard(_RegStat stat) {
+    final card = GlassCard(
+      padding: const EdgeInsets.all(14),
+      radius: AppDesign.radiusCardSm,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          IconChip(icon: stat.icon, size: 30, color: stat.color),
+          const SizedBox(height: 10),
+          Text(
+            stat.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: AppDesign.textLo,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 4),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              MoneyUtils.formatBr(stat.value),
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w800,
+                color: AppDesign.textHi,
+                letterSpacing: -0.3,
+              ),
+            ),
+          ),
+          if (stat.hint != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              stat.hint!,
+              style: TextStyle(fontSize: 11, color: AppDesign.textLo),
+            ),
+          ],
+        ],
+      ),
+    );
+    if (stat.onTap == null) return card;
+    return InkWell(
+      onTap: _isProcessing ? null : stat.onTap,
+      borderRadius: BorderRadius.circular(AppDesign.radiusCardSm),
+      child: card,
     );
   }
 
@@ -565,304 +489,9 @@ class RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  Widget _buildCloseCard(int discrepancy) {
-    return GlassCard(
-      padding: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Close Register',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Count the physical cash in the drawer and enter the total below.',
-              style: TextStyle(color: AppTheme.muted),
-            ),
-            const SizedBox(height: 24),
-            TextField(
-              controller: _actualCashController,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              decoration: const InputDecoration(
-                labelText: 'Actual Cash in Drawer (Br)',
-              ),
-              onChanged: (_) => setState(() {}),
-              onSubmitted: (_) => _closeRegister(),
-            ),
-            const SizedBox(height: 24),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Theme.of(context).scaffoldBackgroundColor,
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: Theme.of(context).dividerColor),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    'Discrepancy',
-                    style: TextStyle(fontWeight: FontWeight.w500),
-                  ),
-                  // Flexible so the amount can wrap on narrow (phone) widths
-                  // instead of overflowing; on desktop it keeps its natural size.
-                  Flexible(
-                    child: Text(
-                      MoneyUtils.formatBr(discrepancy),
-                      textAlign: TextAlign.right,
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: discrepancy == 0
-                            ? AppTheme.success
-                            : AppTheme.danger,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _voidsVerified ? AppTheme.danger : null,
-                ),
-                onPressed: _voidsVerified && !_isProcessing
-                    ? _closeRegister
-                    : null,
-                child: _isProcessing
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Text('Close Register'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildVoidsCard() {
-    return GlassCard(
-      padding: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Row(
-              children: [
-                Icon(
-                  Icons.warning_amber_rounded,
-                  color: AppTheme.danger,
-                  size: 20,
-                ),
-                SizedBox(width: 8),
-                Text(
-                  'Voided Payments',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Verify these voids before closing.',
-              style: TextStyle(color: AppTheme.muted, fontSize: 13),
-            ),
-            const Divider(height: 24),
-            if (_voids.isEmpty)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                child: Text(
-                  'No voids during this shift.',
-                  style: TextStyle(color: AppTheme.muted, fontSize: 13),
-                ),
-              )
-            else ...[
-              ..._voids.map(
-                (voidedSale) => Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).scaffoldBackgroundColor,
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(color: Theme.of(context).dividerColor),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(
-                          Icons.cancel,
-                          color: AppTheme.danger,
-                          size: 16,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '${MoneyUtils.formatBr(voidedSale.totalMinorUnits)}'
-                                ' • ${voidedSale.paymentMethod}',
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              if (voidedSale.voidReason != null &&
-                                  voidedSale.voidReason!.trim().isNotEmpty)
-                                Text(
-                                  'Reason: ${voidedSale.voidReason}',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: AppTheme.muted,
-                                  ),
-                                ),
-                              if (voidedSale.voidedAt != null)
-                                Text(
-                                  'Voided at ${_formatTime(voidedSale.voidedAt!)}',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: AppTheme.muted,
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              const Divider(),
-              CheckboxListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text(
-                  'I have reviewed these voids',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
-                ),
-                value: _voidsVerified,
-                onChanged: (value) =>
-                    setState(() => _voidsVerified = value ?? false),
-                controlAffinity: ListTileControlAffinity.leading,
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
   String _formatTime(DateTime time) {
     return '${time.hour.toString().padLeft(2, '0')}:'
         '${time.minute.toString().padLeft(2, '0')}';
-  }
-
-  Widget _buildExpectedCashHero(int expectedCash) {
-    return GlassCard(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 22),
-      gradient: const LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [AppDesign.blueDeep, AppDesign.blue],
-      ),
-      border: Border.all(color: AppDesign.blueBright.withValues(alpha: 0.5)),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Expected Cash',
-                  style: TextStyle(
-                    color: Colors.white70,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.4,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    MoneyUtils.formatBr(expectedCash),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 34,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -1,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const Icon(
-            Icons.account_balance_wallet_rounded,
-            color: Colors.white,
-            size: 34,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatCard(
-    String title,
-    int amountMinorUnits,
-    IconData icon, {
-    Color? color,
-  }) {
-    final accent = color ?? AppDesign.blueBright;
-    return GlassCard(
-      padding: const EdgeInsets.all(14),
-      radius: AppDesign.radiusCardSm,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          IconChip(icon: icon, size: 30, color: accent),
-          const SizedBox(height: 10),
-          Text(
-            title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: AppDesign.textLo,
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          const SizedBox(height: 4),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerLeft,
-            child: Text(
-              MoneyUtils.formatBr(amountMinorUnits),
-              style: TextStyle(
-                fontSize: 17,
-                fontWeight: FontWeight.w800,
-                color: AppDesign.textHi,
-                letterSpacing: -0.3,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }
 
@@ -871,11 +500,22 @@ class _RegStat {
   final int value;
   final IconData icon;
   final Color color;
-  const _RegStat(this.title, this.value, this.icon, this.color);
+  final VoidCallback? onTap;
+  final String? hint;
+  const _RegStat(
+    this.title,
+    this.value,
+    this.icon,
+    this.color, {
+    this.onTap,
+    this.hint,
+  });
 }
 
 class _CashMovementDialog extends StatefulWidget {
-  const _CashMovementDialog();
+  final String initialType;
+
+  const _CashMovementDialog({this.initialType = 'WITHDRAWAL'});
 
   @override
   State<_CashMovementDialog> createState() => _CashMovementDialogState();
@@ -884,7 +524,7 @@ class _CashMovementDialog extends StatefulWidget {
 class _CashMovementDialogState extends State<_CashMovementDialog> {
   final _amountController = TextEditingController();
   final _reasonController = TextEditingController();
-  String _type = 'WITHDRAWAL';
+  late String _type = widget.initialType;
   String? _error;
 
   @override
@@ -912,7 +552,7 @@ class _CashMovementDialogState extends State<_CashMovementDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Add Cash Movement'),
+      title: const Text('Cash Movement'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [

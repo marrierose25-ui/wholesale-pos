@@ -16,6 +16,11 @@ abstract class ShiftRepository {
 
   Future<Shift?> getActiveShift();
 
+  /// Returns the currently open shift, creating a perpetual one (opening cash
+  /// `0`) when none exists. Idempotent and safe against the one-open-shift
+  /// trigger: concurrent callers converge on a single OPEN row.
+  Future<Shift> ensureActiveShift(String cashierId);
+
   /// Past and present register sessions, newest first, each carrying the
   /// cashier username for display. Filter by the day the shift was *opened*
   /// ([period], a half-open local range) and/or [status] (`OPEN`/`CLOSED`).
@@ -32,6 +37,12 @@ abstract class ShiftRepository {
   });
 
   Future<Map<String, int>> getShiftSummary(Shift shift);
+
+  /// Register figures for the perpetual open shift: `balance` is the all-time
+  /// expected cash in the drawer, while the `today_*` counters are the same
+  /// sums restricted to [day] (a half-open local range) so they reset each
+  /// calendar day. Returns all zeros when no shift is open.
+  Future<Map<String, int>> getRegisterSnapshot(DateRange day);
 
   Future<void> closeShift(Shift shift, int closingCash, {String? userId});
 }
@@ -51,6 +62,33 @@ class SqfliteShiftRepository implements ShiftRepository {
     );
     if (maps.isEmpty) return null;
     return Shift.fromMap(maps.first);
+  }
+
+  @override
+  Future<Shift> ensureActiveShift(String cashierId) async {
+    final existing = await getActiveShift();
+    if (existing != null) return existing;
+    final shift = Shift(
+      id: const Uuid().v4(),
+      cashierId: cashierId,
+      openingCashMinorUnits: 0,
+      status: 'OPEN',
+      openedAt: DateTime.now(),
+    );
+    await _db.transaction((txn) async {
+      // Re-check inside the transaction so a concurrent opener wins exactly
+      // once and the one-open-shift trigger is never tripped.
+      final active = await txn.query(
+        'shifts',
+        where: "status = 'OPEN'",
+        limit: 1,
+      );
+      if (active.isNotEmpty) return;
+      await txn.insert('shifts', shift.toMap());
+      await _enqueueShift(txn, shift.id);
+    });
+    final after = await getActiveShift();
+    return after ?? shift;
   }
 
   /// Past and present register sessions, newest first, each carrying the
@@ -234,6 +272,55 @@ class SqfliteShiftRepository implements ShiftRepository {
       'withdrawals': withdrawals,
       'cash_refunds': cashRefunds,
       'expected_cash': expectedCash,
+    };
+  }
+
+  @override
+  Future<Map<String, int>> getRegisterSnapshot(DateRange day) async {
+    final shift = await getActiveShift();
+    if (shift == null) {
+      return {
+        'balance': 0,
+        'today_cash_sales': 0,
+        'today_bank_sales': 0,
+        'today_deposits': 0,
+        'today_withdrawals': 0,
+      };
+    }
+    // All-time drawer balance reuses the shift summary so the two agree.
+    final summary = await getShiftSummary(shift);
+    final start = day.start.toIso8601String();
+    final end = day.end.toIso8601String();
+
+    final sales = await _db.rawQuery(
+      '''
+      SELECT
+        COALESCE(SUM(CASE WHEN payment_method = 'CASH' THEN total_minor_units ELSE 0 END), 0) AS cash_sales,
+        COALESCE(SUM(CASE WHEN payment_method = 'BANK' THEN total_minor_units ELSE 0 END), 0) AS bank_sales
+      FROM sales
+      WHERE status = 'COMPLETED' AND shift_id = ?
+        AND created_at >= ? AND created_at < ?
+    ''',
+      [shift.id, start, end],
+    );
+    final movements = await _db.rawQuery(
+      '''
+      SELECT
+        COALESCE(SUM(CASE WHEN type = 'DEPOSIT' THEN amount_minor_units ELSE 0 END), 0) AS deposits,
+        COALESCE(SUM(CASE WHEN type IN ('WITHDRAWAL', 'EXPENSE') THEN amount_minor_units ELSE 0 END), 0) AS withdrawals
+      FROM cash_movements
+      WHERE shift_id = ? AND created_at >= ? AND created_at < ?
+    ''',
+      [shift.id, start, end],
+    );
+
+    int asInt(Object? v) => (v as num?)?.toInt() ?? 0;
+    return {
+      'balance': summary['expected_cash'] ?? 0,
+      'today_cash_sales': asInt(sales.first['cash_sales']),
+      'today_bank_sales': asInt(sales.first['bank_sales']),
+      'today_deposits': asInt(movements.first['deposits']),
+      'today_withdrawals': asInt(movements.first['withdrawals']),
     };
   }
 

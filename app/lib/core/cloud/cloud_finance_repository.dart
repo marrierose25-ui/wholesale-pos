@@ -28,6 +28,17 @@ class CloudFinanceRepository implements FinanceRepository {
   }
 
   @override
+  Future<List<FinanceCategory>> getDeletedCategories(String ownerId) async {
+    final json = await _api.call('finance_deleted_categories');
+    final rows = json['categories'];
+    if (rows is! List) return const [];
+    return rows
+        .whereType<Map<String, dynamic>>()
+        .map(FinanceCategory.fromMap)
+        .toList();
+  }
+
+  @override
   Future<List<Map<String, dynamic>>> getCategorySummaries(
     String ownerId,
   ) async {
@@ -59,6 +70,32 @@ class CloudFinanceRepository implements FinanceRepository {
   }
 
   @override
+  Future<void> deleteCategory({
+    required String ownerId,
+    required String categoryId,
+  }) async {
+    await _api.call('finance_delete_category', {'category_id': categoryId});
+  }
+
+  @override
+  Future<void> restoreCategory({
+    required String ownerId,
+    required String categoryId,
+  }) async {
+    await _api.call('finance_restore_category', {'category_id': categoryId});
+  }
+
+  @override
+  Future<void> permanentlyDeleteCategory({
+    required String ownerId,
+    required String categoryId,
+  }) async {
+    await _api.call('finance_permanently_delete_category', {
+      'category_id': categoryId,
+    });
+  }
+
+  @override
   Future<FinanceEntry> addEntry({
     required String ownerId,
     required String categoryId,
@@ -66,12 +103,14 @@ class CloudFinanceRepository implements FinanceRepository {
     required int amountMinorUnits,
     String? description,
     DateTime? entryDate,
+    String? paymentMethod,
   }) async {
     final json = await _api.call('finance_add_entry', {
       'category_id': categoryId,
       'source': source,
       'amount_minor_units': amountMinorUnits,
       'description': ?description,
+      'payment_method': ?paymentMethod,
       if (entryDate != null) 'entry_date': entryDate.toIso8601String(),
     });
     return FinanceEntry.fromMap(json['entry'] as Map<String, dynamic>);
@@ -85,12 +124,14 @@ class CloudFinanceRepository implements FinanceRepository {
     required int amountMinorUnits,
     String? description,
     DateTime? entryDate,
+    String? paymentMethod,
   }) async {
     await _api.call('finance_update_entry', {
       'entry_id': entryId,
       'source': source,
       'amount_minor_units': amountMinorUnits,
       'description': ?description,
+      'payment_method': ?paymentMethod,
       if (entryDate != null) 'entry_date': entryDate.toIso8601String(),
     });
   }

@@ -35,7 +35,6 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
 
   ReportPeriod _period = ReportPeriod.allTime;
   DateTimeRange? _customRange;
-  String _status = 'ALL';
 
   @override
   void initState() {
@@ -69,7 +68,7 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
             ? null
             : _searchController.text.trim(),
         period: _activeRange,
-        status: _status,
+        status: 'ALL',
       );
       if (!mounted) return;
       setState(() {
@@ -90,34 +89,11 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
     _searchDebounce = Timer(const Duration(milliseconds: 350), _loadSales);
   }
 
-  Future<void> _pickCustomRange() async {
-    final now = DateTime.now();
-    final picked = await showDateRangePicker(
-      context: context,
-      firstDate: DateTime(2020),
-      lastDate: DateTime(now.year + 1, 12, 31),
-      initialDateRange:
-          _customRange ??
-          DateTimeRange(
-            start: DateTime(
-              now.year,
-              now.month,
-              now.day,
-            ).subtract(const Duration(days: 6)),
-            end: DateTime(now.year, now.month, now.day),
-          ),
-    );
-    if (picked != null) {
-      setState(() {
-        _period = ReportPeriod.custom;
-        _customRange = picked;
-      });
-      _loadSales();
-    }
-  }
-
-  void _selectPeriod(ReportPeriod period) {
-    setState(() => _period = period);
+  void _onPeriodChanged(ReportPeriod period, DateTimeRange? range) {
+    setState(() {
+      _period = period;
+      _customRange = range;
+    });
     _loadSales();
   }
 
@@ -126,15 +102,12 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
     setState(() {
       _period = ReportPeriod.allTime;
       _customRange = null;
-      _status = 'ALL';
     });
     _loadSales();
   }
 
   bool get _hasActiveFilters =>
-      _searchController.text.isNotEmpty ||
-      _period != ReportPeriod.allTime ||
-      _status != 'ALL';
+      _searchController.text.isNotEmpty || _period != ReportPeriod.allTime;
 
   String _formatDate(DateTime date) {
     return '${date.year.toString().padLeft(4, '0')}-'
@@ -464,33 +437,14 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
 
   Widget _buildSalesList() {
     final entries = _buildGroupedEntries();
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  '${_sales.length} ${_sales.length == 1 ? 'sale' : 'sales'}',
-                  style: TextStyle(color: AppTheme.muted, fontSize: 12),
-                ),
-              ),
-            ],
-          ),
-        ),
-        Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.only(bottom: 16),
-            itemCount: entries.length,
-            itemBuilder: (context, index) {
-              final entry = entries[index];
-              if (entry.isHeader) return _buildDayHeader(entry.label!);
-              return _buildSaleRow(entry.sale!);
-            },
-          ),
-        ),
-      ],
+    return ListView.builder(
+      padding: const EdgeInsets.only(bottom: 16),
+      itemCount: entries.length,
+      itemBuilder: (context, index) {
+        final entry = entries[index];
+        if (entry.isHeader) return _buildDayHeader(entry.label!);
+        return _buildSaleRow(entry.sale!);
+      },
     );
   }
 
@@ -596,48 +550,12 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
             onSubmitted: (_) => _loadSales(),
           ),
           const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
+          Row(
             children: [
-              ...ReportPeriod.values
-                  .where((p) => p != ReportPeriod.custom)
-                  .map(
-                    (period) => ChoiceChip(
-                      label: Text(period.label),
-                      selected: _period == period,
-                      onSelected: (_) => _selectPeriod(period),
-                    ),
-                  ),
-              ActionChip(
-                avatar: Icon(
-                  Icons.date_range,
-                  size: 16,
-                  color: _period == ReportPeriod.custom
-                      ? Colors.white
-                      : AppTheme.foreground,
-                ),
-                label: Text(
-                  _period == ReportPeriod.custom && _customRange != null
-                      ? '${_formatDate(_customRange!.start)} - '
-                            '${_formatDate(_customRange!.end)}'
-                      : 'Custom',
-                ),
-                onPressed: _pickCustomRange,
-              ),
-              const SizedBox(width: 8),
-              SegmentedButton<String>(
-                segments: const [
-                  ButtonSegment(value: 'ALL', label: Text('All')),
-                  ButtonSegment(value: 'COMPLETED', label: Text('Completed')),
-                  ButtonSegment(value: 'VOIDED', label: Text('Voided')),
-                ],
-                selected: {_status},
-                onSelectionChanged: (selection) {
-                  setState(() => _status = selection.first);
-                  _loadSales();
-                },
+              PeriodDropdown(
+                value: _period,
+                customRange: _customRange,
+                onChanged: _onPeriodChanged,
               ),
               if (_hasActiveFilters)
                 TextButton(

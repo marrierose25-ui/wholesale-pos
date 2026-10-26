@@ -3,6 +3,8 @@ import 'package:uuid/uuid.dart';
 
 import '../models/finance_category.dart';
 import '../models/finance_entry.dart';
+import '../sync/sync_outbox.dart';
+import '../sync/sync_outbox_entry.dart';
 import '../utils/date_range.dart';
 import '../utils/money_utils.dart';
 import 'sale_repository.dart';
@@ -16,8 +18,11 @@ abstract class FinanceRepository {
 
   Future<List<FinanceCategory>> getCategories(String ownerId);
 
+  /// People in the recycle bin (soft-deleted), newest trashed first.
+  Future<List<FinanceCategory>> getDeletedCategories(String ownerId);
+
   /// Categories with pending entry counts and pending totals, for the
-  /// overview list.
+  /// overview list. Active (non-binned) people only.
   Future<List<Map<String, dynamic>>> getCategorySummaries(String ownerId);
 
   Future<FinanceCategory> createCategory({
@@ -33,6 +38,26 @@ abstract class FinanceRepository {
     required String newName,
   });
 
+  /// Moves a person to the recycle bin. History is kept; the person and their
+  /// entries leave the active area until restored or permanently deleted.
+  Future<void> deleteCategory({
+    required String ownerId,
+    required String categoryId,
+  });
+
+  /// Restores a binned person back to the active area.
+  Future<void> restoreCategory({
+    required String ownerId,
+    required String categoryId,
+  });
+
+  /// Removes a binned person and all of their entries for good. Only allowed
+  /// for people already in the recycle bin.
+  Future<void> permanentlyDeleteCategory({
+    required String ownerId,
+    required String categoryId,
+  });
+
   Future<FinanceEntry> addEntry({
     required String ownerId,
     required String categoryId,
@@ -40,6 +65,7 @@ abstract class FinanceRepository {
     required int amountMinorUnits,
     String? description,
     DateTime? entryDate,
+    String? paymentMethod,
   });
 
   Future<void> updateEntry({
@@ -49,8 +75,11 @@ abstract class FinanceRepository {
     required int amountMinorUnits,
     String? description,
     DateTime? entryDate,
+    String? paymentMethod,
   });
 
+  /// Marks an entry taken. When it is a CASH collection the amount is also
+  /// deposited into the open cash register.
   Future<void> markCompleted({
     required String ownerId,
     required String entryId,
@@ -133,7 +162,20 @@ class SqfliteFinanceRepository implements FinanceRepository {
     await _requireActiveOwner(_db, ownerId);
     final maps = await _db.query(
       'finance_categories',
+      where: 'deleted_at IS NULL',
       orderBy: 'name COLLATE NOCASE ASC',
+    );
+    return maps.map(FinanceCategory.fromMap).toList();
+  }
+
+  /// People in the recycle bin (soft-deleted), newest trashed first.
+  @override
+  Future<List<FinanceCategory>> getDeletedCategories(String ownerId) async {
+    await _requireActiveOwner(_db, ownerId);
+    final maps = await _db.query(
+      'finance_categories',
+      where: 'deleted_at IS NOT NULL',
+      orderBy: 'deleted_at DESC',
     );
     return maps.map(FinanceCategory.fromMap).toList();
   }
@@ -154,6 +196,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
       LEFT JOIN finance_entries
         ON finance_entries.category_id = finance_categories.id
        AND finance_entries.status = 'PENDING'
+      WHERE finance_categories.deleted_at IS NULL
       GROUP BY finance_categories.id, finance_categories.name
       ORDER BY finance_categories.name COLLATE NOCASE ASC
     ''');
@@ -242,6 +285,118 @@ class SqfliteFinanceRepository implements FinanceRepository {
     });
   }
 
+  /// Moves a person to the recycle bin. History is kept; the person and their
+  /// entries leave the active area until restored or permanently deleted.
+  @override
+  Future<void> deleteCategory({
+    required String ownerId,
+    required String categoryId,
+  }) async {
+    await _db.transaction((txn) async {
+      await _requireActiveOwner(txn, ownerId);
+      final existing = await txn.query(
+        'finance_categories',
+        where: 'id = ?',
+        whereArgs: [categoryId],
+        limit: 1,
+      );
+      if (existing.isEmpty) throw Exception('Person not found.');
+      if (existing.first['deleted_at'] != null) {
+        throw Exception('Person is already in the recycle bin.');
+      }
+      final name = existing.first['name'] as String;
+      await txn.update(
+        'finance_categories',
+        {
+          'deleted_at': DateTime.now().toIso8601String(),
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [categoryId],
+      );
+      await _audit(
+        txn,
+        ownerId,
+        'FINANCE_CATEGORY_DELETED',
+        'Person "$name" moved to the recycle bin.',
+      );
+    });
+  }
+
+  /// Restores a binned person back to the active area.
+  @override
+  Future<void> restoreCategory({
+    required String ownerId,
+    required String categoryId,
+  }) async {
+    await _db.transaction((txn) async {
+      await _requireActiveOwner(txn, ownerId);
+      final existing = await txn.query(
+        'finance_categories',
+        where: 'id = ?',
+        whereArgs: [categoryId],
+        limit: 1,
+      );
+      if (existing.isEmpty) throw Exception('Person not found.');
+      if (existing.first['deleted_at'] == null) {
+        throw Exception('Person is not in the recycle bin.');
+      }
+      final name = existing.first['name'] as String;
+      await txn.update(
+        'finance_categories',
+        {'deleted_at': null, 'updated_at': DateTime.now().toIso8601String()},
+        where: 'id = ?',
+        whereArgs: [categoryId],
+      );
+      await _audit(
+        txn,
+        ownerId,
+        'FINANCE_CATEGORY_RESTORED',
+        'Person "$name" restored from the recycle bin.',
+      );
+    });
+  }
+
+  /// Removes a binned person and all of their entries for good. Only allowed
+  /// for people already in the recycle bin. Entries have no ON DELETE CASCADE,
+  /// so they are removed explicitly inside the same transaction.
+  @override
+  Future<void> permanentlyDeleteCategory({
+    required String ownerId,
+    required String categoryId,
+  }) async {
+    await _db.transaction((txn) async {
+      await _requireActiveOwner(txn, ownerId);
+      final existing = await txn.query(
+        'finance_categories',
+        where: 'id = ?',
+        whereArgs: [categoryId],
+        limit: 1,
+      );
+      if (existing.isEmpty) throw Exception('Person not found.');
+      if (existing.first['deleted_at'] == null) {
+        throw Exception('Move the person to the recycle bin first.');
+      }
+      final name = existing.first['name'] as String;
+      await txn.delete(
+        'finance_entries',
+        where: 'category_id = ?',
+        whereArgs: [categoryId],
+      );
+      await txn.delete(
+        'finance_categories',
+        where: 'id = ?',
+        whereArgs: [categoryId],
+      );
+      await _audit(
+        txn,
+        ownerId,
+        'FINANCE_CATEGORY_PERMANENTLY_DELETED',
+        'Person "$name" and their entries permanently deleted.',
+      );
+    });
+  }
+
   // ------------------------------------------------------------------
   // Entries
   // ------------------------------------------------------------------
@@ -255,6 +410,18 @@ class SqfliteFinanceRepository implements FinanceRepository {
       throw Exception('Source must be $_maxSourceLength characters or fewer.');
     }
     return trimmed;
+  }
+
+  /// Normalizes the optional Cash/Bank tender marker on a collection. Returns
+  /// `null` when unset so older entries and non-cash collections stay neutral.
+  String? _validatedPaymentMethod(String? paymentMethod) {
+    if (paymentMethod == null) return null;
+    final normalized = paymentMethod.trim().toUpperCase();
+    if (normalized.isEmpty) return null;
+    if (normalized != 'CASH' && normalized != 'BANK') {
+      throw Exception('Payment method must be CASH or BANK.');
+    }
+    return normalized;
   }
 
   Future<FinanceCategory> _requireCategory(
@@ -279,8 +446,10 @@ class SqfliteFinanceRepository implements FinanceRepository {
     required int amountMinorUnits,
     String? description,
     DateTime? entryDate,
+    String? paymentMethod,
   }) async {
     final validatedSource = _validatedSource(source);
+    final validatedPaymentMethod = _validatedPaymentMethod(paymentMethod);
     if (amountMinorUnits <= 0) {
       throw Exception('The amount must be greater than zero.');
     }
@@ -306,6 +475,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
       createdAt: now,
       createdBy: ownerId,
       updatedAt: now,
+      paymentMethod: validatedPaymentMethod,
     );
 
     await _db.transaction((txn) async {
@@ -333,8 +503,10 @@ class SqfliteFinanceRepository implements FinanceRepository {
     required int amountMinorUnits,
     String? description,
     DateTime? entryDate,
+    String? paymentMethod,
   }) async {
     final validatedSource = _validatedSource(source);
+    final validatedPaymentMethod = _validatedPaymentMethod(paymentMethod);
     if (amountMinorUnits <= 0) {
       throw Exception('The amount must be greater than zero.');
     }
@@ -365,6 +537,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
               ? null
               : trimmedDescription,
           'entry_date': (entryDate ?? entry.entryDate).toIso8601String(),
+          'payment_method': validatedPaymentMethod,
           'updated_at': DateTime.now().toIso8601String(),
         },
         where: 'id = ? AND status = ?',
@@ -416,6 +589,61 @@ class SqfliteFinanceRepository implements FinanceRepository {
       );
       if (updated != 1) {
         throw Exception('Entry is no longer pending.');
+      }
+      // A cash collection physically puts money into the drawer, so deposit it
+      // onto the open (perpetual) shift. Bank/non-cash collections never touch
+      // the register. If no shift is open we create one so the deposit lands.
+      if (entry.paymentMethod == 'CASH') {
+        final shiftRows = await txn.query(
+          'shifts',
+          columns: ['id'],
+          where: "status = 'OPEN'",
+          limit: 1,
+        );
+        String shiftId;
+        if (shiftRows.isEmpty) {
+          shiftId = const Uuid().v4();
+          await txn.insert('shifts', {
+            'id': shiftId,
+            'cashier_id': ownerId,
+            'opening_cash_minor_units': 0,
+            'status': 'OPEN',
+            'opened_at': now.toIso8601String(),
+          });
+          await SyncOutbox.upsert(
+            txn,
+            entityType: SyncEntities.shift,
+            entityId: shiftId,
+            payload: {
+              'shift': {
+                'id': shiftId,
+                'cashier_id': ownerId,
+                'opening_cash_minor_units': 0,
+                'status': 'OPEN',
+                'opened_at': now.toIso8601String(),
+              },
+            },
+          );
+        } else {
+          shiftId = shiftRows.first['id'] as String;
+        }
+        final movementId = const Uuid().v4();
+        final movement = {
+          'id': movementId,
+          'shift_id': shiftId,
+          'user_id': ownerId,
+          'type': 'DEPOSIT',
+          'amount_minor_units': entry.amountMinorUnits,
+          'reason': 'Collected from ${category.name}',
+          'created_at': now.toIso8601String(),
+        };
+        await txn.insert('cash_movements', movement);
+        await SyncOutbox.upsert(
+          txn,
+          entityType: SyncEntities.cashMovement,
+          entityId: movementId,
+          payload: {'cash_movement': movement},
+        );
       }
       await _audit(
         txn,
@@ -482,6 +710,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
       FROM finance_entries
       JOIN finance_categories
         ON finance_entries.category_id = finance_categories.id
+       AND finance_categories.deleted_at IS NULL
     ''');
     if (where.isNotEmpty) sql.write(' WHERE ${where.join(' AND ')}');
     sql.write(
@@ -492,7 +721,8 @@ class SqfliteFinanceRepository implements FinanceRepository {
     return maps.map(FinanceEntry.fromMap).toList();
   }
 
-  /// Pending and completed totals for one person, used on the person page.
+  /// Pending and completed totals for one person, used on the person page. A
+  /// binned person reports zeros so the active views never surface their rows.
   @override
   Future<Map<String, int>> getPersonTotals(
     String ownerId,
@@ -502,10 +732,13 @@ class SqfliteFinanceRepository implements FinanceRepository {
     final rows = await _db.rawQuery(
       '''
       SELECT
-        COALESCE(SUM(CASE WHEN status = 'PENDING' THEN amount_minor_units ELSE 0 END), 0) AS pending_total,
-        COALESCE(SUM(CASE WHEN status = 'COMPLETED' THEN amount_minor_units ELSE 0 END), 0) AS completed_total
+        COALESCE(SUM(CASE WHEN finance_entries.status = 'PENDING' THEN finance_entries.amount_minor_units ELSE 0 END), 0) AS pending_total,
+        COALESCE(SUM(CASE WHEN finance_entries.status = 'COMPLETED' THEN finance_entries.amount_minor_units ELSE 0 END), 0) AS completed_total
       FROM finance_entries
-      WHERE category_id = ?
+      JOIN finance_categories
+        ON finance_entries.category_id = finance_categories.id
+       AND finance_categories.deleted_at IS NULL
+      WHERE finance_entries.category_id = ?
     ''',
       [categoryId],
     );

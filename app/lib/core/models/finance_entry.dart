@@ -1,6 +1,7 @@
 /// One manually recorded money activity in the owner's private area, e.g.
-/// "taken from Bank X". Completely separate from sales: creating or
-/// completing an entry never touches sales or revenue totals.
+/// "taken from Bank X". Separate from sales: creating an entry never touches
+/// revenue. Completing a CASH collection additionally deposits the amount into
+/// the cash register (see FinanceRepository.markCompleted).
 class FinanceEntry {
   static const String statusPending = 'PENDING';
   static const String statusCompleted = 'COMPLETED';
@@ -18,6 +19,10 @@ class FinanceEntry {
   final String? completedBy;
   final DateTime updatedAt;
 
+  /// How the money will actually move: `CASH` collections deposit into the
+  /// register when marked taken; anything else (e.g. `BANK`) does not.
+  final String? paymentMethod;
+
   /// Person name hydrated from the category for display only.
   final String? categoryName;
 
@@ -34,10 +39,12 @@ class FinanceEntry {
     this.completedAt,
     this.completedBy,
     required this.updatedAt,
+    this.paymentMethod,
     this.categoryName,
   });
 
   bool get isCompleted => status == statusCompleted;
+  bool get isCash => paymentMethod == 'CASH';
 
   Map<String, dynamic> toMap() {
     return {
@@ -53,6 +60,7 @@ class FinanceEntry {
       'completed_at': completedAt?.toIso8601String(),
       'completed_by': completedBy,
       'updated_at': updatedAt.toIso8601String(),
+      'payment_method': paymentMethod,
     };
   }
 
@@ -72,6 +80,7 @@ class FinanceEntry {
           : DateTime.parse(map['completed_at'] as String),
       completedBy: map['completed_by'] as String?,
       updatedAt: DateTime.parse(map['updated_at'] as String),
+      paymentMethod: map['payment_method'] as String?,
       categoryName: map['category_name'] as String?,
     );
   }

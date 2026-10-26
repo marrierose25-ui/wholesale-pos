@@ -23,6 +23,29 @@ class CloudShiftRepository implements ShiftRepository {
   }
 
   @override
+  Future<Shift> ensureActiveShift(String cashierId) async {
+    final json = await _api.call('ensure_shift');
+    final shift = json['shift'];
+    if (shift is! Map<String, dynamic>) {
+      throw Exception('Server returned no shift.');
+    }
+    return Shift.fromMap(shift);
+  }
+
+  @override
+  Future<Map<String, int>> getRegisterSnapshot(DateRange day) async {
+    final json = await _api.call('register_snapshot', {
+      'period_start': day.start.toIso8601String(),
+      'period_end': day.end.toIso8601String(),
+    });
+    final snapshot = json['snapshot'];
+    if (snapshot is! Map<String, dynamic>) return const {};
+    return {
+      for (final e in snapshot.entries) e.key: (e.value as num?)?.toInt() ?? 0,
+    };
+  }
+
+  @override
   Future<List<Shift>> getShiftHistory({
     DateRange? period,
     String? status,

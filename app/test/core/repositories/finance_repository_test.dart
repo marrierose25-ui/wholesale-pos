@@ -335,4 +335,261 @@ void main() {
       expect(logs.length, 3); // 1 category + 2 entries
     });
   });
+
+  group('recycle bin (soft delete)', () {
+    test('a binned person and their entries leave the active area', () async {
+      final category = await repository.createCategory(
+        ownerId: 'owner-1',
+        name: 'Alem',
+      );
+      await repository.addEntry(
+        ownerId: 'owner-1',
+        categoryId: category.id,
+        source: 'Bank',
+        amountMinorUnits: 100000,
+      );
+      expect(await repository.getCategories('owner-1'), hasLength(1));
+
+      await repository.deleteCategory(
+        ownerId: 'owner-1',
+        categoryId: category.id,
+      );
+
+      // Gone from every active view...
+      expect(await repository.getCategories('owner-1'), isEmpty);
+      expect(await repository.searchEntries(ownerId: 'owner-1'), isEmpty);
+      expect(await repository.getCategorySummaries('owner-1'), isEmpty);
+      final totals = await repository.getPersonTotals('owner-1', category.id);
+      expect(totals['pending_total'], 0);
+
+      // ...but the rows are kept and listed in the bin.
+      expect(
+        await db.query(
+          'finance_categories',
+          where: 'id = ?',
+          whereArgs: [category.id],
+        ),
+        hasLength(1),
+      );
+      final binned = await repository.getDeletedCategories('owner-1');
+      expect(binned.map((c) => c.name), ['Alem']);
+      expect(binned.single.deletedAt, isNotNull);
+    });
+
+    test('restore brings a binned person back to the active area', () async {
+      final category = await repository.createCategory(
+        ownerId: 'owner-1',
+        name: 'Alem',
+      );
+      await repository.deleteCategory(
+        ownerId: 'owner-1',
+        categoryId: category.id,
+      );
+
+      await repository.restoreCategory(
+        ownerId: 'owner-1',
+        categoryId: category.id,
+      );
+
+      expect((await repository.getCategories('owner-1')).map((c) => c.name), [
+        'Alem',
+      ]);
+      expect(await repository.getDeletedCategories('owner-1'), isEmpty);
+    });
+
+    test('permanent delete removes the person and their entries', () async {
+      final category = await repository.createCategory(
+        ownerId: 'owner-1',
+        name: 'Alem',
+      );
+      await repository.addEntry(
+        ownerId: 'owner-1',
+        categoryId: category.id,
+        source: 'Bank',
+        amountMinorUnits: 100000,
+      );
+
+      // Only people already in the bin can be purged.
+      await expectLater(
+        repository.permanentlyDeleteCategory(
+          ownerId: 'owner-1',
+          categoryId: category.id,
+        ),
+        throwsException,
+      );
+
+      await repository.deleteCategory(
+        ownerId: 'owner-1',
+        categoryId: category.id,
+      );
+      await repository.permanentlyDeleteCategory(
+        ownerId: 'owner-1',
+        categoryId: category.id,
+      );
+
+      expect(
+        await db.query(
+          'finance_categories',
+          where: 'id = ?',
+          whereArgs: [category.id],
+        ),
+        isEmpty,
+      );
+      expect(
+        await db.query(
+          'finance_entries',
+          where: 'category_id = ?',
+          whereArgs: [category.id],
+        ),
+        isEmpty,
+      );
+    });
+
+    test('double-delete and restore-active are rejected', () async {
+      final category = await repository.createCategory(
+        ownerId: 'owner-1',
+        name: 'Alem',
+      );
+      await repository.deleteCategory(
+        ownerId: 'owner-1',
+        categoryId: category.id,
+      );
+      await expectLater(
+        repository.deleteCategory(ownerId: 'owner-1', categoryId: category.id),
+        throwsException,
+      );
+      await expectLater(
+        repository.restoreCategory(
+          ownerId: 'owner-1',
+          categoryId: (await repository.createCategory(
+            ownerId: 'owner-1',
+            name: 'Hanna',
+          )).id,
+        ),
+        throwsException,
+      );
+    });
+  });
+
+  group('payment method', () {
+    test(
+      'round-trips and normalizes to upper-case; unset stays null',
+      () async {
+        final category = await repository.createCategory(
+          ownerId: 'owner-1',
+          name: 'Alem',
+        );
+        final cash = await repository.addEntry(
+          ownerId: 'owner-1',
+          categoryId: category.id,
+          source: 'CBE',
+          amountMinorUnits: 100000,
+          paymentMethod: 'cash',
+        );
+        expect(cash.paymentMethod, 'CASH');
+        final stored = await db.query(
+          'finance_entries',
+          where: 'id = ?',
+          whereArgs: [cash.id],
+        );
+        expect(stored.single['payment_method'], 'CASH');
+
+        final neutral = await repository.addEntry(
+          ownerId: 'owner-1',
+          categoryId: category.id,
+          source: 'Wire',
+          amountMinorUnits: 50000,
+        );
+        expect(neutral.paymentMethod, isNull);
+      },
+    );
+
+    test('an unknown payment method is rejected', () async {
+      final category = await repository.createCategory(
+        ownerId: 'owner-1',
+        name: 'Alem',
+      );
+      await expectLater(
+        repository.addEntry(
+          ownerId: 'owner-1',
+          categoryId: category.id,
+          source: 'Crypto',
+          amountMinorUnits: 1000,
+          paymentMethod: 'crypto',
+        ),
+        throwsException,
+      );
+    });
+  });
+
+  group('cash collections deposit into the register', () {
+    test('completing a CASH entry inserts a register DEPOSIT', () async {
+      final category = await repository.createCategory(
+        ownerId: 'owner-1',
+        name: 'Alem',
+      );
+      final entry = await repository.addEntry(
+        ownerId: 'owner-1',
+        categoryId: category.id,
+        source: 'Cash at door',
+        amountMinorUnits: 250000,
+        paymentMethod: 'CASH',
+      );
+
+      await repository.markCompleted(ownerId: 'owner-1', entryId: entry.id);
+
+      final deposits = await db.query(
+        'cash_movements',
+        where: "type = 'DEPOSIT'",
+      );
+      expect(deposits, hasLength(1));
+      expect(deposits.single['amount_minor_units'], 250000);
+      expect(deposits.single['user_id'], 'owner-1');
+      expect(deposits.single['reason'], contains('Alem'));
+
+      // A perpetual OPEN shift exists to receive the deposit.
+      final shifts = await db.query('shifts', where: "status = 'OPEN'");
+      expect(shifts, hasLength(1));
+      expect(deposits.single['shift_id'], shifts.single['id']);
+    });
+
+    test('a BANK collection never touches the drawer', () async {
+      final category = await repository.createCategory(
+        ownerId: 'owner-1',
+        name: 'Alem',
+      );
+      final entry = await repository.addEntry(
+        ownerId: 'owner-1',
+        categoryId: category.id,
+        source: 'CBE transfer',
+        amountMinorUnits: 250000,
+        paymentMethod: 'BANK',
+      );
+
+      await repository.markCompleted(ownerId: 'owner-1', entryId: entry.id);
+
+      expect(await db.query('cash_movements'), isEmpty);
+      expect(await db.query('shifts'), isEmpty);
+    });
+
+    test(
+      'a collection with no payment method does not touch the drawer',
+      () async {
+        final category = await repository.createCategory(
+          ownerId: 'owner-1',
+          name: 'Alem',
+        );
+        final entry = await repository.addEntry(
+          ownerId: 'owner-1',
+          categoryId: category.id,
+          source: 'Unspecified',
+          amountMinorUnits: 250000,
+        );
+
+        await repository.markCompleted(ownerId: 'owner-1', entryId: entry.id);
+
+        expect(await db.query('cash_movements'), isEmpty);
+      },
+    );
+  });
 }

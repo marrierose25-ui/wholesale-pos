@@ -25,7 +25,6 @@ import 'features/auth/login_screen.dart';
 import 'features/dashboard/dashboard_screen.dart';
 import 'features/finance/finance_overview_screen.dart';
 import 'features/licensing/activation_screen.dart';
-import 'features/products/product_list_screen.dart';
 import 'features/register/register_screen.dart';
 import 'features/reports/reports_screen.dart';
 import 'features/sales/sales_history_screen.dart';
@@ -551,83 +550,108 @@ class _MainLayoutState extends State<MainLayout> {
   @override
   Widget build(BuildContext context) {
     final isOwner = widget.currentUser.role == 'OWNER';
+    final registerIndex = isOwner ? 2 : 1;
 
+    // Completing a sale refreshes every data screen and lands the shell on the
+    // Register tab, so the drawer balance is the next thing the cashier sees.
+    void onSaleCompleted() {
+      _refreshDataScreens();
+      setState(() => _selectedIndex = registerIndex);
+    }
+
+    final salesScreen = SalesScreen(
+      key: _salesKey,
+      saleRepository: widget.saleRepository,
+      shiftRepository: widget.shiftRepository,
+      deviceId: widget.deviceId,
+      currentUser: widget.currentUser,
+      onSaleCompleted: onSaleCompleted,
+    );
+    final historyScreen = SalesHistoryScreen(
+      saleRepository: widget.saleRepository,
+      currentUser: widget.currentUser,
+      onSaleVoided: _refreshDataScreens,
+    );
+    final registerScreen = RegisterScreen(
+      key: _registerKey,
+      onShiftUpdated: _refreshDataScreens,
+      currentUser: widget.currentUser,
+      shiftRepository: widget.shiftRepository,
+      saleRepository: widget.saleRepository,
+    );
+    final settingsScreen = SettingsScreen(
+      currentUser: widget.currentUser,
+      db: widget.db,
+      userRepository: widget.userRepository,
+      onLogout: widget.onLogout,
+      isDarkMode: widget.isDarkMode,
+      onToggleTheme: widget.onToggleTheme,
+    );
+
+    // Role-specific ordering. Owner: Dashboard / POS / Register / Money
+    // Tracking lead the pill and History / Reports / Users / Audit / Settings
+    // live in the drawer. Cashier: POS / Register lead, History / Settings in
+    // the drawer.
     final screens = <Widget>[
-      SalesScreen(
-        key: _salesKey,
-        saleRepository: widget.saleRepository,
-        shiftRepository: widget.shiftRepository,
-        productRepository: widget.productRepository,
-        deviceId: widget.deviceId,
-        currentUser: widget.currentUser,
-        onSaleCompleted: _refreshDataScreens,
-      ),
-      SalesHistoryScreen(
-        saleRepository: widget.saleRepository,
-        currentUser: widget.currentUser,
-        onSaleVoided: _refreshDataScreens,
-      ),
-      RegisterScreen(
-        key: _registerKey,
-        onShiftUpdated: _refreshDataScreens,
-        currentUser: widget.currentUser,
-        shiftRepository: widget.shiftRepository,
-        saleRepository: widget.saleRepository,
-      ),
-      if (isOwner) ProductListScreen(repository: widget.productRepository),
-      if (isOwner)
+      if (isOwner) ...[
         DashboardScreen(
           key: _dashboardKey,
           saleRepository: widget.saleRepository,
         ),
-      if (isOwner)
-        ReportsScreen(key: _reportsKey, saleRepository: widget.saleRepository),
-      if (isOwner)
-        UserManagementScreen(
-          userRepository: widget.userRepository,
-          currentUser: widget.currentUser,
-        ),
-      if (isOwner) AuditLogScreen(saleRepository: widget.saleRepository),
-      if (isOwner)
+        salesScreen,
+        registerScreen,
         FinanceOverviewScreen(
           financeRepository: widget.financeRepository,
           currentUser: widget.currentUser,
         ),
-      SettingsScreen(
-        currentUser: widget.currentUser,
-        db: widget.db,
-        userRepository: widget.userRepository,
-        onLogout: widget.onLogout,
-        isDarkMode: widget.isDarkMode,
-        onToggleTheme: widget.onToggleTheme,
-      ),
+        historyScreen,
+        ReportsScreen(key: _reportsKey, saleRepository: widget.saleRepository),
+        UserManagementScreen(
+          userRepository: widget.userRepository,
+          currentUser: widget.currentUser,
+        ),
+        AuditLogScreen(saleRepository: widget.saleRepository),
+        settingsScreen,
+      ] else ...[
+        salesScreen,
+        registerScreen,
+        historyScreen,
+        settingsScreen,
+      ],
     ];
 
     if (_selectedIndex >= screens.length) _selectedIndex = 0;
     final settingsIndex = screens.length - 1;
 
-    // Destination metadata for the compact (phone) navigation drawer. The wide
-    // tablet/desktop layout keeps its fixed sidebar below.
-    final navItems = <_NavItem>[
-      const _NavItem(0, Icons.shopping_cart, 'POS'),
-      const _NavItem(1, Icons.history, 'History'),
-      const _NavItem(2, Icons.point_of_sale, 'Register'),
+    final allNavItems = <_NavItem>[
       if (isOwner) ...[
-        const _NavItem(3, Icons.label, 'Saved Names'),
-        const _NavItem(4, Icons.dashboard, 'Dashboard'),
+        const _NavItem(0, Icons.dashboard, 'Dashboard'),
+        const _NavItem(1, Icons.shopping_cart, 'POS'),
+        const _NavItem(2, Icons.point_of_sale, 'Register'),
+        const _NavItem(3, Icons.account_balance_wallet, 'Money Tracking'),
+        const _NavItem(4, Icons.history, 'History'),
         const _NavItem(5, Icons.bar_chart, 'Reports'),
         const _NavItem(6, Icons.people, 'Users'),
         const _NavItem(7, Icons.security, 'Audit Logs'),
-        const _NavItem(8, Icons.account_balance_wallet, 'Money Tracking'),
+        const _NavItem(8, Icons.settings, 'Settings'),
+      ] else ...[
+        const _NavItem(0, Icons.shopping_cart, 'POS'),
+        const _NavItem(1, Icons.point_of_sale, 'Register'),
+        const _NavItem(2, Icons.history, 'History'),
+        const _NavItem(3, Icons.settings, 'Settings'),
       ],
-      _NavItem(settingsIndex, Icons.settings, 'Settings'),
     ];
+    // The first [pillCount] destinations lead the bottom pill (owner 4, cashier
+    // 2); the rest live in the hamburger drawer.
+    final pillCount = isOwner ? 4 : 2;
+    final pillItems = allNavItems.take(pillCount).toList();
+    final drawerItems = allNavItems.skip(pillCount).toList();
 
     return LayoutBuilder(
       builder: (context, constraints) {
         final isCompact = constraints.maxWidth < 600;
         if (isCompact) {
-          final title = navItems
+          final title = allNavItems
               .firstWhere(
                 (i) => i.index == _selectedIndex,
                 orElse: () =>
@@ -647,9 +671,9 @@ class _MainLayoutState extends State<MainLayout> {
               ),
               title: Text(title),
             ),
-            drawer: _buildDrawer(context, isOwner, navItems),
+            drawer: _buildDrawer(context, drawerItems),
             body: IndexedStack(index: _selectedIndex, children: screens),
-            bottomNavigationBar: _mobilePillNav(context, isOwner),
+            bottomNavigationBar: _mobilePillNav(pillItems),
           );
         }
 
@@ -707,35 +731,8 @@ class _MainLayoutState extends State<MainLayout> {
                       child: ListView(
                         padding: const EdgeInsets.symmetric(horizontal: 12),
                         children: [
-                          _buildNavItem(0, Icons.shopping_cart, 'POS'),
-                          _buildNavItem(1, Icons.history, 'History'),
-                          _buildNavItem(2, Icons.point_of_sale, 'Register'),
-                          if (isOwner) ...[
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(12, 24, 12, 8),
-                              child: Text(
-                                'ADMINISTRATION',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: Theme.of(context)
-                                      .textTheme
-                                      .bodySmall
-                                      ?.color,
-                                ),
-                              ),
-                            ),
-                            _buildNavItem(3, Icons.label, 'Saved Names'),
-                            _buildNavItem(4, Icons.dashboard, 'Dashboard'),
-                            _buildNavItem(5, Icons.bar_chart, 'Reports'),
-                            _buildNavItem(6, Icons.people, 'Users'),
-                            _buildNavItem(7, Icons.security, 'Audit Logs'),
-                            _buildNavItem(
-                              8,
-                              Icons.account_balance_wallet,
-                              'Money Tracking',
-                            ),
-                          ],
+                          for (final it in allNavItems)
+                            _buildNavItem(it.index, it.icon, it.label),
                         ],
                       ),
                     ),
@@ -816,15 +813,10 @@ class _MainLayoutState extends State<MainLayout> {
     );
   }
 
-  /// Floating frosted-glass pill bottom nav for phones. Shows the primary
-  /// destinations plus a "More" button that opens the full drawer.
-  Widget _mobilePillNav(BuildContext context, bool isOwner) {
-    final items = <_NavItem>[
-      const _NavItem(0, Icons.shopping_cart_rounded, 'POS'),
-      const _NavItem(1, Icons.history_rounded, 'History'),
-      const _NavItem(2, Icons.point_of_sale_rounded, 'Register'),
-      if (isOwner) const _NavItem(4, Icons.dashboard_rounded, 'Stats'),
-    ];
+  /// Floating frosted-glass pill bottom nav for phones. Renders exactly the
+  /// role's primary destinations; everything else lives behind the app-bar
+  /// menu icon that opens the drawer.
+  Widget _mobilePillNav(List<_NavItem> items) {
     // A custom bottomNavigationBar does not get the system bottom inset for
     // free, so wrap in SafeArea(bottom: true) — otherwise the pill collides
     // with the Android back/home/recents bar and becomes partly unclickable.
@@ -832,7 +824,7 @@ class _MainLayoutState extends State<MainLayout> {
       top: false,
       child: Padding(
         // Extra bottom clearance lifts the pill above the phone's home-indicator
-        // / gesture zone so its buttons and the "More" dots stay tappable.
+        // / gesture zone so its buttons stay tappable.
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
         child: Container(
           height: 62,
@@ -848,7 +840,6 @@ class _MainLayoutState extends State<MainLayout> {
             child: Row(
               children: [
                 for (final it in items) Expanded(child: _pillItem(it)),
-                _pillMore(),
               ],
             ),
           ),
@@ -882,38 +873,6 @@ class _MainLayoutState extends State<MainLayout> {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _pillMore() {
-    final onMore = _selectedIndex >= 3 && _selectedIndex != 4;
-    return InkWell(
-      onTap: () => _scaffoldKey.currentState?.openDrawer(),
-      borderRadius: BorderRadius.circular(AppDesign.radiusPill),
-      child: SizedBox(
-        width: 52,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.grid_view_rounded,
-              size: 22,
-              color: onMore ? AppDesign.blueBright : AppDesign.textLo,
-            ),
-            const SizedBox(height: 3),
-            Text(
-              'More',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 10.5,
-                fontWeight: onMore ? FontWeight.w700 : FontWeight.w500,
-                color: onMore ? AppDesign.textHi : AppDesign.textLo,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -970,11 +929,7 @@ class _MainLayoutState extends State<MainLayout> {
 
   /// Slide-out navigation for compact (phone) widths. Mirrors the sidebar's
   /// destinations; selecting one also closes the drawer.
-  Widget _buildDrawer(
-    BuildContext context,
-    bool isOwner,
-    List<_NavItem> navItems,
-  ) {
+  Widget _buildDrawer(BuildContext context, List<_NavItem> drawerItems) {
     return Drawer(
       child: SafeArea(
         child: Column(
@@ -1022,19 +977,7 @@ class _MainLayoutState extends State<MainLayout> {
               child: ListView(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                 children: [
-                  for (final item in navItems) ...[
-                    if (isOwner && item.index == 3)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 20, 12, 8),
-                        child: Text(
-                          'ADMINISTRATION',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: Theme.of(context).textTheme.bodySmall?.color,
-                          ),
-                        ),
-                      ),
+                  for (final item in drawerItems)
                     ListTile(
                       selected: _selectedIndex == item.index,
                       selectedTileColor: Theme.of(context).colorScheme.surface,
@@ -1045,7 +988,6 @@ class _MainLayoutState extends State<MainLayout> {
                         Navigator.of(context).pop();
                       },
                     ),
-                  ],
                 ],
               ),
             ),
