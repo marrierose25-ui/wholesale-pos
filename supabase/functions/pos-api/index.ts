@@ -693,11 +693,24 @@ async function addCashMovement(db: any, ctx: Ctx, body: any): Promise<Response> 
 }
 
 async function listCashMovements(db: any, ctx: Ctx, body: any): Promise<Response> {
-  const { data, error } = await db.from('cash_movements').select('*')
-    .eq('customer_id', ctx.customerId).eq('shift_id', String(body.shift_id ?? ''))
-    .order('created_at', { ascending: false });
+  // shift_id optional: omit it to list the whole ledger across every shift.
+  let q = db.from('cash_movements').select('*').eq('customer_id', ctx.customerId);
+  if (body.shift_id != null && String(body.shift_id) !== '') {
+    q = q.eq('shift_id', String(body.shift_id));
+  }
+  const { data, error } = await q.order('created_at', { ascending: false });
   if (error) throw new Error(error.message);
-  return json({ ok: true, movements: strip(data) });
+  // Hydrate the recorder's username (cash_movements has no FK to pos_users,
+  // so PostgREST embedding can't do this in one query).
+  const rows = strip(data);
+  const userIds = [...new Set(rows.map((r: any) => r.user_id).filter(Boolean))];
+  let nameById: Record<string, string> = {};
+  if (userIds.length > 0) {
+    const { data: users } = await db.from('pos_users')
+      .select('id, username').eq('customer_id', ctx.customerId).in('id', userIds);
+    nameById = Object.fromEntries((users ?? []).map((u: any) => [u.id, u.username]));
+  }
+  return json({ ok: true, movements: rows.map((r: any) => ({ ...r, user_name: nameById[r.user_id] ?? null })) });
 }
 
 // ===========================================================================

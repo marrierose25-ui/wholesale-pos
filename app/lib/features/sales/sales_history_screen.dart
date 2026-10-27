@@ -23,15 +23,21 @@ class SalesHistoryScreen extends StatefulWidget {
   });
 
   @override
-  State<SalesHistoryScreen> createState() => _SalesHistoryScreenState();
+  State<SalesHistoryScreen> createState() => SalesHistoryScreenState();
 }
 
-class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
+class SalesHistoryScreenState extends State<SalesHistoryScreen> {
   List<Sale> _sales = [];
   bool _isLoading = true;
   String? _error;
   final _searchController = TextEditingController();
   Timer? _searchDebounce;
+
+  /// Pill-tab filter over the ledger: every sale, only completed ones, or
+  /// only voided ones.
+  int _tab = 0;
+  static const _tabLabels = ['All', 'Completed', 'Voided'];
+  static const _tabStatuses = ['ALL', 'COMPLETED', 'VOIDED'];
 
   ReportPeriod _period = ReportPeriod.allTime;
   DateTimeRange? _customRange;
@@ -39,7 +45,7 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
   @override
   void initState() {
     super.initState();
-    _loadSales();
+    loadSales();
   }
 
   @override
@@ -57,18 +63,20 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
     return _period.toDateRange();
   }
 
-  Future<void> _loadSales() async {
-    setState(() {
-      _isLoading = true;
-      _error = null;
-    });
+  Future<void> loadSales({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _isLoading = true;
+        _error = null;
+      });
+    }
     try {
       final sales = await widget.saleRepository.getSales(
         searchQuery: _searchController.text.trim().isEmpty
             ? null
             : _searchController.text.trim(),
         period: _activeRange,
-        status: 'ALL',
+        status: _tabStatuses[_tab],
       );
       if (!mounted) return;
       setState(() {
@@ -86,7 +94,7 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
 
   void _onSearchChanged(String value) {
     _searchDebounce?.cancel();
-    _searchDebounce = Timer(const Duration(milliseconds: 350), _loadSales);
+    _searchDebounce = Timer(const Duration(milliseconds: 350), loadSales);
   }
 
   void _onPeriodChanged(ReportPeriod period, DateTimeRange? range) {
@@ -94,7 +102,7 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
       _period = period;
       _customRange = range;
     });
-    _loadSales();
+    loadSales();
   }
 
   void _clearFilters() {
@@ -102,12 +110,15 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
     setState(() {
       _period = ReportPeriod.allTime;
       _customRange = null;
+      _tab = 0;
     });
-    _loadSales();
+    loadSales();
   }
 
   bool get _hasActiveFilters =>
-      _searchController.text.isNotEmpty || _period != ReportPeriod.allTime;
+      _searchController.text.isNotEmpty ||
+      _period != ReportPeriod.allTime ||
+      _tab != 0;
 
   String _formatDate(DateTime date) {
     return '${date.year.toString().padLeft(4, '0')}-'
@@ -119,15 +130,6 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
     return '${_formatDate(date)} '
         '${date.hour.toString().padLeft(2, '0')}:'
         '${date.minute.toString().padLeft(2, '0')}';
-  }
-
-  /// Short human summary of a sale for list rows: the entered product names.
-  String _saleHeadline(Sale sale) {
-    if (sale.items.isEmpty) return 'Sale';
-    final names = sale.items.map((item) => item.productNameSnapshot).toList();
-    if (names.length == 1) return names.first;
-    if (names.length == 2) return '${names[0]}, ${names[1]}';
-    return '${names.first}, ${names[1]} +${names.length - 2} more';
   }
 
   Future<bool> _voidSale(Sale sale) async {
@@ -144,7 +146,7 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
         reason,
       );
       widget.onSaleVoided();
-      await _loadSales();
+      await loadSales();
       return true;
     } catch (e) {
       if (mounted) {
@@ -170,7 +172,7 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
         reason,
       );
       widget.onSaleVoided();
-      await _loadSales();
+      await loadSales();
       return true;
     } catch (e) {
       if (mounted) {
@@ -362,7 +364,7 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
       appBar: AppBar(
         title: const Text('Sales History'),
         actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadSales),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: loadSales),
           const SizedBox(width: 16),
         ],
       ),
@@ -370,43 +372,44 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
         child: Column(
           children: [
             _buildFilterBar(),
-            const Divider(height: 1),
-            Expanded(
-              child: _isLoading
-                  ? const Center(child: CircularProgressIndicator())
-                  : _error != null
-                  ? Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(_error!),
-                          const SizedBox(height: 8),
-                          TextButton(
-                            onPressed: _loadSales,
-                            child: const Text('Retry'),
-                          ),
-                        ],
-                      ),
-                    )
-                  : _sales.isEmpty
-                  ? Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Text(
-                          _hasActiveFilters
-                              ? 'No sales match these filters.'
-                              : 'No sales recorded yet.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: AppTheme.muted),
-                        ),
-                      ),
-                    )
-                  : _buildSalesList(),
-            ),
+            Expanded(child: _buildBody()),
           ],
         ),
       ),
     );
+  }
+
+  Widget _buildBody() {
+    if (_isLoading && _sales.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null && _sales.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(_error!),
+            const SizedBox(height: 8),
+            TextButton(onPressed: loadSales, child: const Text('Retry')),
+          ],
+        ),
+      );
+    }
+    if (_sales.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            _hasActiveFilters
+                ? 'No sales match these filters.'
+                : 'No sales recorded yet.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppTheme.muted),
+          ),
+        ),
+      );
+    }
+    return _buildSalesTable();
   }
 
   String _dayLabel(DateTime date) {
@@ -419,8 +422,8 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
     return _formatDate(date);
   }
 
-  /// Flattens the loaded sales into compact, day-grouped rows: a header per
-  /// calendar day followed by tight single-line sale rows.
+  /// Flattens the loaded sales into table rows: a day header followed by one
+  /// row per sale (single-item sales map straight onto the ledger columns).
   List<_HistoryEntry> _buildGroupedEntries() {
     final entries = <_HistoryEntry>[];
     String? lastDay;
@@ -435,22 +438,25 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
     return entries;
   }
 
-  Widget _buildSalesList() {
+  /// Ledger table styled after a classic sales book: bold column headers on a
+  /// card, one row per sale with Item / Quantity / Unit Price / Total.
+  Widget _buildSalesTable() {
     final entries = _buildGroupedEntries();
-    return ListView.builder(
-      padding: const EdgeInsets.only(bottom: 16),
-      itemCount: entries.length,
-      itemBuilder: (context, index) {
-        final entry = entries[index];
-        if (entry.isHeader) return _buildDayHeader(entry.label!);
-        return _buildSaleRow(entry.sale!);
-      },
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+      children: [
+        for (final entry in entries)
+          if (entry.isHeader)
+            _buildDayHeader(entry.label!)
+          else
+            _buildSaleRow(entry.sale!),
+      ],
     );
   }
 
   Widget _buildDayHeader(String label) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+      padding: const EdgeInsets.fromLTRB(6, 14, 6, 6),
       child: Text(
         label.toUpperCase(),
         style: TextStyle(
@@ -465,70 +471,137 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
 
   Widget _buildSaleRow(Sale sale) {
     final isVoided = sale.status == 'VOIDED';
+    final item = sale.items.isNotEmpty ? sale.items.first : null;
+    final muted = Theme.of(context).textTheme.bodySmall?.color;
+    final color = isVoided ? Colors.grey : AppTheme.foreground;
+    final decoration = isVoided ? TextDecoration.lineThrough : null;
+
     final time =
         '${sale.createdAt.hour.toString().padLeft(2, '0')}:'
         '${sale.createdAt.minute.toString().padLeft(2, '0')}';
-    final muted = Theme.of(context).textTheme.bodySmall?.color;
-    final color = isVoided ? Colors.grey : AppTheme.foreground;
 
-    return InkWell(
-      onTap: () => _showSaleDetails(sale),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-        decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: AppTheme.border)),
-        ),
-        child: Row(
-          children: [
-            SizedBox(
-              width: 46,
-              child: Text(time, style: TextStyle(fontSize: 12, color: muted)),
-            ),
-            Expanded(
-              child: Text(
-                _saleHeadline(sale),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: color,
-                  decoration: isVoided ? TextDecoration.lineThrough : null,
+    final leading = SizedBox(
+      width: 42,
+      child: Text(time, style: TextStyle(fontSize: 11.5, color: muted)),
+    );
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: GlassCard(
+        padding: EdgeInsets.zero,
+        radius: AppDesign.radiusCardSm,
+        onTap: () => _showSaleDetails(sale),
+        child: InkWell(
+          onTap: () => _showSaleDetails(sale),
+          borderRadius: BorderRadius.circular(AppDesign.radiusCardSm),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+            child: Row(
+              children: [
+                leading,
+                Expanded(
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          item?.productNameSnapshot ?? 'Sale',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: color,
+                            decoration: decoration,
+                          ),
+                        ),
+                      ),
+                      if (sale.items.length > 1) ...[
+                        const SizedBox(width: 4),
+                        Text(
+                          '+${sale.items.length - 1}',
+                          style: TextStyle(fontSize: 11, color: muted),
+                        ),
+                      ],
+                      if (!isVoided && sale.hasPendingVoidRequest) ...[
+                        const SizedBox(width: 6),
+                        const _MiniBadge('REQ', color: AppTheme.warning),
+                      ],
+                      if (isVoided) ...[
+                        const SizedBox(width: 6),
+                        const _MiniBadge('VOID', color: Colors.grey),
+                      ],
+                    ],
+                  ),
                 ),
-              ),
+                SizedBox(
+                  width: 74,
+                  child: Text(
+                    item?.quantityText ?? '-',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.end,
+                    style: TextStyle(fontSize: 12, color: color),
+                  ),
+                ),
+                SizedBox(
+                  width: 92,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      item == null
+                          ? '-'
+                          : MoneyUtils.formatBr(
+                              item.unitPriceSnapshotMinorUnits,
+                            ),
+                      maxLines: 1,
+                      textAlign: TextAlign.end,
+                      style: TextStyle(fontSize: 12, color: color),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 100,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      MoneyUtils.formatBr(sale.totalMinorUnits),
+                      maxLines: 1,
+                      textAlign: TextAlign.end,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: color,
+                        decoration: decoration,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
-            if (!isVoided && sale.hasPendingVoidRequest)
-              const Padding(
-                padding: EdgeInsets.only(right: 6),
-                child: _MiniBadge('REQ', color: AppTheme.warning),
-              ),
-            if (isVoided)
-              const Padding(
-                padding: EdgeInsets.only(right: 6),
-                child: _MiniBadge('VOID', color: Colors.grey),
-              ),
-            Text(
-              MoneyUtils.formatBr(sale.totalMinorUnits),
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: color,
-                decoration: isVoided ? TextDecoration.lineThrough : null,
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
   }
 
   Widget _buildFilterBar() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      color: AppTheme.surface,
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          PillTabs(
+            labels: _tabLabels,
+            selected: _tab,
+            onSelect: (i) {
+              setState(() => _tab = i);
+              loadSales();
+            },
+          ),
+          const SizedBox(height: 10),
           TextField(
             controller: _searchController,
             decoration: InputDecoration(
@@ -542,14 +615,14 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
                       icon: const Icon(Icons.clear),
                       onPressed: () {
                         _searchController.clear();
-                        _loadSales();
+                        loadSales();
                       },
                     ),
             ),
             onChanged: _onSearchChanged,
-            onSubmitted: (_) => _loadSales(),
+            onSubmitted: (_) => loadSales(),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           Row(
             children: [
               PeriodDropdown(
@@ -564,7 +637,48 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
                 ),
             ],
           ),
+          const SizedBox(height: 4),
+          // Bold column captions matching the ledger rows below.
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Row(
+              children: [
+                const SizedBox(width: 42),
+                Expanded(
+                  child: Text(
+                    'Item',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.muted,
+                      letterSpacing: 0.4,
+                    ),
+                  ),
+                ),
+                _headerCell('Quantity', 74, TextAlign.end),
+                _headerCell('Unit Price', 92, TextAlign.end),
+                const SizedBox(width: 10),
+                _headerCell('Total', 100, TextAlign.end),
+              ],
+            ),
+          ),
         ],
+      ),
+    );
+  }
+
+  Widget _headerCell(String label, double width, TextAlign align) {
+    return SizedBox(
+      width: width,
+      child: Text(
+        label,
+        textAlign: align,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          color: AppTheme.muted,
+          letterSpacing: 0.4,
+        ),
       ),
     );
   }

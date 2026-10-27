@@ -63,11 +63,13 @@ class DashboardScreenState extends State<DashboardScreen> {
     return _period.toDateRange();
   }
 
-  Future<void> loadDashboard() async {
-    setState(() {
-      _isLoading = true;
-      _error = null;
-    });
+  Future<void> loadDashboard({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _isLoading = true;
+        _error = null;
+      });
+    }
 
     try {
       final range = _activeRange ?? DateRange.today();
@@ -134,6 +136,8 @@ class DashboardScreenState extends State<DashboardScreen> {
               _buildPeriodSelector(),
               const SizedBox(height: 20),
               _buildHeroBalance(),
+              const SizedBox(height: 16),
+              _buildMetricGrid(),
             ],
           ),
         ),
@@ -206,12 +210,105 @@ class DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 6),
           Text(
-            'Revenue from completed sales only. This app does not track '
-            'costs, so revenue is not profit.',
+            _period.label,
             style: TextStyle(color: AppDesign.textFaint, fontSize: 12),
           ),
         ],
       ),
     );
   }
+
+  /// The four headline figures under the hero card: how many sales completed,
+  /// how much arrived in cash vs by bank transfer, and the average per sale.
+  Widget _buildMetricGrid() {
+    final metrics = <_Metric>[
+      _Metric(
+        'Completed Sales',
+        '${_stats['sales_count'] ?? 0}',
+        Icons.check_circle_rounded,
+        AppDesign.success,
+      ),
+      _Metric(
+        'Cash Collected',
+        MoneyUtils.formatBr(_stats['cash_revenue'] ?? 0),
+        Icons.payments_rounded,
+        AppDesign.blue,
+      ),
+      _Metric(
+        'Bank Collected',
+        MoneyUtils.formatBr(_stats['bank_revenue'] ?? 0),
+        Icons.account_balance_rounded,
+        AppDesign.blueBright,
+      ),
+      _Metric(
+        'Average / Sale',
+        MoneyUtils.formatBr(_stats['average_sale'] ?? 0),
+        Icons.trending_up_rounded,
+        AppDesign.warning,
+      ),
+    ];
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const spacing = 12.0;
+        final columns = constraints.maxWidth >= 560 ? 4 : 2;
+        final itemWidth =
+            (constraints.maxWidth - spacing * (columns - 1)) / columns;
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          children: [
+            for (final m in metrics)
+              SizedBox(width: itemWidth, child: _buildMetricCard(m)),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildMetricCard(_Metric metric) {
+    return GlassCard(
+      padding: const EdgeInsets.all(14),
+      radius: AppDesign.radiusCardSm,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          IconChip(icon: metric.icon, size: 30, color: metric.color),
+          const SizedBox(height: 10),
+          Text(
+            metric.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: AppDesign.textLo,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(height: 4),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              metric.value,
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w800,
+                color: AppDesign.textHi,
+                letterSpacing: -0.3,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One headline figure shown in the dashboard metric grid.
+class _Metric {
+  final String title;
+  final String value;
+  final IconData icon;
+  final Color color;
+  const _Metric(this.title, this.value, this.icon, this.color);
 }

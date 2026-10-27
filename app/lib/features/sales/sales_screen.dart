@@ -143,42 +143,42 @@ class SalesScreenState extends State<SalesScreen> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Container(
-                        width: 88,
-                        height: 88,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          gradient: AppDesign.buttonGradient,
-                          boxShadow: [AppDesign.blueGlow(alpha: 0.4)],
+                      // The + circle is the one and only action: tap it to
+                      // ring up a sale. No labels, no descriptions.
+                      InkWell(
+                        onTap: _isProcessing ? null : _newSale,
+                        customBorder: const CircleBorder(),
+                        child: Ink(
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            gradient: AppDesign.buttonGradient,
+                            boxShadow: [AppDesign.blueGlow(alpha: 0.4)],
+                          ),
+                          child: Container(
+                            width: 88,
+                            height: 88,
+                            alignment: Alignment.center,
+                            child: AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 180),
+                              child: _isProcessing
+                                  ? const SizedBox(
+                                      key: ValueKey('spinner'),
+                                      width: 34,
+                                      height: 34,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 3,
+                                        color: AppDesign.onBlue,
+                                      ),
+                                    )
+                                  : const Icon(
+                                      key: ValueKey('plus'),
+                                      Icons.add,
+                                      size: 48,
+                                      color: AppDesign.onBlue,
+                                    ),
+                            ),
+                          ),
                         ),
-                        child: Icon(
-                          Icons.add,
-                          size: 48,
-                          color: AppDesign.onBlue,
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                      Text(
-                        'Ring up a single item',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          color: AppTheme.foreground,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        'Enter what sold and how it was paid. The total is '
-                        'worked out for you.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 13, color: AppTheme.muted),
-                      ),
-                      const SizedBox(height: 24),
-                      GlowButton(
-                        label: _isProcessing ? 'Saving…' : 'New Sale',
-                        icon: Icons.receipt_long,
-                        expanded: false,
-                        onPressed: _isProcessing ? null : _newSale,
                       ),
                     ],
                   ),

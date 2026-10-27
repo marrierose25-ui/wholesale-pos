@@ -21,10 +21,10 @@ class FinanceOverviewScreen extends StatefulWidget {
   });
 
   @override
-  State<FinanceOverviewScreen> createState() => _FinanceOverviewScreenState();
+  State<FinanceOverviewScreen> createState() => FinanceOverviewScreenState();
 }
 
-class _FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
+class FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
   List<Map<String, dynamic>> _summaries = [];
   bool _isLoading = true;
   String? _error;
@@ -32,14 +32,18 @@ class _FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
+    load();
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _isLoading = true;
-      _error = null;
-    });
+  /// Pulls the latest per-person summaries. [silent] (the shell's tab-select
+  /// hook) repaints in the background without the loading spinner.
+  Future<void> load({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _isLoading = true;
+        _error = null;
+      });
+    }
     try {
       final summaries = await widget.financeRepository.getCategorySummaries(
         widget.currentUser.id,
@@ -69,7 +73,7 @@ class _FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
         ownerId: widget.currentUser.id,
         name: name,
       );
-      await _load();
+      await load();
     } catch (e) {
       if (mounted) _showError(e);
     }
@@ -90,7 +94,7 @@ class _FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
         categoryId: summary['id'] as String,
         newName: name,
       );
-      await _load();
+      await load();
     } catch (e) {
       if (mounted) _showError(e);
     }
@@ -131,7 +135,7 @@ class _FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
         ownerId: widget.currentUser.id,
         categoryId: summary['id'] as String,
       );
-      await _load();
+      await load();
     } catch (e) {
       if (mounted) _showError(e);
     }
@@ -146,7 +150,7 @@ class _FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
         ),
       ),
     );
-    _load();
+    load();
   }
 
   Future<void> _openPerson(Map<String, dynamic> summary) async {
@@ -160,7 +164,7 @@ class _FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
         ),
       ),
     );
-    _load();
+    load();
   }
 
   @override
@@ -180,7 +184,7 @@ class _FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
             tooltip: 'Recycle Bin',
             onPressed: _openRecycleBin,
           ),
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: load),
           const SizedBox(width: 16),
         ],
       ),
@@ -194,7 +198,7 @@ class _FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
                   children: [
                     Text(_error!),
                     const SizedBox(height: 8),
-                    TextButton(onPressed: _load, child: const Text('Retry')),
+                    TextButton(onPressed: load, child: const Text('Retry')),
                   ],
                 ),
               )
@@ -208,30 +212,6 @@ class _FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            children: [
-                              const IconChip(
-                                icon: Icons.lock_rounded,
-                                size: 34,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  'Private area — visible only to you. Manual '
-                                  'records of money taken from banks or other '
-                                  'sources, organized by person.',
-                                  style: TextStyle(
-                                    color: Theme.of(context)
-                                        .textTheme
-                                        .bodySmall
-                                        ?.color,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 16),
                           Text(
                             'Pending Across Everyone',
                             style: TextStyle(

@@ -11,6 +11,7 @@ import 'core/theme/app_theme.dart';
 import 'features/dashboard/dashboard_screen.dart';
 import 'features/finance/finance_overview_screen.dart';
 import 'features/auth/login_screen.dart';
+import 'features/register/cash_history_screen.dart';
 import 'features/register/register_screen.dart';
 import 'features/reports/reports_screen.dart';
 import 'features/sales/sale.dart';
@@ -230,7 +231,8 @@ class MainScaffold extends StatefulWidget {
   State<MainScaffold> createState() => _MainScaffoldState();
 }
 
-class _MainScaffoldState extends State<MainScaffold> {
+class _MainScaffoldState extends State<MainScaffold>
+    with SingleTickerProviderStateMixin {
   int _selectedIndex = 0;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final GlobalKey<RegisterScreenState> _registerKey =
@@ -240,6 +242,25 @@ class _MainScaffoldState extends State<MainScaffold> {
   final GlobalKey<ReportsScreenState> _reportsKey =
       GlobalKey<ReportsScreenState>();
   final GlobalKey<SalesScreenState> _salesKey = GlobalKey<SalesScreenState>();
+  final GlobalKey<SalesHistoryScreenState> _historyKey =
+      GlobalKey<SalesHistoryScreenState>();
+  final GlobalKey<FinanceOverviewScreenState> _financeKey =
+      GlobalKey<FinanceOverviewScreenState>();
+  final GlobalKey<CashHistoryScreenState> _cashHistoryKey =
+      GlobalKey<CashHistoryScreenState>();
+
+  /// Drives the quick fade-in that plays whenever a tab becomes visible.
+  late final AnimationController _tabFadeController = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 150),
+  );
+  final Curve _tabFadeCurve = Curves.easeOut;
+
+  @override
+  void dispose() {
+    _tabFadeController.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -307,11 +328,40 @@ class _MainScaffoldState extends State<MainScaffold> {
     }
   }
 
+  /// Silent background refreshes so every data screen shows the latest
+  /// figures the moment it is looked at — no manual refresh needed.
   void _refreshDataScreens() {
-    _registerKey.currentState?.loadData();
-    _dashboardKey.currentState?.loadDashboard();
-    _reportsKey.currentState?.loadReports();
-    _salesKey.currentState?.loadShift();
+    for (final i in {0, 1, 2, 3, 4, 5, 9}) {
+      _loadScreen(i, silent: true);
+    }
+  }
+
+  /// Reloads one data screen by nav index; unknown/no-op indexes are ignored
+  /// (a null key means the screen is not built for the current role).
+  void _loadScreen(int index, {bool silent = false}) {
+    switch (index) {
+      case 0:
+        _dashboardKey.currentState?.loadDashboard(silent: silent);
+      case 1:
+        _salesKey.currentState?.loadShift();
+      case 2:
+        _registerKey.currentState?.loadData(silent: silent);
+      case 3:
+        _financeKey.currentState?.load(silent: silent);
+      case 4:
+        _historyKey.currentState?.loadSales(silent: silent);
+      case 5:
+        _reportsKey.currentState?.loadReports();
+      case 9:
+        _cashHistoryKey.currentState?.load(silent: silent);
+    }
+  }
+
+  /// Single funnel for every tab change: switch, then silently re-pull that
+  /// screen's data so it is never stale when landed on.
+  void _selectTab(int index) {
+    setState(() => _selectedIndex = index);
+    _loadScreen(index, silent: true);
   }
 
   @override
@@ -324,7 +374,7 @@ class _MainScaffoldState extends State<MainScaffold> {
     // Register tab, so the drawer balance is the next thing the cashier sees.
     void onSaleCompleted() {
       _refreshDataScreens();
-      setState(() => _selectedIndex = registerIndex);
+      _selectTab(registerIndex);
     }
 
     final salesScreen = SalesScreen(
@@ -336,6 +386,7 @@ class _MainScaffoldState extends State<MainScaffold> {
       onSaleCompleted: onSaleCompleted,
     );
     final historyScreen = SalesHistoryScreen(
+      key: _historyKey,
       saleRepository: backend.sales,
       currentUser: widget.currentUser,
       onSaleVoided: _refreshDataScreens,
@@ -364,6 +415,7 @@ class _MainScaffoldState extends State<MainScaffold> {
         salesScreen,
         registerScreen,
         FinanceOverviewScreen(
+          key: _financeKey,
           financeRepository: backend.finance,
           currentUser: widget.currentUser,
         ),
@@ -374,6 +426,10 @@ class _MainScaffoldState extends State<MainScaffold> {
           currentUser: widget.currentUser,
         ),
         AuditLogScreen(saleRepository: backend.sales),
+        CashHistoryScreen(
+          key: _cashHistoryKey,
+          shiftRepository: backend.shifts,
+        ),
         settingsScreen,
       ] else ...[
         salesScreen,
@@ -396,7 +452,8 @@ class _MainScaffoldState extends State<MainScaffold> {
         const _NavItem(5, Icons.bar_chart, 'Reports'),
         const _NavItem(6, Icons.people, 'Users'),
         const _NavItem(7, Icons.security, 'Audit Logs'),
-        const _NavItem(8, Icons.settings, 'Settings'),
+        const _NavItem(8, Icons.account_tree, 'Register History'),
+        const _NavItem(9, Icons.settings, 'Settings'),
       ] else ...[
         const _NavItem(0, Icons.shopping_cart, 'POS'),
         const _NavItem(1, Icons.point_of_sale, 'Register'),
@@ -433,7 +490,7 @@ class _MainScaffoldState extends State<MainScaffold> {
               title: Text(title),
             ),
             drawer: _buildDrawer(context, drawerItems),
-            body: IndexedStack(index: _selectedIndex, children: screens),
+            body: _tabSwitcher(screens),
             bottomNavigationBar: _mobilePillNav(pillItems),
           );
         }
@@ -499,8 +556,7 @@ class _MainScaffoldState extends State<MainScaffold> {
                     ),
                     const Divider(),
                     InkWell(
-                      onTap: () =>
-                          setState(() => _selectedIndex = settingsIndex),
+                      onTap: () => _selectTab(settingsIndex),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 20,
@@ -564,13 +620,27 @@ class _MainScaffoldState extends State<MainScaffold> {
                   ],
                 ),
               ),
-              Expanded(
-                child: IndexedStack(index: _selectedIndex, children: screens),
-              ),
+              Expanded(child: _tabSwitcher(screens)),
             ],
           ),
         );
       },
+    );
+  }
+
+  /// Fades each tab in as it becomes visible. Deliberately NOT an
+  /// AnimatedSwitcher: that keeps the old and new subtree alive at once, and
+  /// both would mount the same GlobalKeys ("Multiple widgets used the same
+  /// GlobalKey"). A single IndexedStack + fade keeps every screen mounted
+  /// exactly once while still feeling smooth.
+  Widget _tabSwitcher(List<Widget> screens) {
+    return _TabFadeTransition(
+      controller: _tabFadeController,
+      curve: _tabFadeCurve,
+      child: KeyedSubtree(
+        key: ValueKey(_selectedIndex),
+        child: IndexedStack(index: _selectedIndex, children: screens),
+      ),
     );
   }
 
@@ -610,7 +680,7 @@ class _MainScaffoldState extends State<MainScaffold> {
   Widget _pillItem(_NavItem it) {
     final sel = _selectedIndex == it.index;
     return InkWell(
-      onTap: () => setState(() => _selectedIndex = it.index),
+      onTap: () => _selectTab(it.index),
       borderRadius: BorderRadius.circular(AppDesign.radiusPill),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -641,7 +711,7 @@ class _MainScaffoldState extends State<MainScaffold> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: InkWell(
-        onTap: () => setState(() => _selectedIndex = index),
+        onTap: () => _selectTab(index),
         borderRadius: BorderRadius.circular(12),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
@@ -743,7 +813,7 @@ class _MainScaffoldState extends State<MainScaffold> {
                       leading: Icon(item.icon, size: 20),
                       title: Text(item.label),
                       onTap: () {
-                        setState(() => _selectedIndex = item.index);
+                        _selectTab(item.index);
                         Navigator.of(context).pop();
                       },
                     ),
@@ -764,4 +834,60 @@ class _NavItem {
   final String label;
 
   const _NavItem(this.index, this.icon, this.label);
+}
+
+/// Fades [child] in whenever its key changes (i.e. a different tab is shown),
+/// driven by a shared controller owned by the shell. Only ever mounts one
+/// subtree at a time, so screen GlobalKeys stay unique.
+class _TabFadeTransition extends StatefulWidget {
+  final AnimationController controller;
+  final Curve curve;
+  final Widget child;
+
+  const _TabFadeTransition({
+    required this.controller,
+    required this.curve,
+    required this.child,
+  });
+
+  @override
+  State<_TabFadeTransition> createState() => _TabFadeTransitionState();
+}
+
+class _TabFadeTransitionState extends State<_TabFadeTransition> {
+  late Object? _lastKey = widget.child.key;
+  late final CurvedAnimation _animation = CurvedAnimation(
+    parent: widget.controller,
+    curve: widget.curve,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller
+      ..value = 0
+      ..forward();
+  }
+
+  @override
+  void dispose() {
+    _animation.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(_TabFadeTransition oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.child.key != _lastKey) {
+      _lastKey = widget.child.key;
+      widget.controller
+        ..value = 0
+        ..forward();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(opacity: _animation, child: widget.child);
+  }
 }

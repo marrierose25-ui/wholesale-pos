@@ -99,7 +99,9 @@ class AppTheme {
       fontFamily: _font,
       colorScheme: scheme,
       scaffoldBackgroundColor: scaffoldBg,
-      splashFactory: InkRipple.splashFactory,
+      // InkSparkle is Material 3's fluid highlight — the ripple hugs the
+      // finger and settles without the hard edge InkRipple shows.
+      splashFactory: InkSparkle.splashFactory,
       textTheme: _textTheme(scheme),
       iconTheme: IconThemeData(color: scheme.onSurface),
 

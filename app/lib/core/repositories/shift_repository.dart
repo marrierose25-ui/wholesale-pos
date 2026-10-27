@@ -36,6 +36,11 @@ abstract class ShiftRepository {
     String? userId,
   });
 
+  /// The cash-register ledger, newest first, each carrying the username of
+  /// whoever recorded it. Pass [shiftId] to restrict the list to one session,
+  /// or omit it for every movement across all shifts.
+  Future<List<CashMovement>> getCashMovements({String? shiftId});
+
   Future<Map<String, int>> getShiftSummary(Shift shift);
 
   /// Register figures for the perpetual open shift: `balance` is the all-time
@@ -207,6 +212,25 @@ class SqfliteShiftRepository implements ShiftRepository {
       });
       await _enqueueCashMovement(txn, movementId);
     });
+  }
+
+  @override
+  Future<List<CashMovement>> getCashMovements({String? shiftId}) async {
+    final clauses = <String>[];
+    final args = <Object?>[];
+    if (shiftId != null) {
+      clauses.add('cm.shift_id = ?');
+      args.add(shiftId);
+    }
+    final where = clauses.isEmpty ? '' : ' WHERE ${clauses.join(' AND ')}';
+    final maps = await _db.rawQuery('''
+      SELECT cm.*, users.username AS user_name
+      FROM cash_movements cm
+      LEFT JOIN users ON cm.user_id = users.id
+      $where
+      ORDER BY cm.created_at DESC
+    ''', args);
+    return maps.map(CashMovement.fromMap).toList();
   }
 
   @override

@@ -46,11 +46,13 @@ class RegisterScreenState extends State<RegisterScreen> {
     loadData();
   }
 
-  Future<void> loadData() async {
-    setState(() {
-      _isLoading = true;
-      _loadError = null;
-    });
+  Future<void> loadData({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _isLoading = true;
+        _loadError = null;
+      });
+    }
 
     try {
       // A shift always exists: create the perpetual one on first visit.
@@ -213,11 +215,6 @@ class RegisterScreenState extends State<RegisterScreen> {
         _buildBalanceHero(balance),
         const SizedBox(height: 20),
         const SectionHeader(title: 'Today'),
-        const SizedBox(height: 4),
-        Text(
-          'Counters reset each calendar day.',
-          style: TextStyle(color: AppDesign.textLo, fontSize: 12),
-        ),
         const SizedBox(height: 12),
         LayoutBuilder(
           builder: (context, constraints) {
@@ -244,7 +241,6 @@ class RegisterScreenState extends State<RegisterScreen> {
                 Icons.north_east_rounded,
                 AppDesign.blue,
                 onTap: () => _showCashMovement('DEPOSIT'),
-                hint: 'Tap to add a deposit',
               ),
               _RegStat(
                 'Today Withdrawals',
@@ -252,7 +248,6 @@ class RegisterScreenState extends State<RegisterScreen> {
                 Icons.south_west_rounded,
                 AppDesign.warning,
                 onTap: () => _showCashMovement('WITHDRAWAL'),
-                hint: 'Tap to record a withdrawal',
               ),
             ];
             return Wrap(
@@ -311,11 +306,6 @@ class RegisterScreenState extends State<RegisterScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 6),
-                const Text(
-                  'Cash in the drawer. Changes only when money moves.',
-                  style: TextStyle(color: Colors.white70, fontSize: 12),
-                ),
               ],
             ),
           ),
@@ -362,13 +352,6 @@ class RegisterScreenState extends State<RegisterScreen> {
               ),
             ),
           ),
-          if (stat.hint != null) ...[
-            const SizedBox(height: 6),
-            Text(
-              stat.hint!,
-              style: TextStyle(fontSize: 11, color: AppDesign.textLo),
-            ),
-          ],
         ],
       ),
     );
@@ -422,10 +405,6 @@ class RegisterScreenState extends State<RegisterScreen> {
               ],
             ),
             const SizedBox(height: 8),
-            Text(
-              'Cashier void requests awaiting your decision.',
-              style: TextStyle(color: AppTheme.muted, fontSize: 13),
-            ),
             const Divider(height: 24),
             ..._pendingRequests.map(
               (request) => Padding(
@@ -501,15 +480,7 @@ class _RegStat {
   final IconData icon;
   final Color color;
   final VoidCallback? onTap;
-  final String? hint;
-  const _RegStat(
-    this.title,
-    this.value,
-    this.icon,
-    this.color, {
-    this.onTap,
-    this.hint,
-  });
+  const _RegStat(this.title, this.value, this.icon, this.color, {this.onTap});
 }
 
 class _CashMovementDialog extends StatefulWidget {

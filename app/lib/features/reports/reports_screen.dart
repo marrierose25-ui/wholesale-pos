@@ -127,15 +127,6 @@ class ReportsScreenState extends State<ReportsScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildPeriodBar(),
-              const SizedBox(height: 8),
-              Text(
-                'Revenue figures come from completed sales only. Voided sales '
-                'are excluded.',
-                style: TextStyle(
-                  color: Theme.of(context).textTheme.bodySmall?.color,
-                  fontSize: 12,
-                ),
-              ),
               const SizedBox(height: 24),
               LayoutBuilder(
                 builder: (context, constraints) {

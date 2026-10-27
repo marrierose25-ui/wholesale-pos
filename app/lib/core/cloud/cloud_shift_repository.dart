@@ -82,6 +82,17 @@ class CloudShiftRepository implements ShiftRepository {
   }
 
   @override
+  Future<List<CashMovement>> getCashMovements({String? shiftId}) async {
+    final json = await _api.call('list_cash_movements', {'shift_id': ?shiftId});
+    final rows = json['movements'];
+    if (rows is! List) return const [];
+    return rows
+        .whereType<Map<String, dynamic>>()
+        .map(CashMovement.fromMap)
+        .toList();
+  }
+
+  @override
   Future<Map<String, int>> getShiftSummary(Shift shift) async {
     final json = await _api.call('shift_summary', {'shift_id': shift.id});
     final summary = json['summary'];

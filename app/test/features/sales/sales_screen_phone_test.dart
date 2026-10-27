@@ -83,13 +83,15 @@ void main() {
       // The screen kicks off an async DB load (ensureActiveShift) in initState.
       await pumpFrames();
 
-      // The decluttered POS is a single action: a "New Sale" call-to-action.
-      expect(find.text('Ring up a single item'), findsOneWidget);
-      expect(find.text('New Sale'), findsOneWidget);
+      // The decluttered POS is a single action: just the glowing + circle,
+      // no title, no description, no button label anywhere.
+      expect(find.byIcon(Icons.add), findsOneWidget);
+      expect(find.text('Ring up a single item'), findsNothing);
+      expect(find.text('New Sale'), findsNothing);
       expect(tester.takeException(), isNull); // main screen alone must fit
 
-      // Open the dialog and ring up one item.
-      await tester.tap(find.text('New Sale'));
+      // Tap the + circle to open the dialog and ring up one item.
+      await tester.tap(find.byIcon(Icons.add));
       await pumpFrames();
       expect(find.text('Price (Br)'), findsOneWidget);
 
