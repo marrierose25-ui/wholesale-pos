@@ -195,6 +195,19 @@ void main() {
     expect(bad?['error'], 'License is for a different device.');
   });
 
+  test('fails closed when a v2 license cannot verify this device fingerprint',
+      () async {
+    // A v2 seat license must never validate when the caller could not compute
+    // this device's fingerprint (null) - that path used to be silently skipped.
+    final code = await signV2(v2Payload(fp: 'bbbb'));
+    final noFp = await LicenseValidator.validateLicense(
+      licenseText: code,
+      now: DateTime.utc(2030),
+      verificationKeyHex: publicHex,
+    );
+    expect(noFp?['error'], 'License is for a different device.');
+  });
+
   test(
     'rejects a v2 license missing customer_id / activation_code / fingerprint',
     () async {

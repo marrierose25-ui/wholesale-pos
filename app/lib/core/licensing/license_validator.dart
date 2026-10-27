@@ -176,7 +176,11 @@ class LicenseValidator {
             return {'error': 'License is missing required fields.'};
           }
         }
-        if (deviceFingerprint != null &&
+        // Fail closed. A v2 seat license is bound to exactly one device; if we
+        // could not compute THIS device's fingerprint we must reject rather
+        // than silently skip the comparison (otherwise a copied license.key
+        // would validate on any machine that failed fingerprint detection).
+        if (deviceFingerprint == null ||
             payload['device_fingerprint'] != deviceFingerprint) {
           return {'error': 'License is for a different device.'};
         }

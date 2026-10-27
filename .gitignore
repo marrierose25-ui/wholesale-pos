@@ -29,3 +29,10 @@ app/**/license.key
 *.private-key
 *.signing-key
 *.ed25519
+
+# Supabase CLI local state (can contain access tokens) — never commit.
+supabase/.temp/
+supabase/supabase/.temp/
+
+# Vercel CLI temp working dir created by the web deploy script.
+app/.vercel-tmp/

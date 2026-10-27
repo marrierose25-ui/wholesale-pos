@@ -224,9 +224,19 @@ async function deactivateDevice(db: any, body: any): Promise<Response> {
     .is('revoked_at', null).maybeSingle();
   if (!tgt) return json({ ok: false, error: 'Target device not found.' }, 404);
 
-  await db.from('device_registrations')
+  // Revoke only a still-active row and confirm it actually changed: the
+  // .is(revoked_at, null) guard collapses a concurrent double-deactivate to a
+  // 0-row update, and we surface that instead of falsely reporting success.
+  const { data: revoked, error: revErr } = await db.from('device_registrations')
     .update({ revoked_at: new Date().toISOString() })
-    .eq('id', tgt.id);
+    .eq('id', tgt.id).is('revoked_at', null).select('id');
+  if (revErr) {
+    console.error('deactivate_device update failed:', revErr.message);
+    return json({ ok: false, error: 'Could not revoke device.' }, 500);
+  }
+  if (!revoked || revoked.length === 0) {
+    return json({ ok: false, error: 'Device was already deactivated.' }, 409);
+  }
   await writeAudit(db, code, target, 'deactivate', { by: mask(requesting) });
   return json({ ok: true });
 }

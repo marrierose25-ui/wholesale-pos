@@ -60,12 +60,29 @@ const CASHIER = 'CASHIER';
 
 // Actions that need an OWNER token. Everything authenticated is at least a
 // valid (inactive-revoked-checked) session for the tenant.
+//
+// This set MUST mirror the owner-only screens in the client nav matrix
+// (app/lib/app_shell.dart): Owner sees Dashboard / Money Tracking / Users /
+// Audit / Register History / Reports; a Cashier sees only POS / Register /
+// History / Settings. Reads the cashier's own Register/POS flow needs
+// (ensure_shift, register_snapshot, next_receipt_number, insert_sale,
+// request_void, open_shift/close_shift, add_cash_movement) stay OUT of this
+// set. list_void_requests/shift_summary are owner-gated in the UI, so they
+// belong here even though the Register screen builds for everyone.
 const OWNER_ONLY = new Set([
-  'void_sale', 'approve_void', 'reject_void',
+  // Voids: a cashier may request_void, only an owner may void/approve/reject.
+  'void_sale', 'approve_void', 'reject_void', 'list_void_requests',
+  // User administration.
   'list_users', 'create_user', 'reset_password', 'set_user_active',
-  'finance_categories', 'finance_summaries', 'finance_create_category',
-  'finance_rename_category', 'finance_add_entry', 'finance_update_entry',
-  'finance_mark_completed', 'finance_search_entries', 'finance_person_totals',
+  // Money tracking (people + entries) incl. the recycle-bin mutations.
+  'finance_categories', 'finance_deleted_categories', 'finance_summaries',
+  'finance_create_category', 'finance_rename_category', 'finance_delete_category',
+  'finance_restore_category', 'finance_permanently_delete_category',
+  'finance_add_entry', 'finance_update_entry', 'finance_mark_completed',
+  'finance_search_entries', 'finance_person_totals',
+  // Ledger browsing + reporting aggregates (cross-shift; owner-only views).
+  'list_cash_movements', 'shift_history', 'shift_summary',
+  'dashboard_summary', 'revenue_trend', 'report_summary',
   'list_audit',
 ]);
 

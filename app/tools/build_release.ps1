@@ -24,7 +24,12 @@ param(
     [ValidateSet('windows', 'apk', 'web')]
     [string]$Platform,
 
-    [switch]$DevUnlicensed
+    [switch]$DevUnlicensed,
+
+    # Places the developer's OWN license.key next to the Windows binary so the
+    # built app runs on the dev machine without activation. NEVER set for a
+    # customer build; the post-build check would also reject a shipped license.
+    [switch]$IncludeMyLicense
 )
 
 $ErrorActionPreference = 'Stop'
@@ -53,14 +58,38 @@ if ($DevUnlicensed) {
     $defines += '--dart-define=WHOLESALE_POS_DEV_UNLICENSED=true'
 }
 
+# Post-build safety check: a distributable must NEVER carry the developer's
+# license, a seeded local DB, or signing material. Throws on any hit so a dirty
+# artifact can't be packaged by accident.
+function Assert-CleanOutput {
+    param([string]$Dir)
+    if (-not (Test-Path $Dir)) { return }
+    $forbidden = Get-ChildItem -Path $Dir -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '(?i)^(license\.key)$' -or
+                       $_.Name -match '(?i)\.(db|db-wal|db-shm|jks|keystore|pfx|p12)$' }
+    if ($forbidden) {
+        $names = ($forbidden | ForEach-Object { $_.FullName }) -join [Environment]::NewLine
+        throw "Release output must not contain a license, local DB, or signing material. Found:$([Environment]::NewLine)$names"
+    }
+}
+
+if ($DevUnlicensed) {
+    Write-Warning 'DevUnlicensed build: this artifact bypasses licensing and MUST NOT be distributed.'
+}
+
 if ($Platform -eq 'windows') {
     flutter build windows --release @defines
     $out = Join-Path $AppDir 'build\windows\x64\runner\Release'
-    $lic = Join-Path $AppDir 'license.key'
-    if (Test-Path $lic) {
-        Copy-Item $lic $out -Force
-        Write-Host "Copied license.key into $out (developer's own PC path)."
+    # A customer build must NOT inherit the developer's license.key. It is only
+    # copied when -IncludeMyLicense is passed, for running on the dev PC itself.
+    if ($IncludeMyLicense) {
+        $lic = Join-Path $AppDir 'license.key'
+        if (Test-Path $lic) {
+            Copy-Item $lic $out -Force
+            Write-Host "Copied license.key into $out (developer's own PC path; DO NOT ship)."
+        }
     }
+    Assert-CleanOutput $out
     Write-Host "Windows release output: $out"
 } elseif ($Platform -eq 'apk') {
     flutter build apk --release @defines
@@ -70,5 +99,6 @@ if ($Platform -eq 'windows') {
     # Web/PWA: separate dart:io-free entry (main_web.dart) wired to CloudBackend.
     flutter build web --release -t lib/main_web.dart @defines
     $out = Join-Path $AppDir 'build\web'
+    Assert-CleanOutput $out
     Write-Host "Web (PWA) output: $out"
 }

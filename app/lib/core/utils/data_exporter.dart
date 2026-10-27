@@ -26,7 +26,16 @@ class DataExporter {
       throw Exception('Only an active owner can export data.');
     }
 
-    final users = await db.query('users');
+    // Business data only. Credentials are NEVER written to the plaintext
+    // backup: `users` is exported without password_hash / salt, and the
+    // licensing / session secrets are stripped from `settings` below. This
+    // backup is an operational snapshot, not a full-fidelity DB restore (the
+    // app has no importer that re-derives hashes, so restoring user logins
+    // would require re-seeding them anyway).
+    final users = await db.query(
+      'users',
+      columns: ['id', 'username', 'role', 'is_active', 'created_at'],
+    );
     final products = await db.query('products');
     final sales = await db.query('sales');
     final saleItems = await db.query('sale_items');
@@ -36,7 +45,20 @@ class DataExporter {
     final auditLogs = await db.query('audit_logs');
     final devices = await db.query('devices');
     final counters = await db.query('counters');
-    final settings = await db.query('settings');
+    // Drop keys that hold secrets / device identity: the signed license, the
+    // activation code, the per-install + hardware UUIDs, and the cached auth
+    // session. Everything else (theme, shop prefs, etc.) is safe to carry.
+    const secretSettingKeys = {
+      'auth_session',
+      'license_code',
+      'activation_code',
+      'device_hw_uuid',
+      'device_install_uuid',
+    };
+    final allSettings = await db.query('settings');
+    final settings = allSettings
+        .where((row) => !secretSettingKeys.contains(row['key']))
+        .toList();
     final financeCategories = await db.query('finance_categories');
     final financeEntries = await db.query('finance_entries');
 
