@@ -540,14 +540,16 @@ class PeriodDropdown extends StatelessWidget {
     required this.onChanged,
   });
 
+  // Compact date stamp for the custom-range label (MM/DD, not full ISO), so
+  // the picker stays short and does not wrap on narrow phones.
   static String _fmt(DateTime d) =>
-      '${d.year}-${d.month.toString().padLeft(2, '0')}-'
+      '${d.month.toString().padLeft(2, '0')}/'
       '${d.day.toString().padLeft(2, '0')}';
 
   String get _label {
     if (value == ReportPeriod.custom) {
       final r = customRange;
-      return r == null ? 'Custom' : '${_fmt(r.start)} – ${_fmt(r.end)}';
+      return r == null ? 'Custom' : '${_fmt(r.start)}\u2013${_fmt(r.end)}';
     }
     return value.label;
   }
@@ -586,7 +588,7 @@ class PeriodDropdown extends StatelessWidget {
           PopupMenuItem<ReportPeriod>(value: p, child: Text(p.label)),
       ],
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
         decoration: BoxDecoration(
           color: AppDesign.card,
           borderRadius: BorderRadius.circular(AppDesign.radiusButton),
@@ -595,18 +597,18 @@ class PeriodDropdown extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.date_range, size: 16, color: AppDesign.textLo),
-            const SizedBox(width: 6),
+            Icon(Icons.date_range, size: 14, color: AppDesign.textLo),
+            const SizedBox(width: 5),
             Text(
               _label,
               style: TextStyle(
                 color: AppDesign.textHi,
-                fontSize: 13,
+                fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
             ),
-            const SizedBox(width: 4),
-            Icon(Icons.expand_more, size: 16, color: AppDesign.textLo),
+            const SizedBox(width: 2),
+            Icon(Icons.expand_more, size: 14, color: AppDesign.textLo),
           ],
         ),
       ),

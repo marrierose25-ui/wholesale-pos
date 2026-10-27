@@ -72,12 +72,12 @@ class DateRange {
 
 /// The period presets offered on the dashboard, history, and report screens.
 enum ReportPeriod {
-  today('Today'),
+  today('Day'),
   yesterday('Yesterday'),
-  thisWeek('This Week'),
-  thisMonth('This Month'),
-  thisYear('This Year'),
-  allTime('All Time'),
+  thisWeek('Week'),
+  thisMonth('Month'),
+  thisYear('Year'),
+  allTime('All'),
   custom('Custom');
 
   const ReportPeriod(this.label);

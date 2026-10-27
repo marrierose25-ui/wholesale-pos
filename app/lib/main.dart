@@ -421,24 +421,30 @@ class _AuthWrapperState extends State<AuthWrapper> {
   /// at least once per validity period never expires in normal daily use.
   Future<void> _restoreSession() async {
     User? restored;
-    final remember = await LocalDatabase.getSetting(
-      widget.db,
-      SessionStore.rememberKey,
-    );
-    if (remember != '0') {
-      final session = await _sessions.load();
-      if (session != null) {
-        restored = await widget.userRepository.getById(session.userId);
-        if (restored != null) {
-          // Renew the token so continuous daily use keeps the sign-in alive.
-          await _sessions.save(
-            SessionData.create(
-              restored.id,
-              lifetime: SessionStore.defaultLifetime,
-            ),
-          );
+    try {
+      final remember = await LocalDatabase.getSetting(
+        widget.db,
+        SessionStore.rememberKey,
+      );
+      if (remember != '0') {
+        final session = await _sessions.load();
+        if (session != null) {
+          restored = await widget.userRepository.getById(session.userId);
+          if (restored != null) {
+            // Renew the token so continuous daily use keeps the sign-in alive.
+            await _sessions.save(
+              SessionData.create(
+                restored.id,
+                lifetime: SessionStore.defaultLifetime,
+              ),
+            );
+          }
         }
       }
+    } catch (_) {
+      // A failed resume must never trap the app on the loading spinner; fall
+      // back to the login screen and leave the stored session for a retry.
+      restored = null;
     }
     if (!mounted) return;
     setState(() {

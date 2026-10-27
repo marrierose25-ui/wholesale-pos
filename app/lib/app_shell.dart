@@ -138,22 +138,38 @@ class _AuthGateState extends State<AuthGate> {
   /// OUT (a stored '0'). Persistent sign-in is ON by default so a till that is
   /// simply closed and reopened does not demand the password again. A successful
   /// resume slides the session window forward.
+  ///
+  /// The whole resume is guarded: the `getById` check is a live `pos-api` call,
+  /// so an expired/invalid session, a revoked account, or a flaky/offline
+  /// network would otherwise throw out of this async body BEFORE `_restoring`
+  /// is cleared — leaving the app stuck on an infinite loading spinner after a
+  /// reopen. Any failure (or a hang, via the timeout) falls through to the
+  /// login screen instead. The persisted session is left intact so a later
+  /// launch can retry; a successful login overwrites it with a fresh token.
   Future<void> _restoreSession() async {
     User? restored;
-    final remember = await widget.backend.getSetting(SessionStore.rememberKey);
-    if (remember != '0') {
-      final session = await widget.backend.session.load();
-      if (session != null) {
-        restored = await widget.backend.users.getById(session.userId);
-        if (restored != null) {
-          await widget.backend.session.save(
-            SessionData.create(
-              restored.id,
-              lifetime: SessionStore.defaultLifetime,
-            ),
-          );
+    try {
+      final remember = await widget.backend.getSetting(
+        SessionStore.rememberKey,
+      );
+      if (remember != '0') {
+        final session = await widget.backend.session.load();
+        if (session != null) {
+          restored = await widget.backend.users
+              .getById(session.userId)
+              .timeout(const Duration(seconds: 12));
+          if (restored != null) {
+            await widget.backend.session.save(
+              SessionData.create(
+                restored.id,
+                lifetime: SessionStore.defaultLifetime,
+              ),
+            );
+          }
         }
       }
+    } catch (_) {
+      restored = null;
     }
     if (!mounted) return;
     setState(() {
