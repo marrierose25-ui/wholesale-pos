@@ -66,7 +66,15 @@ abstract class SessionStore {
   static const String rememberKey = 'remember_login';
 
   /// How long a persisted session stays valid once the app is closed.
-  static const Duration defaultLifetime = Duration(hours: 12);
+  ///
+  /// Sign-in is persistent: an operator stays logged in until they explicitly
+  /// tap Logout (or the account is deactivated, which revokes the saved
+  /// session via `UserRepository.getById`). The window is effectively "never"
+  /// rather than a rolling timeout, so simply closing the till — or the
+  /// browser — does not demand the password again. Every successful resume
+  /// slides this far-future window forward, so an actively used device can
+  /// never drift into an expiry mid-shift.
+  static const Duration defaultLifetime = Duration(days: 3650);
 
   Future<void> save(SessionData session);
 

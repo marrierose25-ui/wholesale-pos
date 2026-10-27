@@ -35,7 +35,12 @@ const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const JWT_SECRET = Deno.env.get('POS_API_JWT_SECRET')!;
 
 const PBKDF2_ITERATIONS = 210000;
-const SESSION_TTL_SECONDS = 12 * 3600; // matches SessionStore.defaultLifetime
+// Persistent sign-in: the JWT is the browser's sole credential, so its
+// lifetime mirrors SessionStore.defaultLifetime (effectively "never"). An
+// operator stays signed in across browser restarts until they explicitly log
+// out (which just drops the token client-side) or their account is deactivated
+// (loadActiveUser then rejects the still-valid JWT on the next call).
+const SESSION_TTL_SECONDS = 3650 * 24 * 3600; // ~10 years; matches SessionStore.defaultLifetime
 
 // CORS: the browser/PWA build (e.g. https://web-xi-seven-15.vercel.app) POSTs
 // here with `application/json` + an `Authorization: Bearer <jwt>` header, which

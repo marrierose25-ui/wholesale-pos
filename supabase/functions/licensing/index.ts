@@ -12,7 +12,7 @@
 // What it does:
 //   POST /functions/v1/licensing  with a JSON body containing {action, ...}
 //   Actions:
-//     - activate_device    : redeem an activation code on a device (seat-limited)
+//     - activate_device    : redeem an activation code on a device (one code = one shop, unlimited devices)
 //     - list_devices       : buyer sees their own active seats
 //     - deactivate_device  : buyer self-removes one of their own devices
 //     - redeem_voucher     : bump seat_limit using a code Umer sold them
@@ -84,17 +84,41 @@ async function activateDevice(db: any, body: any): Promise<Response> {
     return json({ ok: false, error: 'Internal error.' }, 500);
   }
   const r = res as any;
+
+  // ---- Seat policy: ONE activation code = one shop, unlimited devices ----
+  // The buyer asked to keep the seat machinery (device registry, self-service
+  // deactivate, vouchers) but not to be capped. `try_reserve_seat` only returns
+  // 'seat_limit' AFTER the code passed the revoked/expired/not-found checks and
+  // this fingerprint is brand-new, so the license is valid — we simply admit the
+  // device ourselves and continue exactly like a normal activation instead of
+  // refusing. Removing the cap here (not in the DB RPC) keeps the atomic
+  // revoked/expired guard intact and needs no schema migration.
+  if (r.status === 'seat_limit') {
+    const { error: insErr } = await db.from('device_registrations').insert({
+      activation_code: code,
+      device_fingerprint: fingerprint,
+      device_name: deviceName,
+      last_heartbeat: new Date().toISOString(),
+    });
+    if (insErr) {
+      console.error('seat-free registration error:', insErr);
+      return json({ ok: false, error: 'Internal error.' }, 500);
+    }
+    const { data: lic } = await db.from('licenses')
+      .select('customer_id, expires_at, seat_limit')
+      .eq('activation_code', code).single();
+    if (!lic) return json({ ok: false, error: 'Internal error.' }, 500);
+    r.status = 'activated';
+    r.customer_id = lic.customer_id;
+    r.expires_at = lic.expires_at;
+    r.seat_limit = lic.seat_limit;
+    r.seats_used = (r.seats_used ?? 0) + 1;
+  }
+
   switch (r.status) {
     case 'not_found': return json({ ok: false, error: 'Invalid activation code.' }, 404);
     case 'revoked':   return json({ ok: false, error: 'License revoked.' }, 403);
     case 'expired':   return json({ ok: false, error: 'License expired.' }, 403);
-    case 'seat_limit':
-      return json({
-        ok: false,
-        error: 'Seat limit reached. Deactivate one of your devices in Settings -> Devices, or buy an extra seat.',
-        seat_limit: r.seat_limit,
-        seats_used: r.seats_used,
-      }, 409);
   }
   // activated | reactivated | refreshed -> mint a signed license for this seat.
   if (r.status === 'activated' || r.status === 'reactivated') {
