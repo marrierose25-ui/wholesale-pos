@@ -7,7 +7,7 @@ import 'package:sqflite/sqflite.dart';
 import 'core/database/local_database.dart';
 import 'core/auth/features.dart';
 import 'core/auth/session_store.dart';
-import 'core/licensing/activation_client.dart';
+import 'core/licensing/device_activation.dart';
 import 'core/licensing/device_fingerprint.dart';
 import 'core/licensing/license_validator.dart';
 import 'core/models/user.dart';
@@ -19,7 +19,9 @@ import 'core/repositories/user_repository.dart';
 import 'core/sync/sync_gateway_backend.dart';
 import 'core/sync/sync_outbox_repository.dart';
 import 'core/sync/sync_pull_applier.dart';
+import 'core/sync/sync_runtime.dart';
 import 'core/sync/sync_service.dart';
+import 'core/sync/sync_status.dart';
 import 'core/theme/app_design.dart';
 import 'core/theme/app_theme.dart';
 import 'features/audit/audit_log_screen.dart';
@@ -99,19 +101,7 @@ Future<void> main() async {
   );
 }
 
-/// Everything the UI needs from the sync engine.
-///
-/// Two moments need it directly instead of waiting for the timer: a device that
-/// joins an existing shop must pull its accounts BEFORE the login screen
-/// decides whether this is first-time setup, and a sign-in should refresh the
-/// ledger immediately rather than on the next tick.
-class SyncRuntime {
-  final SyncService service;
-  final CloudSyncPuller puller;
-
-  const SyncRuntime({required this.service, required this.puller});
-}
-
+/// Everything the UI needs from the sync engine (see [SyncRuntime]).
 /// Drains the outbox to the cloud on a timer. The first attempt runs on
 /// startup (to catch anything queued while offline); then every 30 seconds —
 /// which pushes immediately and pulls on its own (slower) cadence, see
@@ -244,22 +234,15 @@ class LicenseWrapper extends StatefulWidget {
 class _LicenseWrapperState extends State<LicenseWrapper> {
   /// Settings key holding the signed license payload on ANY platform. Desktop
   /// additionally honours the legacy `license.key` file next to the exe if
-  /// this is empty, so Umer's existing shop PCs keep working unchanged.
-  static const String _licenseCodeKey = 'license_code';
-
-  /// Settings key holding the short opaque activation code (e.g.
-  /// "MERCA-7Q2F-9K3X-4D8M-BN"). Kept separately so Settings -> Devices can
-  /// pass it to list/deactivate/voucher endpoints without exposing the
-  /// signed license payload itself.
-  static const String _activationCodeKey = 'activation_code';
+  /// this is empty, so Umer's existing shop PCs keep working unchanged. The
+  /// short activation code is written beside it by [DeviceActivation] so
+  /// Settings can call the seat endpoints.
+  static const String _licenseCodeKey = DeviceActivation.licenseCodeKey;
 
   bool _isChecking = true;
   bool _isLicensed = false;
   String? _error;
   String? _fingerprint;
-
-  /// Instantiated once; the URL is baked via --dart-define at build time.
-  final ActivationClient _activationClient = ActivationClient();
 
   @override
   void initState() {
@@ -317,63 +300,18 @@ class _LicenseWrapperState extends State<LicenseWrapper> {
     });
   }
 
-  /// Validates whatever the user typed on the activation screen. Two shapes
-  /// are accepted for backward compatibility:
-  ///  - A short opaque code (e.g. "MERCA-…-BN") — redeem it against the
-  ///    licensing Edge Function; on success the server returns a signed v2
-  ///    license bound to this device's fingerprint, which we persist.
-  ///  - A full signed payload (`base64url.base64url`) — validate it locally
-  ///    with the same Ed25519 path used in Phase 14 for device-unbound
-  ///    licenses (still valid for the developer's own shop PC + any legacy
-  ///    codes sold before Phase 17).
+  /// Validates whatever the user typed on the activation screen and stores the
+  /// resulting device-bound licence. The rules (short code redeemed against the
+  /// licensing function, or a full signed payload verified locally) live in
+  /// [DeviceActivation], shared with the "re-activate" action in Settings.
   Future<String?> _activateWithCode(String input) async {
-    final trimmed = input.trim();
-    if (trimmed.isEmpty) return 'Enter the activation code.';
-    final fingerprint = _fingerprint;
-    if (fingerprint == null) {
-      return 'Could not compute a device fingerprint; restart the app.';
-    }
+    final result = await DeviceActivation.redeem(
+      widget.db,
+      input,
+      deviceName: Platform.localHostname,
+    );
+    if (!result.ok) return result.error;
 
-    final looksLikeSignedPayload = trimmed.contains('.');
-    final String licenseToStore;
-    if (looksLikeSignedPayload) {
-      final result = await LicenseValidator.validateLicense(
-        licenseText: trimmed,
-        deviceFingerprint: fingerprint,
-      );
-      if (result == null || result['error'] != null) {
-        return result?['error'] as String? ?? 'Invalid license code.';
-      }
-      licenseToStore = trimmed;
-    } else {
-      if (!_activationClient.isConfigured) {
-        return 'Activation server is not configured on this build. Ask your '
-            'provider to rebuild with '
-            '--dart-define=WHOLESALE_POS_LICENSE_FN_URL=<url>.';
-      }
-      final response = await _activationClient.activateDevice(
-        activationCode: trimmed,
-        deviceFingerprint: fingerprint,
-        deviceName: Platform.localHostname,
-      );
-      if (!response.ok) {
-        return response.error ?? 'Activation failed.';
-      }
-      final returned = response.licenseCode!;
-      // Defense-in-depth: never trust the server's word — verify the signed
-      // payload with the baked Ed25519 public key before we accept it.
-      final verify = await LicenseValidator.validateLicense(
-        licenseText: returned,
-        deviceFingerprint: fingerprint,
-      );
-      if (verify == null || verify['error'] != null) {
-        return 'Server returned an invalid license.';
-      }
-      licenseToStore = returned;
-      await LocalDatabase.setSetting(widget.db, _activationCodeKey, trimmed);
-    }
-
-    await LocalDatabase.setSetting(widget.db, _licenseCodeKey, licenseToStore);
     await _firstPullIfNewDevice();
     if (!mounted) return null;
     setState(() {
@@ -564,6 +502,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
       onLogout: _onLogout,
       isDarkMode: widget.isDarkMode,
       onToggleTheme: widget.onToggleTheme,
+      syncRuntime: widget.syncRuntime,
     );
   }
 }
@@ -581,6 +520,10 @@ class MainLayout extends StatefulWidget {
   final bool isDarkMode;
   final VoidCallback onToggleTheme;
 
+  /// Drives the "Cloud Sync" row in Settings and refreshes the data screens
+  /// when a pull lands another till's transactions.
+  final SyncRuntime? syncRuntime;
+
   const MainLayout({
     super.key,
     required this.db,
@@ -594,6 +537,7 @@ class MainLayout extends StatefulWidget {
     required this.onLogout,
     required this.isDarkMode,
     required this.onToggleTheme,
+    this.syncRuntime,
   });
 
   @override
@@ -602,6 +546,30 @@ class MainLayout extends StatefulWidget {
 
 class _MainLayoutState extends State<MainLayout> {
   int _selectedIndex = 0;
+
+  ValueNotifier<SyncStatus>? _syncStatus;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncStatus = widget.syncRuntime?.service.status;
+    _syncStatus?.addListener(_onSyncStatusChanged);
+  }
+
+  @override
+  void dispose() {
+    _syncStatus?.removeListener(_onSyncStatusChanged);
+    super.dispose();
+  }
+
+  /// A pull that wrote rows means another till rang up sales that no screen here
+  /// has ever shown. Refresh in place instead of waiting for the operator to
+  /// switch tabs — "sign in and see the whole shop" has to be visible, not just
+  /// true in the database.
+  void _onSyncStatusChanged() {
+    if ((_syncStatus?.value.applied ?? 0) <= 0) return;
+    _refreshDataScreens();
+  }
 
   /// Feature key at each nav position, rebuilt every frame from the account's
   /// ticks so tab-change / sale-complete handlers resolve the current screen
@@ -666,6 +634,7 @@ class _MainLayoutState extends State<MainLayout> {
       onLogout: widget.onLogout,
       isDarkMode: widget.isDarkMode,
       onToggleTheme: widget.onToggleTheme,
+      syncRuntime: widget.syncRuntime,
     );
 
     // One destination per feature the account is ticked for, in registry order.

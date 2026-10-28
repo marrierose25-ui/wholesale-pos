@@ -76,6 +76,22 @@ abstract class SyncBackend {
   });
 }
 
+/// The cloud refused this device's licence — as opposed to being unreachable.
+///
+/// The distinction is the whole difference between "offline, keep selling" and
+/// "this till will never sync until it is activated": the first fixes itself on
+/// the next tick, the second needs the operator to paste the shop's activation
+/// code. A pre-Phase-17 `license.key` validates locally but carries no tenant,
+/// so the gateway answers 401 for it and sync would otherwise fail silently.
+class SyncAuthException implements Exception {
+  final String message;
+
+  const SyncAuthException(this.message);
+
+  @override
+  String toString() => message;
+}
+
 /// Default backend used while the app is still purely offline (and in tests).
 /// It accepts nothing and throws nothing: rows simply stay queued, so wiring a
 /// real backend later is a drop-in replacement with no other code changes.

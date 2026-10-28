@@ -104,7 +104,9 @@ class SyncGatewayBackend implements SyncBackend {
     if (license == null || license.trim().isEmpty) {
       // Not activated yet: throw so SyncService leaves rows queued. Selling
       // is unaffected; the next drain after activation will get through.
-      throw StateError('Sync gateway: no activated license on this device.');
+      throw const SyncAuthException(
+        'This device has no activation code yet, so it cannot reach the cloud.',
+      );
     }
 
     final body = jsonEncode({
@@ -137,6 +139,15 @@ class SyncGatewayBackend implements SyncBackend {
       },
       body: body,
     );
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      // The licence itself was refused (expired, revoked, wrong tenant, or a
+      // legacy v1 file with no tenant in it). Retrying cannot fix that, so it
+      // is reported as an auth failure the operator has to act on.
+      throw SyncAuthException(
+        _errorOf(res.body) ??
+            'The cloud refused this device (HTTP ${res.statusCode}).',
+      );
+    }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw Exception(
         'Sync gateway push failed (HTTP ${res.statusCode}): ${res.body}',
@@ -199,7 +210,9 @@ class SyncGatewayBackend implements SyncBackend {
   }) async {
     final license = await _licenseProvider();
     if (license == null || license.trim().isEmpty) {
-      throw StateError('Sync gateway: no activated license on this device.');
+      throw const SyncAuthException(
+        'This device has no activation code yet, so it cannot reach the cloud.',
+      );
     }
 
     final res = await _client.post(
@@ -216,6 +229,12 @@ class SyncGatewayBackend implements SyncBackend {
         if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
       }),
     );
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw SyncAuthException(
+        _errorOf(res.body) ??
+            'The cloud refused this device (HTTP ${res.statusCode}).',
+      );
+    }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw Exception(
         'Sync gateway pull failed (HTTP ${res.statusCode}): ${res.body}',
@@ -251,5 +270,20 @@ class SyncGatewayBackend implements SyncBackend {
       nextCursor: nextCursor,
       hasMore: decoded['has_more'] == true,
     );
+  }
+
+  /// The gateway's own wording for a refusal, so the operator sees
+  /// *License format not supported by sync.* instead of a bare 401.
+  static String? _errorOf(String body) {
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is Map) {
+        final error = decoded['error'];
+        if (error is String && error.trim().isNotEmpty) return error.trim();
+      }
+    } catch (_) {
+      // Not JSON (a proxy error page): fall back to the status code.
+    }
+    return null;
   }
 }

@@ -5,9 +5,12 @@ import 'package:sqflite/sqflite.dart';
 import '../../core/database/local_database.dart';
 import '../../core/auth/session_store.dart';
 import '../../core/licensing/activation_client.dart';
+import '../../core/licensing/device_activation.dart';
 import '../../core/licensing/device_fingerprint.dart';
 import '../../core/models/user.dart';
 import '../../core/repositories/user_repository.dart';
+import '../../core/sync/sync_runtime.dart';
+import '../../core/sync/sync_status.dart';
 import '../../core/theme/app_design.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/data_exporter.dart';
@@ -22,6 +25,10 @@ class SettingsScreen extends StatefulWidget {
   final bool isDarkMode;
   final VoidCallback onToggleTheme;
 
+  /// Null in tests that build this screen on its own; production always passes
+  /// the engine created in `main`.
+  final SyncRuntime? syncRuntime;
+
   const SettingsScreen({
     super.key,
     required this.currentUser,
@@ -30,6 +37,7 @@ class SettingsScreen extends StatefulWidget {
     required this.onLogout,
     required this.isDarkMode,
     required this.onToggleTheme,
+    this.syncRuntime,
   });
 
   @override
@@ -40,6 +48,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isExporting = false;
   bool _isImporting = false;
   bool _rememberLogin = false;
+  bool _isSyncing = false;
 
   bool get _isOwner => widget.currentUser.role == 'OWNER';
 
@@ -165,11 +174,139 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context,
       MaterialPageRoute(
         builder: (_) => DevicesScreen(
-          activationCodeProvider: () async =>
-              LocalDatabase.getSetting(widget.db, 'activation_code'),
+          activationCodeProvider: () async => LocalDatabase.getSetting(
+            widget.db,
+            DeviceActivation.activationCodeKey,
+          ),
           fingerprintProvider: () => DeviceFingerprint.get(widget.db),
           client: ActivationClient(),
         ),
+      ),
+    );
+  }
+
+  /// One manual cycle, forced to download as well as upload. The regular timer
+  /// pulls every couple of minutes, so this is the "I want it now" action.
+  Future<void> _syncNow() async {
+    final runtime = widget.syncRuntime;
+    if (runtime == null || _isSyncing) return;
+    setState(() => _isSyncing = true);
+    try {
+      final result = await runtime.service.syncNow(forcePull: true);
+      if (!mounted) return;
+      final status = runtime.service.status.value;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.ok ? status.summary : result.error ?? 'Sync failed.',
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isSyncing = false);
+    }
+  }
+
+  /// Redeems the shop's activation code on this device. Without it a PC that
+  /// only holds a legacy `license.key` cannot sync at all: the file carries no
+  /// tenant, so the gateway refuses it. Data on this device is untouched.
+  Future<void> _activateThisDevice() async {
+    final code = await showDialog<String>(
+      context: context,
+      builder: (context) => const _ActivationCodeDialog(),
+    );
+    if (code == null || code.trim().isEmpty) return;
+
+    setState(() => _isSyncing = true);
+    try {
+      final result = await DeviceActivation.redeem(widget.db, code);
+      if (!mounted) return;
+      if (!result.ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(result.error ?? 'Activation failed.')),
+        );
+        return;
+      }
+
+      final runtime = widget.syncRuntime;
+      final sync = runtime == null
+          ? null
+          : await runtime.service.syncNow(forcePull: true);
+      if (!mounted) return;
+      final applied = sync?.applied ?? 0;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            applied > 0
+                ? 'This device is activated · $applied record(s) downloaded from your other devices.'
+                : 'This device is activated for cloud sync.',
+          ),
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isSyncing = false);
+    }
+  }
+
+  Widget _syncCard(SyncStatus status) {
+    final failing = status.isFailing;
+    final IconData icon;
+    if (!status.configured) {
+      icon = Icons.cloud_off;
+    } else if (failing) {
+      icon = Icons.cloud_off;
+    } else if (status.isConnected) {
+      icon = Icons.cloud_done;
+    } else {
+      icon = Icons.cloud_sync;
+    }
+
+    final queued = status.queued;
+    final subtitle = queued > 0
+        ? '${status.summary}\n$queued change${queued == 1 ? '' : 's'} waiting to upload.'
+        : status.summary;
+
+    return GlassCard(
+      padding: EdgeInsets.zero,
+      child: Column(
+        children: [
+          ListTile(
+            leading: Icon(
+              icon,
+              color: failing ? AppTheme.danger : AppDesign.blueBright,
+            ),
+            title: const Text('Cloud Sync'),
+            subtitle: Text(subtitle),
+            isThreeLine: queued > 0,
+            trailing: _isSyncing
+                ? const SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : IconButton(
+                    icon: const Icon(Icons.sync),
+                    tooltip: 'Sync now',
+                    onPressed: status.configured ? _syncNow : null,
+                  ),
+          ),
+          if (_isOwner && status.authenticationFailed) ...[
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.vpn_key),
+              title: const Text('Activate this device'),
+              subtitle: const Text(
+                'Paste the shop activation code once. Sales already recorded '
+                'here stay, and every device\'s transactions download on the '
+                'next sync.',
+              ),
+              isThreeLine: true,
+              trailing: const Icon(Icons.chevron_right),
+              onTap: _isSyncing ? null : _activateThisDevice,
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -299,6 +436,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ],
               ),
             ),
+            if (widget.syncRuntime != null) ...[
+              const SizedBox(height: 24),
+              const Text(
+                'Cloud Sync',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+              ),
+              const SizedBox(height: 8),
+              ValueListenableBuilder<SyncStatus>(
+                valueListenable: widget.syncRuntime!.service.status,
+                builder: (context, status, _) => _syncCard(status),
+              ),
+            ],
             if (_isOwner) ...[
               const SizedBox(height: 24),
               const Text(
@@ -483,6 +632,62 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               : const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Asks for the shop's activation code. The value is returned to the caller,
+/// which redeems it — a code is a credential, so nothing is logged or shown
+/// again once the device is activated.
+class _ActivationCodeDialog extends StatefulWidget {
+  const _ActivationCodeDialog();
+
+  @override
+  State<_ActivationCodeDialog> createState() => _ActivationCodeDialogState();
+}
+
+class _ActivationCodeDialogState extends State<_ActivationCodeDialog> {
+  final TextEditingController _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Activate this device'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Enter the activation code from your shop. This device joins your '
+            'shop\'s cloud account, so sales recorded on your other phones and '
+            'PCs appear here.',
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            textCapitalization: TextCapitalization.characters,
+            decoration: const InputDecoration(labelText: 'Activation Code'),
+            onSubmitted: (value) => Navigator.of(context).pop(value),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_controller.text),
+          child: const Text('Activate'),
         ),
       ],
     );

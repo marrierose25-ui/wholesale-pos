@@ -172,7 +172,9 @@ void main() {
         backend.push([
           _entry(entityType: SyncEntities.sale, entityId: 's1', payload: {}),
         ]),
-        throwsA(isA<StateError>()),
+        // A missing licence is an auth failure, not a transport one: retrying
+        // cannot fix it, so the UI has to offer activation.
+        throwsA(isA<SyncAuthException>()),
       );
       // Give the future a tick so if the guard were missing, `called` flips.
       return Future<void>(() => Future.delayed(Duration.zero)).then((_) {

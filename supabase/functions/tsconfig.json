@@ -1,0 +1,15 @@
+{
+  "//": "Editor-only: lets the IDE's TypeScript server check these Deno Edge Functions without a Deno toolchain installed. The Deno CLI type-checks against its own lib when the functions are deployed, so this file changes nothing at runtime.",
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "lib": ["ESNext", "DOM"],
+    "types": [],
+    "strict": true,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["**/*.ts", "**/*.d.ts"]
+}
