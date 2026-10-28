@@ -69,6 +69,12 @@ abstract class UserRepository {
   /// setup so every install/tenant has a non-deactivatable `demo` login.
   Future<void> ensureDemoUser();
 
+  /// The demo password the backend just minted or rotated, if any. Only a
+  /// backend that can vouch for it returns one (the cloud mints a per-tenant
+  /// secret and hands it to the owner once); the local seed keeps only a hash,
+  /// so it returns null and the owner sets one from the Users screen.
+  Future<String?> takeDemoPassword();
+
   /// Replaces a staff account's feature ticks. Immediate on the server side
   /// (rows are read live per request) and on the next app open (session
   /// restore reloads the user). Owner rows are rejected — they bypass ticks.
@@ -76,7 +82,7 @@ abstract class UserRepository {
 
   /// Changes an account's login phone number (the identifier it signs in with).
   /// Owner-only, keeps the value unique and canonical, and refuses the demo
-  /// account so `demo` / `demo1234` stays a stable training login.
+  /// account so `demo` stays a stable training login.
   Future<void> setUserPhone({
     required String userId,
     required String phone,
@@ -133,9 +139,23 @@ class SqfliteUserRepository implements UserRepository {
   static const int _minimumIterations = 1000;
   static const int _maximumIterations = 2000000;
 
-  /// Fixed password for the auto-created training account. The owner can reset
-  /// it from the Users screen; trainees just need something stable to type.
-  static const String _demoPassword = 'demo1234';
+  /// Marker for the demo-credential format. Version 2 means the demo login is
+  /// no longer the published `demo1234`; it is a per-install secret whose only
+  /// stored form is a hash, so nobody can sign into it until the owner sets a
+  /// password they know from the Users screen. Existing databases are migrated
+  /// the first time [ensureDemoUser] runs.
+  static const String _demoPwVersionKey = 'demo_password_version';
+  static const String _demoPwVersion = '2';
+  static const String _legacyDemoPassword = 'demo1234';
+  static const String _demoAlphabet = 'abcdefghijkmnpqrstuvwxyz23456789';
+
+  static String _randomDemoPassword() {
+    final random = Random.secure();
+    return List<String>.generate(
+      14,
+      (_) => _demoAlphabet[random.nextInt(_demoAlphabet.length)],
+    ).join();
+  }
 
   String _generateSalt() {
     final random = Random.secure();
@@ -475,7 +495,10 @@ class SqfliteUserRepository implements UserRepository {
       where: 'is_demo = 1 AND deleted_at IS NULL',
       limit: 1,
     );
-    if (flagged.isNotEmpty) return;
+    if (flagged.isNotEmpty) {
+      await _retirePublishedDemoPassword(flagged.first['id'] as String);
+      return;
+    }
     // Adopt a pre-existing 'demo' username (e.g. one created before the flag
     // existed) so the UNIQUE index can't reject the seed, else insert fresh.
     final byName = await _db.query(
@@ -486,16 +509,18 @@ class SqfliteUserRepository implements UserRepository {
       limit: 1,
     );
     if (byName.isNotEmpty) {
+      final id = byName.first['id'] as String;
       await _db.update(
         'users',
         {'is_demo': 1},
         where: 'id = ?',
-        whereArgs: [byName.first['id']],
+        whereArgs: [id],
       );
+      await _retirePublishedDemoPassword(id);
       return;
     }
     final salt = _generateSalt();
-    final hash = await _hashPassword(_demoPassword, salt);
+    final hash = await _hashPassword(_randomDemoPassword(), salt);
     final user = User(
       id: const Uuid().v4(),
       username: 'demo',
@@ -506,12 +531,65 @@ class SqfliteUserRepository implements UserRepository {
       isDemo: true,
     );
     await _db.insert('users', user.toMap());
+    await _markDemoPasswordVersion();
     await _audit(
       userId: user.id,
       action: 'DEMO_USER_SEEDED',
-      details: 'Training demo account created.',
+      details: 'Training demo account created with a per-install password.',
     );
   }
+
+  /// Replaces the demo login's published `demo1234` with an unknowable secret,
+  /// so a stale install never keeps a credential anyone can look up. Runs once
+  /// per database — the marker row makes the PBKDF2 check a startup no-op.
+  Future<void> _retirePublishedDemoPassword(String demoId) async {
+    final marked = await _db.query(
+      'settings',
+      columns: ['value'],
+      where: 'key = ?',
+      whereArgs: [_demoPwVersionKey],
+      limit: 1,
+    );
+    if (marked.isNotEmpty && marked.first['value'] == _demoPwVersion) return;
+
+    final rows = await _db.query(
+      'users',
+      where: 'id = ?',
+      whereArgs: [demoId],
+      limit: 1,
+    );
+    if (rows.isNotEmpty &&
+        await _verifyUserPassword(
+          User.fromMap(rows.first),
+          _legacyDemoPassword,
+        )) {
+      final salt = _generateSalt();
+      final hash = await _hashPassword(_randomDemoPassword(), salt);
+      await _db.update(
+        'users',
+        {'password_hash': hash, 'salt': salt},
+        where: 'id = ?',
+        whereArgs: [demoId],
+      );
+      await _audit(
+        action: 'PASSWORD_RESET',
+        details: 'Demo account password replaced: the published default was retired.',
+      );
+    }
+    await _markDemoPasswordVersion();
+  }
+
+  Future<void> _markDemoPasswordVersion() async {
+    await _db.insert('settings', {
+      'key': _demoPwVersionKey,
+      'value': _demoPwVersion,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  /// The local seed keeps only the demo password's hash, so there is never a
+  /// value to hand back: an owner sets the training password from Users.
+  @override
+  Future<String?> takeDemoPassword() async => null;
 
   @override
   Future<void> setUserPermissions(

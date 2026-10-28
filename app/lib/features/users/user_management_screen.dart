@@ -61,8 +61,12 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   Future<void> _showAddUserDialog() async {
     final created = await showDialog<bool>(
       context: context,
-      builder: (context) =>
-          _AddUserDialog(userRepository: widget.userRepository),
+      builder: (context) => _AddUserDialog(
+        userRepository: widget.userRepository,
+        // A shop has exactly one owner, so the owner option is offered only
+        // while that seat is free instead of failing at save time.
+        ownerSeatTaken: _users.any((u) => u.role == 'OWNER'),
+      ),
     );
     if (created == true && mounted) {
       await _loadUsers();
@@ -253,12 +257,19 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     if (user.isDemo)
-                      const Chip(
-                        label: Text('Demo'),
-                        backgroundColor: AppDesign.blue,
-                        labelStyle: TextStyle(
-                          color: Colors.white,
-                          fontSize: 11,
+                      // The demo password is a per-install secret, so a fresh
+                      // install has none the owner knows yet.
+                      Tooltip(
+                        message:
+                            'Training account. Use Reset Password to set a '
+                            'password before handing it to a trainee.',
+                        child: const Chip(
+                          label: Text('Demo'),
+                          backgroundColor: AppDesign.blue,
+                          labelStyle: TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                          ),
                         ),
                       ),
                     if (!user.isActive)
@@ -329,8 +340,12 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
 
 class _AddUserDialog extends StatefulWidget {
   final UserRepository userRepository;
+  final bool ownerSeatTaken;
 
-  const _AddUserDialog({required this.userRepository});
+  const _AddUserDialog({
+    required this.userRepository,
+    required this.ownerSeatTaken,
+  });
 
   @override
   State<_AddUserDialog> createState() => _AddUserDialogState();
@@ -439,7 +454,12 @@ class _AddUserDialogState extends State<_AddUserDialog> {
                 contentPadding: EdgeInsets.zero,
                 value: _ownerAccess,
                 title: const Text('Owner access (sees everything)'),
-                onChanged: (v) => setState(() => _ownerAccess = v ?? false),
+                subtitle: widget.ownerSeatTaken
+                    ? const Text('This shop already has an owner account.')
+                    : null,
+                onChanged: widget.ownerSeatTaken
+                    ? null
+                    : (v) => setState(() => _ownerAccess = v ?? false),
               ),
               if (!_ownerAccess) ...[
                 const SizedBox(height: 4),

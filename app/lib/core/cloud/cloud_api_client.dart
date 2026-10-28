@@ -32,10 +32,11 @@ class CloudApiClient {
   String? token;
 
   /// Stable per-browser/device id, auto-stamped onto every request body as
-  /// `device_id`. The server carves shift/receipt operations from it (audit
-  /// D1) so a shared tenant's open drawer and receipt stream are scoped to the
-  /// device that owns them. Empty until the backend resolves it (tests, and the
-  /// unauthenticated login/setup calls, never need it).
+  /// `device_id`, and recorded on the shift a till opens for audit history.
+  /// The shop runs ONE shared drawer, so it never scopes a lookup: any till's
+  /// sale, movement or close refers to the single OPEN shift. Empty until the
+  /// backend resolves it (tests, and the unauthenticated login/setup calls,
+  /// never need it).
   String deviceId;
 
   CloudApiClient({
@@ -102,3 +103,11 @@ class CloudApiException implements Exception {
   @override
   String toString() => message;
 }
+
+/// Serializes an instant for a `timestamptz` parameter as UTC ISO-8601.
+///
+/// A `DateTime` assembled from local calendar parts serializes with no offset
+/// at all, so Postgres read 09:00 in Addis as 09:00 UTC — three hours late.
+/// Every period filter was therefore shifted, and "today" started three hours
+/// into the past (audit #12). Converting first pins the real instant.
+String isoInstant(DateTime t) => t.toUtc().toIso8601String();

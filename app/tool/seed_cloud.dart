@@ -1,5 +1,9 @@
 // THROWAWAY cloud-path test harness (NOT part of the app build graph).
 //
+// `print` is the output channel of a CLI script, so the app-wide avoid_print
+// lint does not apply here.
+// ignore_for_file: avoid_print
+//
 // Talks to the live `pos-api` Edge Function with the EXACT JSON action payloads
 // the PWA's Cloud*Repository clients send (login -> ensure_shift -> N x
 // next_receipt_number + insert_sale -> read back), so the redesigned one-item

@@ -72,6 +72,10 @@ const FEATURE_KEYS = new Set([
 const OWNER_ONLY = new Set([
   // Voids: a cashier may request_void, only an owner may void/approve/reject.
   'void_sale', 'approve_void', 'reject_void',
+  // Reviewing the pending-void queue hydrates the whole sale behind every
+  // request (items, totals, customer). That is an owner surface: a cashier
+  // could otherwise read every other operator's sales from the Register tab.
+  'list_void_requests',
   // Account administration + credential/status mutations.
   'reset_password', 'set_user_active', 'create_user', 'set_user_permissions',
   'set_user_phone', 'delete_user',
@@ -94,7 +98,10 @@ const ACTION_FEATURES: Record<string, string[]> = {
   // Register / shifts
   get_shift: ['register'], ensure_shift: ['register'], register_snapshot: ['register'],
   open_shift: ['register'], close_shift: ['register'], add_cash_movement: ['register'],
-  shift_summary: ['register'], list_void_requests: ['register'],
+  // The close-drawer dialog summarizes the shift the cashier is closing, which
+  // is always the OPEN one; shiftSummary() refuses any other shift for a
+  // non-owner so this tick cannot be used to browse past sessions.
+  shift_summary: ['register'],
   // Finance (Money Tracking) — non-destructive browsing + entry writes.
   finance_categories: ['finance'], finance_deleted_categories: ['finance'],
   finance_summaries: ['finance'], finance_create_category: ['finance'],
@@ -103,7 +110,11 @@ const ACTION_FEATURES: Record<string, string[]> = {
   finance_mark_completed: ['finance'], finance_person_totals: ['finance'],
   // History. search_sales is also needed by the Register History day drill-down
   // (which sales brought cash in that day), so register_history unlocks it too.
-  search_sales: ['history', 'register_history'], request_void: ['history'],
+  search_sales: ['history', 'register_history'],
+  // Requesting a void is a till action, not a history one: the cashier who rang
+  // the sale asks for it from that sale's detail screen. Gating it on `history`
+  // meant the default staff account (pos/register/reports) always got a 403.
+  request_void: ['pos', 'history', 'register_history'],
   // Reports
   report_summary: ['reports'],
   // Users (read-only list; mutations are OWNER_ONLY above)
@@ -349,7 +360,10 @@ async function login(db: any, body: any): Promise<Response> {
 
   // Best-effort: guarantee the tenant's permanent training demo account exists
   // the first time anyone signs in. A failure here must never block a login.
-  try { await ensureDemoUser(db, customerId); } catch { /* non-fatal */ }
+  // When it mints (or rotates) the random demo password, the OWNER's response
+  // carries it once so they can hand it to a trainee (audit #2).
+  let demoPassword: string | null = null;
+  try { demoPassword = await ensureDemoUser(db, customerId); } catch { /* non-fatal */ }
 
   const token = await signJwt({ sub: user.id, cid: customerId, role: user.role, tv: Number(user.token_version ?? 0) });
   return json({
@@ -357,6 +371,7 @@ async function login(db: any, body: any): Promise<Response> {
     user_id: user.id, username: user.username, role: user.role,
     permissions: Array.isArray(user.permissions) ? user.permissions : [],
     customer_id: customerId,
+    ...(user.role === OWNER && demoPassword ? { demo_password: demoPassword } : {}),
     expires_at: new Date(Date.now() + SESSION_TTL_SECONDS * 1000).toISOString(),
   });
 }
@@ -392,10 +407,13 @@ async function setupOwner(db: any, body: any): Promise<Response> {
     throw new Error(rpc.error.message);
   }
   await audit(db, customerId, id, 'OWNER_CREATED', `Web owner "${username}" created.`);
-  // Seed the demo account alongside the first owner so it is ready immediately.
-  try { await ensureDemoUser(db, customerId); } catch { /* non-fatal */ }
+  // Seed the demo account alongside the first owner so it is ready immediately;
+  // its random password is returned once, here, for the owner to keep.
+  let demoPassword: string | null = null;
+  try { demoPassword = await ensureDemoUser(db, customerId); } catch { /* non-fatal */ }
   const token = await signJwt({ sub: id, cid: customerId, role: OWNER, tv: 0 });
-  return json({ ok: true, token, user_id: id, username, role: OWNER, permissions: [], customer_id: customerId });
+  return json({ ok: true, token, user_id: id, username, role: OWNER, permissions: [], customer_id: customerId,
+    ...(demoPassword ? { demo_password: demoPassword } : {}) });
 }
 
 async function changePassword(db: any, ctx: Ctx, body: any): Promise<Response> {
@@ -522,9 +540,22 @@ function validateProduct(p: any): string | null {
 // ===========================================================================
 // Sales
 // ===========================================================================
+
+// The receipt day is the shop's calendar day, not UTC. Ethiopia is UTC+3, so a
+// 01:00 sale sits on the *previous* UTC date: numbering it by UTC would put it
+// behind receipts already issued that morning and split the trend chart across
+// the wrong day (audit #12). pos_revenue_trend buckets by the same zone.
+const SHOP_TIME_ZONE = 'Africa/Addis_Ababa';
+function shopDay(d: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: SHOP_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+  return `${get('year')}${get('month')}${get('day')}`;
+}
+
 async function nextReceiptNumber(db: any, ctx: Ctx): Promise<Response> {
-  const now = new Date();
-  const day = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}${String(now.getUTCDate()).padStart(2, '0')}`;
+  const day = shopDay();
   // Atomic allocation in a single DB op (audit #5): INSERT..ON CONFLICT DO
   // UPDATE value=value+1 RETURNING, so two concurrent tills never read the same
   // counter and collide on receipt_number.
@@ -564,11 +595,15 @@ async function insertSale(db: any, ctx: Ctx, body: any): Promise<Response> {
     p_discount: Number(sale.discount_minor_units ?? 0),
     p_amount_paid: Number(sale.amount_paid_minor_units ?? 0),
     p_customer_name: sale.customer_name == null ? null : str(sale.customer_name) || null,
+    // The client's own sale id is the idempotency key (audit #6): a retry after
+    // a timeout returns the sale already booked instead of a second one.
+    p_sale_id: str(sale.id) || null,
   });
   if (error) return rpcFailure(error.message);
   const res = typeof data === 'string' ? JSON.parse(data) : (data ?? {});
   return json({ ok: true, id: res.id, receipt_number: res.receipt_number,
-    subtotal_minor_units: res.subtotal_minor_units, total_minor_units: res.total_minor_units });
+    subtotal_minor_units: res.subtotal_minor_units, total_minor_units: res.total_minor_units,
+    duplicate: res.duplicate === true });
 }
 
 async function searchSales(db: any, ctx: Ctx, body: any): Promise<Response> {
@@ -605,7 +640,8 @@ async function searchSales(db: any, ctx: Ctx, body: any): Promise<Response> {
     if (matchedIds.length) orParts.push(`id.in.(${matchedIds.map((id) => `"${id}"`).join(',')})`);
     q = q.or(orParts.join(','));
   }
-  if (body.limit) q = q.limit(Number(body.limit));
+  const limit = pageLimit(body);
+  q = q.limit(limit);
   const { data, error } = await q;
   if (error) throw new Error(error.message);
   const sales = strip(data);
@@ -618,7 +654,7 @@ async function searchSales(db: any, ctx: Ctx, body: any): Promise<Response> {
     s.cashier_name = names[s.cashier_id] ?? null;
     s.has_pending_void_request = pending.has(s.id);
   }
-  return json({ ok: true, sales });
+  return json({ ok: true, sales, truncated: sales.length >= limit });
 }
 
 async function voidSale(db: any, ctx: Ctx, body: any): Promise<Response> {
@@ -725,28 +761,20 @@ async function registerSnapshot(db: any, ctx: Ctx, body: any): Promise<Response>
       today_deposits: 0, today_withdrawals: 0 } });
   }
   const balance = await computeExpectedCash(db, ctx.customerId, shift);
-  const start = body.period_start; const end = body.period_end;
-  const inDay = (q: any) => { if (start) q = q.gte('created_at', start); if (end) q = q.lt('created_at', end); return q; };
-  const sumSales = async (method: string) => {
-    let q = db.from('sales').select('total_minor_units')
-      .eq('customer_id', ctx.customerId).eq('shift_id', shift.id)
-      .eq('status', 'COMPLETED').eq('payment_method', method);
-    q = inDay(q);
-    const { data } = await q;
-    return (data ?? []).reduce((s: number, r: any) => s + Number(r.total_minor_units), 0);
-  };
-  let mq = db.from('cash_movements').select('type, amount_minor_units')
-    .eq('customer_id', ctx.customerId).eq('shift_id', shift.id);
-  mq = inDay(mq);
-  const { data: mvs } = await mq;
-  let deposits = 0, withdrawals = 0;
-  for (const m of mvs ?? []) {
-    if (m.type === 'DEPOSIT') deposits += Number(m.amount_minor_units);
-    else withdrawals += Number(m.amount_minor_units);
-  }
+  // Today's counters are SQL aggregates (audit #13): summing rows here would
+  // silently stop at PostgREST's 1000-row page and under-report a busy day.
+  const { data: counters, error: cErr } = await db.rpc('pos_shift_counters', {
+    p_customer: ctx.customerId, p_shift_id: shift.id,
+    p_start: body.period_start ?? null, p_end: body.period_end ?? null,
+  });
+  if (cErr) throw new Error(cErr.message);
+  const c = typeof counters === 'string' ? JSON.parse(counters) : (counters ?? {});
   return json({ ok: true, snapshot: {
-    balance, today_cash_sales: await sumSales('CASH'), today_bank_sales: await sumSales('BANK'),
-    today_deposits: deposits, today_withdrawals: withdrawals } });
+    balance,
+    today_cash_sales: Number(c.cash_sales ?? 0),
+    today_bank_sales: Number(c.bank_sales ?? 0),
+    today_deposits: Number(c.deposits ?? 0),
+    today_withdrawals: Number(c.withdrawals ?? 0) } });
 }
 
 async function shiftHistory(db: any, ctx: Ctx, body: any): Promise<Response> {
@@ -755,9 +783,11 @@ async function shiftHistory(db: any, ctx: Ctx, body: any): Promise<Response> {
   if (body.status) q = q.eq('status', body.status);
   if (body.period_start) q = q.gte('opened_at', body.period_start);
   if (body.period_end) q = q.lt('opened_at', body.period_end);
-  const { data, error } = await q;
+  const limit = pageLimit(body);
+  const { data, error } = await q.limit(limit);
   if (error) throw new Error(error.message);
-  return json({ ok: true, shifts: strip(data) });
+  const shifts = strip(data);
+  return json({ ok: true, shifts, truncated: shifts.length >= limit });
 }
 
 async function openShift(db: any, ctx: Ctx, body: any): Promise<Response> {
@@ -801,67 +831,61 @@ async function computeExpectedCash(db: any, customerId: string, shift: any): Pro
 }
 
 async function shiftSummary(db: any, ctx: Ctx, body: any): Promise<Response> {
-  const { data: shift } = await db.from('shifts').select('*')
+  const { data: shift } = await db.from('shifts').select('id, status')
     .eq('customer_id', ctx.customerId).eq('id', String(body.shift_id ?? '')).maybeSingle();
   if (!shift) return json({ ok: false, error: 'Shift not found.' }, 404);
-  const sumBy = async (filter: (q: any) => any) => {
-    const { data } = await filter(db.from('sales').select('total_minor_units').eq('customer_id', ctx.customerId));
-    return (data ?? []).reduce((s: number, r: any) => s + Number(r.total_minor_units), 0);
-  };
-  const cashSales = await sumBy((q) => q.eq('shift_id', shift.id).eq('status', 'COMPLETED').eq('payment_method', 'CASH'));
-  const bankSales = await sumBy((q) => q.eq('shift_id', shift.id).eq('status', 'COMPLETED').eq('payment_method', 'BANK'));
-  const { data: mvs } = await db.from('cash_movements').select('type, amount_minor_units')
-    .eq('customer_id', ctx.customerId).eq('shift_id', shift.id);
-  let deposits = 0, withdrawals = 0;
-  for (const m of mvs ?? []) {
-    if (m.type === 'DEPOSIT') deposits += Number(m.amount_minor_units);
-    else withdrawals += Number(m.amount_minor_units);
+  // A cashier only ever closes the drawer that is open right now, so anything
+  // else is browsing another operator's session and stays owner-only (audit #9).
+  if (ctx.role !== OWNER && shift.status !== 'OPEN') {
+    return json({ ok: false, error: 'Owners can review a closed shift.' }, 403);
   }
-  const { data: voidRows } = await db.from('sales').select('total_minor_units')
-    .eq('customer_id', ctx.customerId).eq('status', 'VOIDED')
-    .or(`voided_shift_id.eq.${shift.id},and(shift_id.eq.${shift.id},voided_shift_id.is.null)`);
-  const voids = (voidRows ?? []).reduce((s: number, r: any) => s + Number(r.total_minor_units), 0);
-  const { data: refundRows } = await db.from('sales').select('total_minor_units')
-    .eq('customer_id', ctx.customerId).eq('status', 'VOIDED').eq('payment_method', 'CASH')
-    .eq('voided_shift_id', shift.id).neq('shift_id', shift.id);
-  const cashRefunds = (refundRows ?? []).reduce((s: number, r: any) => s + Number(r.total_minor_units), 0);
-  const expected = await computeExpectedCash(db, ctx.customerId, shift);
+  // One aggregate RPC, so the screen and the reconciliation can never disagree
+  // and a 1000-row page cap cannot truncate the totals (audit #13).
+  const { data, error } = await db.rpc('pos_shift_summary', {
+    p_customer: ctx.customerId, p_shift_id: shift.id,
+  });
+  if (error) throw new Error(error.message);
+  const s = typeof data === 'string' ? JSON.parse(data) : (data ?? {});
   return json({
     ok: true,
     summary: {
-      cash_sales: cashSales, bank_sales: bankSales, voids,
-      deposits, withdrawals, cash_refunds: cashRefunds,
-      expected_cash: expected,
+      cash_sales: Number(s.cash_sales ?? 0),
+      bank_sales: Number(s.bank_sales ?? 0),
+      voids: Number(s.voids ?? 0),
+      deposits: Number(s.deposits ?? 0),
+      withdrawals: Number(s.withdrawals ?? 0),
+      cash_refunds: Number(s.cash_refunds ?? 0),
+      expected_cash: Number(s.expected_cash ?? 0),
     },
   });
 }
 
 async function addCashMovement(db: any, ctx: Ctx, body: any): Promise<Response> {
   const amount = Number(body.amount_minor_units ?? 0);
-  const type = String(body.type ?? '');
-  if (amount <= 0) return json({ ok: false, error: 'Amount must be positive.' }, 400);
+  const type = String(body.type ?? '').toUpperCase();
+  if (!Number.isFinite(amount) || amount <= 0) return json({ ok: false, error: 'Amount must be positive.' }, 400);
   if (!['WITHDRAWAL', 'DEPOSIT', 'EXPENSE'].includes(type)) return json({ ok: false, error: 'Invalid movement type.' }, 400);
-  const { data: shift } = await db.from('shifts').select('id')
-    .eq('customer_id', ctx.customerId).eq('id', String(body.shift_id ?? '')).eq('status', 'OPEN').maybeSingle();
-  if (!shift) return json({ ok: false, error: 'Movement requires an open shift.' }, 400);
-  const id = crypto.randomUUID();
+  const shiftId = String(body.shift_id ?? '');
+  if (!shiftId) return json({ ok: false, error: 'Movement requires an open shift.' }, 400);
+  const reason = str(body.reason);
+  if (!reason) return json({ ok: false, error: 'A reason is required.' }, 400);
+  const reason2 = reason.slice(0, 240);
   // Optional proof photo (base64 image, usually attached on a debit as
   // withdrawal evidence). Capped server-side so entries can't bloat the row.
-  const photo = typeof body.photo === 'string' && body.photo.length > 0
-    ? body.photo
-    : null;
+  const photo = typeof body.photo === 'string' && body.photo.length > 0 ? body.photo : null;
   if (photo !== null && photo.length > 4_000_000) {
     return json({ ok: false, error: 'Proof photo is too large.' }, 400);
   }
-  const ins = await db.from('cash_movements').insert({
-    id, customer_id: ctx.customerId, shift_id: body.shift_id, user_id: ctx.userId,
-    type, amount_minor_units: amount, reason: str(body.reason),
-    photo,
-    created_at: new Date().toISOString(),
+  // The open-shift check, the row and its audit entry commit together, with the
+  // shift share-locked against pos_close_shift (audit #3 + #11): a movement can
+  // never be booked by a read that raced the drawer's reconciliation.
+  const { data, error } = await db.rpc('pos_add_cash_movement', {
+    p_customer: ctx.customerId, p_user: ctx.userId, p_shift_id: shiftId,
+    p_type: type, p_amount: amount, p_reason: reason2, p_photo: photo,
   });
-  if (ins.error) throw new Error(ins.error.message);
-  await audit(db, ctx.customerId, ctx.userId, 'CASH_MOVEMENT_ADDED', `${type} ${amount}.`);
-  return json({ ok: true, id });
+  if (error) return rpcFailure(error.message);
+  const res = typeof data === 'string' ? JSON.parse(data) : (data ?? {});
+  return json({ ok: true, id: res.id });
 }
 
 async function listCashMovements(db: any, ctx: Ctx, body: any): Promise<Response> {
@@ -870,7 +894,8 @@ async function listCashMovements(db: any, ctx: Ctx, body: any): Promise<Response
   if (body.shift_id != null && String(body.shift_id) !== '') {
     q = q.eq('shift_id', String(body.shift_id));
   }
-  const { data, error } = await q.order('created_at', { ascending: false });
+  const limit = pageLimit(body);
+  const { data, error } = await q.order('created_at', { ascending: false }).limit(limit);
   if (error) throw new Error(error.message);
   // Hydrate the recorder's username (cash_movements has no FK to pos_users,
   // so PostgREST embedding can't do this in one query).
@@ -882,7 +907,8 @@ async function listCashMovements(db: any, ctx: Ctx, body: any): Promise<Response
       .select('id, username').eq('customer_id', ctx.customerId).in('id', userIds);
     nameById = Object.fromEntries((users ?? []).map((u: any) => [u.id, u.username]));
   }
-  return json({ ok: true, movements: rows.map((r: any) => ({ ...r, user_name: nameById[r.user_id] ?? null })) });
+  return json({ ok: true, movements: rows.map((r: any) => ({ ...r, user_name: nameById[r.user_id] ?? null })),
+    truncated: rows.length >= limit });
 }
 
 // ===========================================================================
@@ -906,6 +932,17 @@ async function createUser(db: any, ctx: Ctx, body: any): Promise<Response> {
   const username = normalizePhone(rawName);
   if (!username) return json({ ok: false, error: PHONE_INVALID }, 400);
   if (![OWNER, CASHIER].includes(role)) return json({ ok: false, error: 'Invalid role.' }, 400);
+  if (role === OWNER) {
+    // pos_users_one_owner is a partial unique index, so without this check a
+    // second owner surfaced as a 500 constraint error (audit #10). The count
+    // deliberately includes deleted rows, matching the index predicate.
+    const { count } = await db.from('pos_users')
+      .select('*', { count: 'exact', head: true })
+      .eq('customer_id', ctx.customerId).eq('role', OWNER);
+    if ((count ?? 0) > 0) {
+      return json({ ok: false, error: 'This shop already has an owner account.' }, 409);
+    }
+  }
   const minLen = role === OWNER ? 12 : 8;
   if (password.length < minLen) return json({ ok: false, error: `Password must be at least ${minLen} characters.` }, 400);
   // Owners bypass the tick list (store []); a staff account keeps only the
@@ -938,29 +975,74 @@ async function createUser(db: any, ctx: Ctx, body: any): Promise<Response> {
 }
 
 // Seeds (once) the tenant's permanent training account. Idempotent: a no-op
-// when a demo row already exists. Mirrors the native ensureDemoUser(): a fixed
-// `demo` / `demo1234` CASHIER with the default staff permissions, flagged so it
-// can never be deactivated. Called best-effort from login and setup_owner.
-async function ensureDemoUser(db: any, customerId: string): Promise<void> {
-  const { data: existing } = await db.from('pos_users').select('id')
+// when a demo row already exists. Mirrors the native ensureDemoUser(): a
+// `demo` CASHIER with the default staff permissions, flagged so it can never be
+// deactivated.
+//
+// The password is random per tenant, never a literal in the source (audit #2):
+// the caller returns it to the OWNER exactly once, when this function mints it,
+// and the owner can reset it from Users afterwards. Returns that password, or
+// null when nothing new was minted.
+const DEMO_PW_VERSION = '2';
+const DEMO_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
+function randomDemoPassword(): string {
+  const bytes = new Uint8Array(14);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => DEMO_ALPHABET[b % DEMO_ALPHABET.length]).join('');
+}
+
+async function demoVersionMarked(db: any, customerId: string): Promise<boolean> {
+  const { data } = await db.from('pos_settings').select('value')
+    .eq('customer_id', customerId).eq('key', 'demo_pw_version').maybeSingle();
+  return data?.value === DEMO_PW_VERSION;
+}
+async function markDemoVersion(db: any, customerId: string): Promise<void> {
+  await db.from('pos_settings').upsert(
+    { customer_id: customerId, key: 'demo_pw_version', value: DEMO_PW_VERSION },
+    { onConflict: 'customer_id,key' });
+}
+
+async function ensureDemoUser(db: any, customerId: string): Promise<string | null> {
+  const marked = await demoVersionMarked(db, customerId);
+  const { data: existing } = await db.from('pos_users').select('id, pw_salt, pw_hash')
     .eq('customer_id', customerId).eq('is_demo', true).maybeSingle();
-  if (existing) return;
+
+  if (existing) {
+    if (marked) return null;
+    // A tenant seeded by an older build still holds the published `demo1234`.
+    // Rotate it once — the version marker makes the PBKDF2 check a one-time
+    // cost rather than something every login pays.
+    if (!(await verifyPassword('demo1234', existing.pw_salt, existing.pw_hash))) {
+      await markDemoVersion(db, customerId);
+      return null;
+    }
+    const password = randomDemoPassword();
+    const { salt, hash } = await hashPassword(password);
+    await db.from('pos_users').update({ pw_salt: salt, pw_hash: hash })
+      .eq('customer_id', customerId).eq('id', existing.id);
+    await markDemoVersion(db, customerId);
+    return password;
+  }
+
+  const password = randomDemoPassword();
+  const { salt, hash } = await hashPassword(password);
   // Adopt a pre-existing 'demo' username (created before the flag) so the
   // unique index can't reject the seed, else insert a fresh one.
   const { data: byName } = await db.from('pos_users').select('id')
     .eq('customer_id', customerId).ilike('username', 'demo').maybeSingle();
   if (byName) {
-    await db.from('pos_users').update({ is_demo: true })
+    await db.from('pos_users').update({ is_demo: true, pw_salt: salt, pw_hash: hash })
       .eq('customer_id', customerId).eq('id', byName.id);
-    return;
+  } else {
+    const ins = await db.from('pos_users').insert({
+      id: crypto.randomUUID(), customer_id: customerId, username: 'demo', role: CASHIER,
+      pw_salt: salt, pw_hash: hash, active: true, is_demo: true,
+      permissions: ['pos', 'register', 'reports'],
+    });
+    if (ins.error) throw new Error(ins.error.message);
   }
-  const { salt, hash } = await hashPassword('demo1234');
-  const ins = await db.from('pos_users').insert({
-    id: crypto.randomUUID(), customer_id: customerId, username: 'demo', role: CASHIER,
-    pw_salt: salt, pw_hash: hash, active: true, is_demo: true,
-    permissions: ['pos', 'register', 'reports'],
-  });
-  if (ins.error) throw new Error(ins.error.message);
+  await markDemoVersion(db, customerId);
+  return password;
 }
 
 // Replaces a staff account's feature ticks. Owner rows are rejected (they
@@ -981,8 +1063,8 @@ async function setUserPermissions(db: any, ctx: Ctx, body: any): Promise<Respons
 }
 
 // Moves an account onto a phone-number login (or changes the existing one).
-// Owner-only, unique, canonical, and refused for the demo account so `demo` /
-// `demo1234` stays a stable training login.
+// Owner-only, unique, canonical, and refused for the demo account so `demo`
+// stays a stable training login.
 async function setUserPhone(db: any, ctx: Ctx, body: any): Promise<Response> {
   const target = String(body.target_user_id ?? '');
   const phone = normalizePhone(String(body.phone ?? ''));
@@ -1246,7 +1328,7 @@ async function financeMarkCompleted(db: any, ctx: Ctx, body: any): Promise<Respo
 }
 async function financeSearchEntries(db: any, ctx: Ctx, body: any): Promise<Response> {
   let q = db.from('pos_finance_entries').select('*').eq('customer_id', ctx.customerId)
-    .order('entry_date', { ascending: false });
+    .order('entry_date', { ascending: false }).limit(pageLimit(body));
   if (body.category_id) q = q.eq('category_id', body.category_id);
   if (body.status && body.status !== 'ALL') q = q.eq('status', body.status);
   if (body.date_range_start) q = q.gte('entry_date', body.date_range_start);
@@ -1417,16 +1499,17 @@ async function cashierPerformance(db: any, ctx: Ctx, start: any, end: any): Prom
 }
 
 async function listAudit(db: any, ctx: Ctx, body: any): Promise<Response> {
+  const limit = pageLimit(body, 500);
   const { data, error } = await db.from('pos_audit_logs').select('*')
     .eq('customer_id', ctx.customerId).order('created_at', { ascending: false })
-    .limit(Number(body.limit ?? 500));
+    .limit(limit);
   if (error) throw new Error(error.message);
   const logs = strip(data);
   // `username` is display-only and never stored; joined from pos_users so the
   // Audit screen renders the same shape as the local SQLite implementation.
   const names = await usernamesById(db, ctx, logs.map((l: any) => l.user_id));
   for (const l of logs) l.username = l.user_id ? (names[l.user_id] ?? null) : null;
-  return json({ ok: true, audit_logs: logs });
+  return json({ ok: true, audit_logs: logs, truncated: logs.length >= limit });
 }
 
 // ===========================================================================
@@ -1531,12 +1614,18 @@ async function pendingSaleIds(db: any, ctx: Ctx, saleIds: string[]): Promise<Set
 }
 
 async function audit(db: any, customerId: string, userId: string | null, action: string, details: string) {
+  // Audit must never block a write, but a dropped audit row is itself a finding,
+  // so a failure is logged instead of swallowed (audit #11). Mutation RPCs write
+  // their audit row inside the same transaction and are the authoritative trail.
   try {
-    await db.from('pos_audit_logs').insert({
+    const { error } = await db.from('pos_audit_logs').insert({
       id: crypto.randomUUID(), customer_id: customerId, user_id: userId,
       action, details, created_at: new Date().toISOString(),
     });
-  } catch (_) { /* audit must never block a write */ }
+    if (error) console.error('audit insert failed:', action, error.message);
+  } catch (err) {
+    console.error('audit insert threw:', action, err);
+  }
 }
 
 function strip(rows: any[] | null): any[] {
@@ -1545,6 +1634,17 @@ function strip(rows: any[] | null): any[] {
 function deSnake(row: any): any { return row; }
 
 function str(v: unknown): string { return typeof v === 'string' ? v.trim() : ''; }
+
+// PostgREST caps every response at 1000 rows and says nothing about it, so an
+// unbounded ledger query used to truncate silently (audit #13). Lists ask for
+// an explicit page and report `truncated` when the page came back full, so the
+// screen can say "showing the newest N" rather than quietly losing rows.
+const MAX_PAGE = 1000;
+function pageLimit(body: any, fallback: number = MAX_PAGE): number {
+  const n = Number(body?.limit);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(Math.floor(n), MAX_PAGE);
+}
 
 // Maps a raised Postgres EXCEPTION (from a SECURITY DEFINER RPC) back to a
 // structured 4xx so the client sees the same ok:false/error contract it would

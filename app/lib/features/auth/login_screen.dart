@@ -106,6 +106,31 @@ class _LoginScreenState extends State<LoginScreen> {
         setState(() => _errorMessage = 'Invalid phone number or password.');
         return;
       }
+      // A backend that mints the demo password hands it over exactly once. Show
+      // it before leaving the screen, or it is lost until the owner resets it.
+      final demoPassword = await widget.userRepository.takeDemoPassword();
+      if (!mounted) return;
+      if (demoPassword != null) {
+        await showDialog<void>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Training demo login'),
+            content: SelectableText(
+              'The demo account (username "demo") has a new password:\n\n'
+              '$demoPassword\n\n'
+              'Write it down now — it is shown only once. You can change it '
+              'any time from Users > Reset Password.',
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('I saved it'),
+              ),
+            ],
+          ),
+        );
+        if (!mounted) return;
+      }
       widget.onLoginSuccess(user);
     } catch (e) {
       if (!mounted) return;

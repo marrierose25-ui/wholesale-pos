@@ -454,7 +454,7 @@ void main() {
         ),
         throwsA(predicate((e) => e.toString().contains('active owner'))),
       );
-      // The demo login stays `demo` / `demo1234`.
+      // The demo login keeps the name `demo`.
       await repository.ensureDemoUser();
       final demo = (await repository.getAllUsers()).firstWhere((u) => u.isDemo);
       await expectLater(

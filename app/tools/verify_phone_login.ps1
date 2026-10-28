@@ -24,7 +24,10 @@ param(
     [string]$OwnerPassword,
     [string]$TestPhone = '0911000111',
     [string]$RenamedPhone = '0922000222',
-    [string]$TestPassword = 'phone-test-1234'
+    [string]$TestPassword = 'phone-test-1234',
+    # The demo login has a per-tenant password now, so it is never assumed. Pass
+    # the owner-set value to include the demo step; otherwise it is skipped.
+    [string]$DemoPassword = $env:POS_DEMO_PASSWORD
 )
 
 $ErrorActionPreference = 'Stop'
@@ -81,8 +84,13 @@ Write-Host "Tenant: $ActivationCode"
 Write-Host ''
 
 # 1) The demo account is the documented exception: any casing/spacing works.
-$demo = Login ' DEMO ' 'demo1234'
-Add-Step 'login demo (padded)' $demo.ok $(if ($demo.ok) { "role=$($demo.body.role)" } else { $demo.error })
+# Its password is per tenant, so the step runs only when one was supplied.
+if ($DemoPassword) {
+    $demo = Login ' DEMO ' $DemoPassword
+    Add-Step 'login demo (padded)' $demo.ok $(if ($demo.ok) { "role=$($demo.body.role)" } else { $demo.error })
+} else {
+    Write-Host '[SKIP] login demo (padded)   set POS_DEMO_PASSWORD to include it' -ForegroundColor Yellow
+}
 
 # 2) Owner sign-in: a legacy text identifier still resolves (trimmed).
 $owner = Login "  $OwnerUsername  " $OwnerPassword

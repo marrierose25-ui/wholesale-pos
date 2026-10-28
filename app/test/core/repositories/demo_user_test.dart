@@ -5,9 +5,10 @@ import 'package:wholesale_pos_app/core/database/local_database.dart';
 import 'package:wholesale_pos_app/core/repositories/user_repository.dart';
 
 // Covers the permanent training account: it is created exactly once, always a
-// CASHIER that can sign in with the fixed demo password, can never be
-// deactivated, cannot be forged through createUser, and keeps its feature ticks
-// editable so the owner can retrain different people.
+// CASHIER, can never be deactivated, cannot be forged through createUser, and
+// keeps its feature ticks editable so the owner can retrain different people.
+// Its password is a per-install secret — never a value published in the source
+// or the docs — so training starts with an owner setting a known one.
 void main() {
   late Database db;
   late UserRepository repository;
@@ -45,14 +46,44 @@ void main() {
     expect(demos.single.permissions, kDefaultStaffPermissions);
   });
 
-  test('the demo account signs in with the fixed demo password', () async {
+  test('the published default password no longer signs in', () async {
     await repository.ensureDemoUser();
 
     final user = await repository.authenticate('demo', 'demo1234');
 
+    expect(user, isNull);
+  });
+
+  test('the owner sets a known password before training', () async {
+    await repository.ensureDemoUser();
+    final demo = (await repository.getAllUsers()).firstWhere((u) => u.isDemo);
+
+    await repository.resetPassword(
+      targetUserId: demo.id,
+      newPassword: 'train-2026',
+      actingUserId: 'owner-1',
+    );
+
+    final user = await repository.authenticate('demo', 'train-2026');
     expect(user, isNotNull);
     expect(user!.isDemo, isTrue);
     expect(user.role, 'CASHIER');
+  });
+
+  test('seeding marks the demo credential version', () async {
+    await repository.ensureDemoUser();
+    await repository.ensureDemoUser();
+
+    final marker = await db.query(
+      'settings',
+      where: 'key = ?',
+      whereArgs: ['demo_password_version'],
+    );
+    expect(marker.single['value'], '2');
+    // The row keeps a hash and a salt, never the typed password.
+    final rows = await db.query('users', where: 'is_demo = 1', limit: 1);
+    expect(rows.single['password_hash'], isNot(contains('demo1234')));
+    expect(rows.single['salt'], isNotEmpty);
   });
 
   test('the demo account cannot be deactivated', () async {

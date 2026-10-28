@@ -83,16 +83,8 @@ if (-not $owner.ok) { exit 1 }
 $ownerToken = [string]$owner.body.token
 $ownerId = [string]$owner.body.user_id
 
-# A cashier must not be able to delete anyone.
-$demo = Login 'demo' 'demo1234'
-if ($demo.ok) {
-    $r = Invoke-Api 'delete_user' @{ target_user_id = $ownerId } $demo.body.token
-    Add-Step 'cashier refused' (-not $r.ok -and $r.status -eq 403) "status=$($r.status) error=$($r.error)"
-} else {
-    Add-Step 'cashier refused' $false 'demo login failed'
-}
-
-# Recreate a clean throwaway account.
+# A cashier must not be able to delete anyone. Uses the throwaway account below
+# (the demo login has a per-tenant password, so it is never assumed here).
 $null = Invoke-Api 'create_user' @{
     username = $TestPhone; password = $TestPassword; role = 'CASHIER'
 } $ownerToken
@@ -100,6 +92,14 @@ $list = Invoke-Api 'list_users' @{} $ownerToken
 $test = ($list.body.users | Where-Object { $_.username -eq $TestPhone } | Select-Object -First 1)
 Add-Step 'throwaway created' ($null -ne $test) "id=$($test.id)"
 if (-not $test) { exit 1 }
+
+$cashier = Login $TestPhone $TestPassword
+if ($cashier.ok) {
+    $r = Invoke-Api 'delete_user' @{ target_user_id = $ownerId } $cashier.body.token
+    Add-Step 'cashier refused' (-not $r.ok -and $r.status -eq 403) "status=$($r.status) error=$($r.error)"
+} else {
+    Add-Step 'cashier refused' $false 'cashier login failed'
+}
 
 # Deleting an active account is refused.
 $r = Invoke-Api 'delete_user' @{ target_user_id = $test.id } $ownerToken

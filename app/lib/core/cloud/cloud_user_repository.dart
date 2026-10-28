@@ -14,6 +14,11 @@ import 'cloud_api_client.dart';
 class CloudUserRepository implements UserRepository {
   final CloudApiClient _api;
 
+  /// A demo password the server minted or rotated during the last sign-in.
+  /// Held only in memory, handed to the owner once, then dropped — the server
+  /// never stores the plaintext either.
+  String? _pendingDemoPassword;
+
   CloudUserRepository(this._api);
 
   @override
@@ -94,6 +99,13 @@ class CloudUserRepository implements UserRepository {
   }
 
   @override
+  Future<String?> takeDemoPassword() async {
+    final password = _pendingDemoPassword;
+    _pendingDemoPassword = null;
+    return password;
+  }
+
+  @override
   Future<void> setUserPermissions(
     String userId,
     List<String> permissions,
@@ -171,6 +183,8 @@ class CloudUserRepository implements UserRepository {
   void _captureToken(Map<String, dynamic> json) {
     final token = json['token'];
     if (token is String && token.isNotEmpty) _api.token = token;
+    final demo = json['demo_password'];
+    if (demo is String && demo.isNotEmpty) _pendingDemoPassword = demo;
   }
 
   User _userFromAuthResponse(Map<String, dynamic> json) => User(

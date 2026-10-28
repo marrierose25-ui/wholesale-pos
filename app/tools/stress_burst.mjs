@@ -1,11 +1,17 @@
 // Live pos-api stress burst for the wholesale POS PWA.
 //
-// Logs in as the shop owner, allocates 200 receipt numbers and posts 200 sales
+// Logs in as the shop owner, allocates N receipt numbers and posts N sales
 // concurrently, then hammers the read endpoints while those writes are landing.
-// Every row it creates is stamped device_id = 'stress-burst' so it can be
-// removed again:
-//   delete from sales      where device_id = 'stress-burst';
-//   delete from sale_items where origin_device_id = 'stress-burst';
+// The receipts it allocated are the ones it sells with, so the burst exercises
+// the same path a till does. It then ASSERTS the outcome instead of only
+// counting HTTP failures: every sale accepted, the dashboard delta equal to the
+// accepted CASH+BANK sales (LOAN settles later, so it is excluded by design),
+// receipt numbers unique, and a replay of one sale id booking nothing new.
+//
+// Every row it creates is stamped device_id = 'stress-burst' and it prints the
+// exact cleanup SQL (sale ids + items) at the end:
+//   delete from sale_items where sale_id in (...);
+//   delete from sales      where id      in (...);
 //
 // Usage:  POS_ACTIVATION_CODE=... POS_OWNER=owner POS_OWNER_PASSWORD=... \
 //           node app/tools/stress_burst.mjs [salesCount]
@@ -138,7 +144,7 @@ const saleRequest = (index) => {
   return {
     sale: {
       id: saleId,
-      receipt_number: `BURST-${String(index).padStart(4, '0')}-${receiptNumbers[index]?.slice(-4) ?? '0000'}`,
+      receipt_number: receiptNumbers[index] ?? `REC-STRESS-${index}`,
       cashier_id: '',
       device_id: 'stress-burst',
       shift_id: shiftId,
@@ -157,8 +163,11 @@ const saleRequest = (index) => {
 };
 
 started = performance.now();
+// Keep the exact bodies: the first one is replayed later to prove the write is
+// idempotent, which only works when the sale id is identical.
+const saleBodies = Array.from({ length: SALES }, (_, index) => saleRequest(index));
 const sales = await Promise.allSettled(
-  Array.from({ length: SALES }, (_, index) => call('insert_sale', saleRequest(index))),
+  saleBodies.map((body) => call('insert_sale', body)),
 );
 const saleTimes = sales.filter((r) => r.status === 'fulfilled').map((r) => r.value.ms);
 const saleFails = sales.filter((r) => r.status === 'rejected').map((r) => `${r.reason}`);
@@ -188,14 +197,21 @@ const readFails = reads.filter((r) => r.status === 'rejected').map((r) => `${r.r
 summarize(`reads (${READS})`, readTimes, readFails);
 
 // ---- 4. Post-burst consistency ------------------------------------------
+// LOAN is money owed, not collected, so the dashboard count deliberately
+// excludes it; only CASH+BANK sales are expected to move it.
+const acceptedNonLoan = saleIds.length - payments
+  .slice(0, saleIds.length)
+  .filter((m) => m === 'LOAN').length;
+
 const after = await call('dashboard_summary', {
   period_start: dayStart(),
   period_end: dayEnd(),
 });
 const afterCount = Number(after.json.stats?.sales_count ?? 0);
+const delta = afterCount - beforeCount;
 console.log(
   `dashboard sales today: ${beforeCount} -> ${afterCount} ` +
-    `(delta ${afterCount - beforeCount}, expected ${saleIds.length})`,
+    `(delta ${delta}, expected ${acceptedNonLoan} of ${saleIds.length} accepted)`,
 );
 
 const trend = (await call('revenue_trend', {
@@ -206,10 +222,50 @@ const rows = trend.trend ?? [];
 console.log(`revenue_trend rows today: ${Array.isArray(rows) ? rows.length : 'n/a'}`);
 
 const audit = await call('list_audit', { limit: 200 });
-const auditRows = audit.json.logs ?? audit.json.audit_logs ?? [];
+const auditRows = audit.json.audit_logs ?? [];
 const saleAudits = auditRows.filter((row) => row.action === 'SALE_COMPLETED').length;
 console.log(`audit rows read: ${auditRows.length}, SALE_COMPLETED among them: ${saleAudits}`);
 
-const failures = receiptFails.length + saleFails.length + readFails.length;
-console.log(failures === 0 ? 'RESULT: stable (no failed requests)' : `RESULT: ${failures} failures`);
-process.exit(failures === 0 ? 0 : 1);
+// Replay one accepted sale id: the idempotent RPC must return the original row
+// and book nothing new (audit #6).
+let replayOk = 'skipped';
+if (saleIds.length) {
+  const replayed = await call('insert_sale', saleBodies[0]);
+  const again = await call('dashboard_summary', {
+    period_start: dayStart(),
+    period_end: dayEnd(),
+  });
+  const booked = Number(again.json.stats?.sales_count ?? 0) - afterCount;
+  replayOk = replayed.json.duplicate === true && booked === 0
+    ? 'ok'
+    : `FAILED (duplicate=${replayed.json.duplicate}, new rows=${booked})`;
+}
+console.log(`idempotent replay: ${replayOk}`);
+
+// ---- 5. Verdict + cleanup ----------------------------------------------
+const checks = [
+  ['every sale accepted', saleIds.length === SALES, `${saleIds.length}/${SALES}`],
+  ['receipts unique', new Set(receiptNumbers).size === SALES, `${new Set(receiptNumbers).size}/${SALES}`],
+  ['dashboard delta matches', delta === acceptedNonLoan, `${delta} vs ${acceptedNonLoan}`],
+  ['replay booked nothing', replayOk === 'ok', replayOk],
+];
+let failed = 0;
+for (const [name, ok, detail] of checks) {
+  if (!ok) failed += 1;
+  console.log(`  [${ok ? 'PASS' : 'FAIL'}] ${name} (${detail})`);
+}
+
+if (saleIds.length) {
+  const quoted = saleIds.map((id) => `'${id}'`).join(',');
+  console.log('\ncleanup:');
+  console.log(`  delete from sale_items where customer_id = (select customer_id from sales where id = '${saleIds[0]}') and sale_id in (${quoted});`);
+  console.log(`  delete from sales where id in (${quoted});`);
+}
+
+const httpFailures = receiptFails.length + saleFails.length + readFails.length;
+if (httpFailures || failed) {
+  console.log(`RESULT: ${httpFailures} failed request(s), ${failed} failed assertion(s)`);
+  process.exit(1);
+}
+console.log('RESULT: stable (no failed requests, all assertions passed)');
+process.exit(0);

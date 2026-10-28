@@ -49,8 +49,8 @@ class CloudSaleRepository implements SaleRepository {
     final json = await _api.call('search_sales', {
       if (searchQuery != null && searchQuery.trim().isNotEmpty)
         'search_query': searchQuery.trim(),
-      if (period != null) 'period_start': period.start.toIso8601String(),
-      if (period != null) 'period_end': period.end.toIso8601String(),
+      if (period != null) 'period_start': isoInstant(period.start),
+      if (period != null) 'period_end': isoInstant(period.end),
       if (status != null && status.isNotEmpty && status != 'ALL')
         'status': status,
       'limit': ?limit,
@@ -123,8 +123,8 @@ class CloudSaleRepository implements SaleRepository {
   @override
   Future<List<Map<String, dynamic>>> getRevenueTrend(DateRange period) async {
     final json = await _api.call('revenue_trend', {
-      'period_start': period.start.toIso8601String(),
-      'period_end': period.end.toIso8601String(),
+      'period_start': isoInstant(period.start),
+      'period_end': isoInstant(period.end),
     });
     final rows = json['trend'];
     if (rows is! List) return const [];
@@ -135,8 +135,8 @@ class CloudSaleRepository implements SaleRepository {
   Future<Map<String, int>> getDashboardStats({DateRange? period}) async {
     final range = period ?? DateRange.today();
     final json = await _api.call('dashboard_summary', {
-      'period_start': range.start.toIso8601String(),
-      'period_end': range.end.toIso8601String(),
+      'period_start': isoInstant(range.start),
+      'period_end': isoInstant(range.end),
     });
     final stats = json['stats'];
     if (stats is! Map<String, dynamic>) return const {};
@@ -167,8 +167,8 @@ class CloudSaleRepository implements SaleRepository {
     DateRange? period,
   }) async {
     final json = await _api.call('report_summary', {
-      if (period != null) 'period_start': period.start.toIso8601String(),
-      if (period != null) 'period_end': period.end.toIso8601String(),
+      if (period != null) 'period_start': isoInstant(period.start),
+      if (period != null) 'period_end': isoInstant(period.end),
     });
     final rows = json['product_summary'];
     if (rows is! List) return const [];
@@ -187,8 +187,8 @@ class CloudSaleRepository implements SaleRepository {
     DateRange? period,
   }) async {
     final json = await _api.call('report_summary', {
-      if (period != null) 'period_start': period.start.toIso8601String(),
-      if (period != null) 'period_end': period.end.toIso8601String(),
+      if (period != null) 'period_start': isoInstant(period.start),
+      if (period != null) 'period_end': isoInstant(period.end),
     });
     final rows = json['cashier_performance'];
     if (rows is! List) return const [];

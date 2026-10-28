@@ -35,8 +35,8 @@ class CloudShiftRepository implements ShiftRepository {
   @override
   Future<Map<String, int>> getRegisterSnapshot(DateRange day) async {
     final json = await _api.call('register_snapshot', {
-      'period_start': day.start.toIso8601String(),
-      'period_end': day.end.toIso8601String(),
+      'period_start': isoInstant(day.start),
+      'period_end': isoInstant(day.end),
     });
     final snapshot = json['snapshot'];
     if (snapshot is! Map<String, dynamic>) return const {};
@@ -51,8 +51,8 @@ class CloudShiftRepository implements ShiftRepository {
     String? status,
   }) async {
     final json = await _api.call('shift_history', {
-      if (period != null) 'period_start': period.start.toIso8601String(),
-      if (period != null) 'period_end': period.end.toIso8601String(),
+      if (period != null) 'period_start': isoInstant(period.start),
+      if (period != null) 'period_end': isoInstant(period.end),
       'status': ?status,
     });
     final rows = json['shifts'];

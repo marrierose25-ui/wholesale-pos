@@ -1,17 +1,25 @@
 ﻿# Wholesale POS
 
-A Windows desktop point-of-sale and wholesale management application built with Flutter.
+A point-of-sale and wholesale management application built with Flutter, in two shapes
+from one codebase:
+
+- **Native** — Windows desktop (and an Android APK) running on a local SQLite database.
+  Works offline; the shop owns its data file.
+- **Web / PWA** — the same screens in a browser, talking to a multi-tenant `pos-api`
+  Edge Function. No license key, no local database; a shop signs in with its activation
+  code and only ever sees its own rows.
 
 ## Features
 
-- Owner/cashier sign-in with PBKDF2-HMAC-SHA256 password hashing (per-user salt, background isolate) and automatic migration of legacy hashes.
+- Owner/cashier sign-in with PBKDF2-HMAC-SHA256 password hashing (per-user salt, background isolate) and automatic migration of legacy hashes; phone number or username.
 - Product catalog with SKU, unit, category, and price; POS catalog search plus a free-form manual item entry.
 - Cart, cash/bank checkout, change calculation, sequential daily receipt numbers, and printable PDF receipts.
 - Shift register: opening float, deposits/withdrawals/expenses, expected cash, closing count and discrepancy.
 - Sales history with date/receipt filters, receipt details, and owner-only void with a required reason.
 - Owner dashboard and reports (top products, cashier performance), user management (create, reset password, activate/deactivate), and audit log.
 - Owner-only JSON backup/restore with validation, recovery snapshot, and foreign-key checks.
-- Ed25519 licensing with build-time public key injection.
+- Ed25519 licensing with build-time public key injection; activation via a pasted code, seat limits per tenant.
+- Per-shop demo account for cashier training, created with a random password that is shown once and can be reset by the owner.
 
 ## Requirements
 
@@ -31,16 +39,56 @@ The `WHOLESALE_POS_DEV_UNLICENSED` define is a development-only escape hatch; se
 
 On first launch the app asks you to create the owner account. After signing in, open the register before recording sales.
 
+## Accounts and the demo login
+
+The owner creates cashiers from Users. Every shop also has a `demo` account for training a
+new cashier without a real account.
+
+Its password is random per shop and revealed **once**: in the PWA the owner sees it
+immediately after a first sign-in; in the desktop app the owner sets one from
+Users > Reset Password before handing the till to a trainee. The previously published
+shared default no longer signs in on any installation (existing installs retire it on
+next launch). Deactivating `demo` stops training access without touching staff accounts.
+
 ## Build
+
+Every distributable goes through one script, because a release must carry the public
+key, the licensing function URL, and the `pos-api` URL — miss one and activation or
+cloud sign-in silently breaks.
 
 ```powershell
 cd app
-flutter build windows --release `
-  --dart-define=WHOLESALE_POS_LICENSE_PUBLIC_KEY=<public-key-hex>
-Copy-Item license.key build\windows\x64\runner\Release\license.key
+powershell -File tools\build_release.ps1 windows   # build\windows\x64\runner\Release
+powershell -File tools\build_release.ps1 apk       # build\app\outputs\flutter-apk\app-release.apk
+powershell -File tools\build_release.ps1 web       # build\web  (PWA from lib/main_web.dart)
 ```
 
-The executable is written to `build\windows\x64\runner\Release\wholesale_pos_app.exe`. The build must include the public key, and `license.key` must sit next to the executable (or in the working directory) or the app shows the activation screen.
+The script then refuses to leave a `license.key`, a SQLite file, or signing material in
+the output, so a dirty artifact cannot be packaged by accident.
+
+A Windows build ships **without** a license: the buyer pastes their activation code and
+the app fetches its signed license on first run. `-IncludeMyLicense` additionally copies
+your own `license.key` next to the binary so it runs on this PC — never ship that build.
+`-DevUnlicensed` bypasses licensing and is for throwaway previews only.
+
+## Web / PWA
+
+```powershell
+cd app
+powershell -File tools\deploy_web.ps1     # build, deploy to Vercel, re-pin the stable domain
+```
+
+The script re-points the stable domain at the new deployment every run, so the public
+link cannot drift to an aged-out build. After a deploy, tell testers to close **every**
+tab and reopen — the service worker serves the previous build until then.
+
+The cloud schema, RPCs, and invariant indexes live in `docs/supabase_pos_integrity.sql`;
+apply it with the Supabase CLI before deploying the function. Smoke-test a deployment
+(read-only) with:
+
+```powershell
+powershell -File tools\verify_pos_api.ps1 -ActivationCode <code>
+```
 
 ## Test and analyze
 
@@ -53,15 +101,19 @@ dart format --output=none --set-exit-if-changed lib test tools
 
 ## Data
 
-- Database: SQLite in the platform application-support directory (`wholesale_pos.db`), schema v6.
+- Database: SQLite in the platform application-support directory (`wholesale_pos.db`), schema v14.
+- Cloud: Postgres tables owned by `pos-api`; every row is scoped by `customer_id`, and money-moving paths go through RPCs (`pos_create_sale`, `pos_add_cash_movement`, `pos_shift_summary`) so totals cannot drift.
 - Device identity: `device_id.txt` next to the database.
 - Backups: JSON files written to the user's Documents directory; owner-only and include password hashes, so store them securely.
 - Schema details: `docs/DATABASE.md`.
 
 ## Structure
 
-- `app/` — Flutter application
-- `app/tools/` — key setup and license generation
-- `docs/` — schema, licensing, and progress documentation
+- `app/` — Flutter application (`lib/main.dart` native, `lib/main_web.dart` PWA)
+- `app/tools/` — build/deploy scripts, license tooling, live verifiers (`verify_pos_api.ps1`, `verify_phone_login.ps1`, `verify_delete_user.ps1`), and the concurrency harness (`stress_burst.mjs`)
+- `supabase/functions/` — `pos-api` (shop actions) and `licensing` Edge Functions
+- `docs/` — database schema, licensing, cloud sync, and progress documentation
 
-The project currently targets Windows desktop. The UI uses desktop-sized layouts with responsive stacking below roughly 900 px; mobile packaging has not been implemented.
+The UI uses desktop-sized layouts with responsive stacking below roughly 900 px. The
+Windows build is the primary target; the APK and PWA use the same widgets with a cloud
+backend behind them.

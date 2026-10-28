@@ -111,7 +111,7 @@ class CloudFinanceRepository implements FinanceRepository {
       'amount_minor_units': amountMinorUnits,
       'description': ?description,
       'payment_method': ?paymentMethod,
-      if (entryDate != null) 'entry_date': entryDate.toIso8601String(),
+      if (entryDate != null) 'entry_date': isoInstant(entryDate),
     });
     return FinanceEntry.fromMap(json['entry'] as Map<String, dynamic>);
   }
@@ -132,7 +132,7 @@ class CloudFinanceRepository implements FinanceRepository {
       'amount_minor_units': amountMinorUnits,
       'description': ?description,
       'payment_method': ?paymentMethod,
-      if (entryDate != null) 'entry_date': entryDate.toIso8601String(),
+      if (entryDate != null) 'entry_date': isoInstant(entryDate),
     });
   }
 
@@ -159,9 +159,8 @@ class CloudFinanceRepository implements FinanceRepository {
         'search_query': searchQuery.trim(),
       if (status != null && status.isNotEmpty && status != 'ALL')
         'status': status,
-      if (dateRange != null)
-        'date_range_start': dateRange.start.toIso8601String(),
-      if (dateRange != null) 'date_range_end': dateRange.end.toIso8601String(),
+      if (dateRange != null) 'date_range_start': isoInstant(dateRange.start),
+      if (dateRange != null) 'date_range_end': isoInstant(dateRange.end),
     });
     final rows = json['entries'];
     if (rows is! List) return const [];

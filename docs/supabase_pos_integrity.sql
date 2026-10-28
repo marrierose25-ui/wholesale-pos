@@ -13,12 +13,15 @@
 -- Apply via:
 --   supabase db query --linked --project-ref <ref> --file docs/supabase_pos_integrity.sql
 --
--- DELIBATELY DEFERRED (see plan notes; need native-client changes first):
---   * Unique (customer_id, receipt_number): would hard-fail native sync whose
---     tills allocate receipts from their OWN local counter and can overlap the
---     cloud counter. Needs a single cloud receipt authority across tills.
+-- DELIBERATELY DEFERRED (see plan notes; need native-client changes first):
 --   * sync revision conflict guard: needs every till to stamp a monotonic
 --     per-row revision, which the outbox does not carry yet.
+--
+-- RECEIPT AUTHORITY: sales_receipt_unique now enforces one receipt number per
+-- tenant, so the cloud counter is the single allocator. The native outbox sync
+-- is inert today; before it is switched on, an offline till must reserve its
+-- receipt range from pos_next_receipt (or prefix by device) instead of using a
+-- local counter, or its push will be rejected as a duplicate.
 -- ---------------------------------------------------------------------------
 
 BEGIN;
@@ -27,9 +30,10 @@ BEGIN;
 -- 1. ADDITIVE COLUMNS
 -- ===========================================================================
 
--- D1: per-device shift scoping. Existing OPEN shifts keep NULL device_id;
--- NULLs are distinct in the partial unique index below, so historical rows are
--- unaffected. New pos-api shifts stamp the device_id.
+-- D1: shift device stamping. The shop runs ONE shared drawer per tenant, so
+-- lookups ignore the device; the column is kept for audit history. Existing OPEN
+-- shifts keep NULL device_id. shifts_one_open_per_tenant (section 2) is the
+-- real invariant.
 ALTER TABLE shifts ADD COLUMN IF NOT EXISTS device_id text;
 
 -- D: session revocation via token_version. Tokens signed before this migration
@@ -105,6 +109,36 @@ BEGIN
   END IF;
 END $$;
 
+-- H (#6): one receipt number per tenant. Guarded so pre-existing duplicates
+-- (a counter reset or a retried sale) do not abort the run.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM sales GROUP BY customer_id, receipt_number HAVING count(*) > 1
+  ) THEN
+    CREATE UNIQUE INDEX IF NOT EXISTS sales_receipt_unique
+      ON sales (customer_id, receipt_number);
+  ELSE
+    RAISE NOTICE 'sales_receipt_unique SKIPPED: duplicate receipt numbers exist; reconcile then re-run.';
+  END IF;
+END $$;
+
+-- I (#5): the shop has ONE drawer. At most one OPEN shift per tenant, so every
+-- sale, movement, close and void is guaranteed to reference the same shift and
+-- no lookup can pick a stale session. Supersedes the per-device guess.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM shifts WHERE status = 'OPEN'
+    GROUP BY customer_id HAVING count(*) > 1
+  ) THEN
+    CREATE UNIQUE INDEX IF NOT EXISTS shifts_one_open_per_tenant
+      ON shifts (customer_id) WHERE status = 'OPEN';
+  ELSE
+    RAISE NOTICE 'shifts_one_open_per_tenant SKIPPED: a tenant has >1 OPEN shift; close the extras then re-run.';
+  END IF;
+END $$;
+
 -- ===========================================================================
 -- 3. ATOMIC RPCs (SECURITY DEFINER, service_role only)
 -- ===========================================================================
@@ -137,9 +171,19 @@ GRANT EXECUTE ON FUNCTION pos_next_receipt TO service_role;
 -- subtotal/total/cashier (audit #2 + #4-sale). receipt_number is passed in
 -- from pos_next_receipt (already allocated atomically), so the shown receipt
 -- always equals the stored one and the counter is never double-incremented.
+--
+-- p_sale_id makes the write idempotent: the client's own sale id is the
+-- idempotency key, so a retry after a timeout returns the original sale
+-- instead of booking a second one (audit #6). sales_receipt_unique is the
+-- backstop for a replayed receipt number.
+--
+-- The shift row is locked FOR SHARE, which conflicts with pos_close_shift's
+-- FOR UPDATE: a sale either commits before the drawer is reconciled or fails
+-- with 'Sale requires an open shift.' No sale can land on a closed shift.
 -- ---------------------------------------------------------------------------
--- Drop the earlier 9-arg overload (before p_receipt was added) so the function
--- name is unambiguous; safe/no-op if it never existed.
+-- Drop the earlier overloads so the name is unambiguous; no-ops if absent.
+DROP FUNCTION IF EXISTS public.pos_create_sale(
+  uuid, text, text, text, text, jsonb, text, bigint, bigint, text);
 DROP FUNCTION IF EXISTS public.pos_create_sale(
   uuid, text, text, text, jsonb, text, bigint, bigint, text);
 
@@ -153,7 +197,8 @@ CREATE OR REPLACE FUNCTION pos_create_sale(
   p_payment     text,
   p_discount    bigint,
   p_amount_paid bigint,
-  p_customer_name text DEFAULT NULL
+  p_customer_name text DEFAULT NULL,
+  p_sale_id     text DEFAULT NULL
 )
 RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER
@@ -169,6 +214,7 @@ DECLARE
   chg        bigint;
   sale_id    text;
   n          int := 0;
+  res        jsonb;
 BEGIN
   -- LOAN is money owed, not money collected: it settles in full with nothing
   -- tendered at the till, and the revenue aggregates filter it out. The PWA
@@ -186,14 +232,32 @@ BEGIN
     RAISE EXCEPTION 'Sale requires a receipt number.';
   END IF;
 
-  IF NOT EXISTS (
-    SELECT 1 FROM public.shifts
+  -- Idempotency: a retried sale returns the row that already exists, so a
+  -- client timeout followed by a retry can never book the sale twice.
+  IF p_sale_id IS NOT NULL AND btrim(p_sale_id) <> '' THEN
+    SELECT jsonb_build_object('id', s.id, 'receipt_number', s.receipt_number,
+        'subtotal_minor_units', s.subtotal_minor_units,
+        'total_minor_units', s.total_minor_units,
+        'amount_paid_minor_units', s.amount_paid_minor_units,
+        'change_minor_units', s.change_minor_units, 'duplicate', true)
+      INTO res
+      FROM public.sales s
+      WHERE s.customer_id = p_customer AND s.id = p_sale_id;
+    IF res IS NOT NULL THEN
+      RETURN res;
+    END IF;
+  END IF;
+
+  -- Share-lock the session row: concurrent sales proceed, a close cannot slip
+  -- between this check and the insert.
+  PERFORM 1 FROM public.shifts
     WHERE customer_id = p_customer AND id = p_shift_id AND status = 'OPEN'
-  ) THEN
+    FOR SHARE;
+  IF NOT FOUND THEN
     RAISE EXCEPTION 'Sale requires an open shift.';
   END IF;
 
-  sale_id := gen_random_uuid()::text;
+  sale_id := COALESCE(NULLIF(btrim(p_sale_id), ''), gen_random_uuid()::text);
 
   -- Recompute subtotal from authoritative line math and verify each derived
   -- line total matches what the client sent (catches tampering).
@@ -249,13 +313,32 @@ BEGIN
     chg := 0;
   END IF;
 
-  INSERT INTO public.sales (id, customer_id, receipt_number, cashier_id, device_id,
-    shift_id, customer_name, payment_method, subtotal_minor_units,
-    discount_minor_units, total_minor_units, amount_paid_minor_units,
-    change_minor_units, status, created_at)
-  VALUES (sale_id, p_customer, p_receipt, p_cashier, p_device,
-    p_shift_id, p_customer_name, p_payment, subtotal,
-    p_discount, total_val, p_amount_paid, chg, 'COMPLETED', now());
+  BEGIN
+    INSERT INTO public.sales (id, customer_id, receipt_number, cashier_id, device_id,
+      shift_id, customer_name, payment_method, subtotal_minor_units,
+      discount_minor_units, total_minor_units, amount_paid_minor_units,
+      change_minor_units, status, created_at)
+    VALUES (sale_id, p_customer, p_receipt, p_cashier, p_device,
+      p_shift_id, p_customer_name, p_payment, subtotal,
+      p_discount, total_val, p_amount_paid, chg, 'COMPLETED', now());
+  EXCEPTION WHEN unique_violation THEN
+    -- Same sale id replayed, or the same receipt already stored: return the
+    -- existing row and let the idempotent contract hold.
+    SELECT jsonb_build_object('id', s.id, 'receipt_number', s.receipt_number,
+        'subtotal_minor_units', s.subtotal_minor_units,
+        'total_minor_units', s.total_minor_units,
+        'amount_paid_minor_units', s.amount_paid_minor_units,
+        'change_minor_units', s.change_minor_units, 'duplicate', true)
+      INTO res
+      FROM public.sales s
+      WHERE s.customer_id = p_customer
+        AND (s.id = sale_id OR s.receipt_number = p_receipt)
+      LIMIT 1;
+    IF res IS NULL THEN
+      RAISE;
+    END IF;
+    RETURN res;
+  END;
 
   FOR item IN SELECT * FROM jsonb_array_elements(p_items)
   LOOP
@@ -476,14 +559,13 @@ AS $$
 DECLARE shift_found text;
 BEGIN
   -- Serialize open-or-create per tenant so two concurrent ensure_shift calls
-  -- cannot both find "no OPEN shift" and both insert (closes audit #3 race even
-  -- for the shared perpetual shift, which carries a NULL device_id and is
-  -- therefore outside the partial unique index).
+  -- cannot both find "no OPEN shift" and both insert. The shop runs ONE shared
+  -- drawer, so the lookup ignores the device: whatever shift is open is the
+  -- session every till posts to (shifts_one_open_per_tenant enforces it).
   PERFORM pg_advisory_xact_lock(hashtext(p_customer::text));
 
   SELECT id INTO shift_found FROM public.shifts
   WHERE customer_id = p_customer AND status = 'OPEN'
-    AND (p_device IS NULL OR device_id = p_device OR device_id IS NULL)
   LIMIT 1;
   IF shift_found IS NOT NULL THEN
     RETURN shift_found;
@@ -497,7 +579,6 @@ BEGIN
 EXCEPTION WHEN unique_violation THEN
   SELECT id INTO shift_found FROM public.shifts
   WHERE customer_id = p_customer AND status = 'OPEN'
-    AND (p_device IS NULL OR device_id = p_device OR device_id IS NULL)
   LIMIT 1;
   RETURN shift_found;
 END;
@@ -528,7 +609,6 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM public.shifts
     WHERE customer_id = p_customer AND status = 'OPEN'
-      AND (p_device IS NULL OR device_id = p_device OR device_id IS NULL)
   ) THEN
     RAISE EXCEPTION 'A shift is already open.';
   END IF;
@@ -542,11 +622,140 @@ BEGIN
     'Shift ' || shift_new || ' opened.', now());
   RETURN shift_new;
 EXCEPTION WHEN unique_violation THEN
-  RAISE EXCEPTION 'A shift is already open for this device.';
+  RAISE EXCEPTION 'A shift is already open.';
 END;
 $$;
 REVOKE ALL ON FUNCTION pos_open_shift FROM public;
 GRANT EXECUTE ON FUNCTION pos_open_shift TO service_role;
+
+-- ---------------------------------------------------------------------------
+-- 3h2. pos_add_cash_movement: the OPEN check, the insert and the audit row are
+-- one transaction, and the shift row is share-locked so the movement can never
+-- land on a session pos_close_shift is reconciling (audit #3 + #11).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION pos_add_cash_movement(
+  p_customer uuid,
+  p_user     text,
+  p_shift_id text,
+  p_type     text,
+  p_amount   bigint,
+  p_reason   text,
+  p_photo    text
+)
+RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE mv_id text;
+BEGIN
+  IF p_amount IS NULL OR p_amount <= 0 THEN
+    RAISE EXCEPTION 'Amount must be positive.';
+  END IF;
+  IF p_type NOT IN ('WITHDRAWAL', 'DEPOSIT', 'EXPENSE') THEN
+    RAISE EXCEPTION 'Invalid movement type.';
+  END IF;
+  IF p_reason IS NULL OR btrim(p_reason) = '' THEN
+    RAISE EXCEPTION 'A reason is required.';
+  END IF;
+
+  PERFORM 1 FROM public.shifts
+    WHERE customer_id = p_customer AND id = p_shift_id AND status = 'OPEN'
+    FOR SHARE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Movement requires an open shift.';
+  END IF;
+
+  mv_id := gen_random_uuid()::text;
+  INSERT INTO public.cash_movements (id, customer_id, shift_id, user_id, type,
+    amount_minor_units, reason, photo, created_at)
+  VALUES (mv_id, p_customer, p_shift_id, p_user, p_type, p_amount,
+    btrim(p_reason), NULLIF(p_photo, ''), now());
+
+  INSERT INTO public.pos_audit_logs (id, customer_id, user_id, action, details, created_at)
+  VALUES (gen_random_uuid(), p_customer, p_user, 'CASH_MOVEMENT_ADDED',
+    p_type || ' ' || p_amount, now());
+
+  RETURN jsonb_build_object('id', mv_id);
+END;
+$$;
+REVOKE ALL ON FUNCTION pos_add_cash_movement FROM public;
+GRANT EXECUTE ON FUNCTION pos_add_cash_movement TO service_role;
+
+-- ---------------------------------------------------------------------------
+-- 3h3. pos_shift_counters: today's register counters in SQL, so the snapshot no
+-- longer sums a possibly truncated PostgREST page (audit #13). EXPENSE counts
+-- as money out, matching the native drawer rule (audit #4).
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION pos_shift_counters(
+  p_customer uuid, p_shift_id text, p_start timestamptz, p_end timestamptz)
+RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE res jsonb;
+BEGIN
+  SELECT jsonb_build_object(
+    'cash_sales', COALESCE(sum(CASE WHEN status = 'COMPLETED' AND payment_method = 'CASH' THEN total_minor_units ELSE 0 END), 0),
+    'bank_sales', COALESCE(sum(CASE WHEN status = 'COMPLETED' AND payment_method = 'BANK' THEN total_minor_units ELSE 0 END), 0),
+    'deposits', (SELECT COALESCE(sum(amount_minor_units), 0) FROM public.cash_movements
+        WHERE customer_id = p_customer AND shift_id = p_shift_id AND type = 'DEPOSIT'
+          AND (p_start IS NULL OR created_at >= p_start)
+          AND (p_end IS NULL OR created_at < p_end)),
+    'withdrawals', (SELECT COALESCE(sum(amount_minor_units), 0) FROM public.cash_movements
+        WHERE customer_id = p_customer AND shift_id = p_shift_id
+          AND type IN ('WITHDRAWAL', 'EXPENSE')
+          AND (p_start IS NULL OR created_at >= p_start)
+          AND (p_end IS NULL OR created_at < p_end))
+  ) INTO res
+  FROM public.sales
+  WHERE customer_id = p_customer AND shift_id = p_shift_id
+    AND (p_start IS NULL OR created_at >= p_start)
+    AND (p_end IS NULL OR created_at < p_end);
+  RETURN COALESCE(res, '{}'::jsonb);
+END;
+$$;
+REVOKE ALL ON FUNCTION pos_shift_counters FROM public;
+GRANT EXECUTE ON FUNCTION pos_shift_counters TO service_role;
+
+-- ---------------------------------------------------------------------------
+-- 3h4. pos_shift_summary: one shift's financials as exact SQL aggregates
+-- (audit #13) with the same EXPENSE rule and expected-cash function the drawer
+-- itself uses, so the screen and the reconciliation can never disagree.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION pos_shift_summary(
+  p_customer uuid, p_shift_id text)
+RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE res jsonb;
+BEGIN
+  SELECT jsonb_build_object(
+    'cash_sales', (SELECT COALESCE(sum(total_minor_units), 0) FROM public.sales
+        WHERE customer_id = p_customer AND shift_id = p_shift_id
+          AND status = 'COMPLETED' AND payment_method = 'CASH'),
+    'bank_sales', (SELECT COALESCE(sum(total_minor_units), 0) FROM public.sales
+        WHERE customer_id = p_customer AND shift_id = p_shift_id
+          AND status = 'COMPLETED' AND payment_method = 'BANK'),
+    'voids', (SELECT COALESCE(sum(total_minor_units), 0) FROM public.sales
+        WHERE customer_id = p_customer AND status = 'VOIDED'
+          AND (voided_shift_id = p_shift_id
+               OR (shift_id = p_shift_id AND voided_shift_id IS NULL))),
+    'deposits', (SELECT COALESCE(sum(amount_minor_units), 0) FROM public.cash_movements
+        WHERE customer_id = p_customer AND shift_id = p_shift_id AND type = 'DEPOSIT'),
+    'withdrawals', (SELECT COALESCE(sum(amount_minor_units), 0) FROM public.cash_movements
+        WHERE customer_id = p_customer AND shift_id = p_shift_id
+          AND type IN ('WITHDRAWAL', 'EXPENSE')),
+    'cash_refunds', (SELECT COALESCE(sum(total_minor_units), 0) FROM public.sales
+        WHERE customer_id = p_customer AND status = 'VOIDED' AND payment_method = 'CASH'
+          AND voided_shift_id = p_shift_id AND shift_id <> p_shift_id),
+    'expected_cash', public.pos_expected_cash(p_customer, p_shift_id)
+  ) INTO res;
+  RETURN COALESCE(res, '{}'::jsonb);
+END;
+$$;
+REVOKE ALL ON FUNCTION pos_shift_summary FROM public;
+GRANT EXECUTE ON FUNCTION pos_shift_summary TO service_role;
 
 -- ---------------------------------------------------------------------------
 -- 3i. pos_close_shift: reconcile expected cash + close, atomically. A movement
@@ -577,7 +786,8 @@ BEGIN
   END IF;
 
   SELECT * INTO shift_row FROM public.shifts
-  WHERE customer_id = p_customer AND id = p_shift_id AND status = 'OPEN';
+  WHERE customer_id = p_customer AND id = p_shift_id AND status = 'OPEN'
+  FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Shift is no longer open.';
   END IF;
@@ -587,7 +797,7 @@ BEGIN
     AND status = 'COMPLETED' AND payment_method = 'CASH';
 
   SELECT COALESCE(sum(CASE WHEN type = 'DEPOSIT' THEN amount_minor_units ELSE 0 END), 0),
-         COALESCE(sum(CASE WHEN type = 'WITHDRAWAL' THEN amount_minor_units ELSE 0 END), 0)
+         COALESCE(sum(CASE WHEN type IN ('WITHDRAWAL', 'EXPENSE') THEN amount_minor_units ELSE 0 END), 0)
   INTO dep, wdr FROM public.cash_movements
   WHERE customer_id = p_customer AND shift_id = p_shift_id;
 
@@ -671,7 +881,7 @@ BEGIN
       AND status = 'COMPLETED' AND payment_method = 'CASH';
   SELECT
     COALESCE(sum(CASE WHEN type = 'DEPOSIT' THEN amount_minor_units ELSE 0 END), 0),
-    COALESCE(sum(CASE WHEN type = 'WITHDRAWAL' THEN amount_minor_units ELSE 0 END), 0)
+    COALESCE(sum(CASE WHEN type IN ('WITHDRAWAL', 'EXPENSE') THEN amount_minor_units ELSE 0 END), 0)
   INTO dep, wdr FROM public.cash_movements
     WHERE customer_id = p_customer AND shift_id = p_shift_id;
   SELECT COALESCE(sum(total_minor_units), 0) INTO refund FROM public.sales
@@ -722,8 +932,10 @@ $$;
 REVOKE ALL ON FUNCTION pos_sales_totals FROM public;
 GRANT EXECUTE ON FUNCTION pos_sales_totals TO service_role;
 
--- Revenue trend bucketed by calendar day, oldest first. Loan sales are
--- excluded: they brought no cash in.
+-- Revenue trend bucketed by calendar day in the shop's timezone, oldest first.
+-- created_at is timestamptz (UTC); the substr() form bucketed by UTC date and
+-- put sales after local midnight on the wrong day. Loan sales are excluded:
+-- they brought no cash in.
 CREATE OR REPLACE FUNCTION pos_revenue_trend(
   p_customer uuid, p_start timestamptz, p_end timestamptz)
 RETURNS jsonb
@@ -733,7 +945,7 @@ AS $$
 DECLARE res jsonb;
 BEGIN
   SELECT COALESCE(jsonb_agg(t ORDER BY t.day), '[]'::jsonb) INTO res FROM (
-    SELECT substr(s.created_at::text, 1, 10) AS day,
+    SELECT ((s.created_at AT TIME ZONE 'Africa/Addis_Ababa')::date)::text AS day,
            count(*)::int AS count,
            COALESCE(sum(s.total_minor_units), 0)::bigint AS total
     FROM public.sales s
