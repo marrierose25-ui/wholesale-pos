@@ -205,4 +205,24 @@ class SupabaseSyncBackend implements SyncBackend {
       );
     }
   }
+
+  /// This path stays one-way, by design.
+  ///
+  /// It writes into a mirror shaped for reporting: no foreign keys, and — as
+  /// the class doc says — no users or devices, because no credentials may
+  /// leave the PC. Pulling those mirror rows back into SQLite would therefore
+  /// violate the local foreign keys on every sale whose cashier or device is
+  /// not enrolled on this machine. Cross-device reads need the licence-gated
+  /// `sync` gateway, which serves a complete, tenant-scoped page (see
+  /// [SyncGatewayBackend.pull]).
+  ///
+  /// Returning empty rather than throwing keeps an older desktop build that
+  /// still embeds a secret usable for writing: it sends but never receives,
+  /// exactly as before.
+  @override
+  Future<SyncPullResult> pull({
+    Map<String, String>? cursor,
+    int limit = 1000,
+    List<String>? tables,
+  }) async => const SyncPullResult.empty();
 }

@@ -49,9 +49,29 @@ const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 // bakes into WHOLESALE_POS_LICENSE_PUBLIC_KEY.
 const PUBLIC_KEY_HEX = Deno.env.get('SYNC_LICENSE_PUBLIC_KEY')!;
 
-// Operational tables a pull may read. A push cannot touch them: it only
-// appends to `sync_mirror` and lets pos_sync_apply decide.
-const TABLES = ['sales', 'sale_items', 'shifts', 'cash_movements', 'void_requests'] as const;
+// Operational tables a pull may read, keyed by the name the client uses. A
+// push cannot touch them: it only appends to `sync_mirror` and lets
+// pos_sync_apply decide.
+//
+// `users` is `pos_users` behind an EXPLICIT column list. Sign-in is verified
+// offline against the local PBKDF2 hash, so the salt/hash have to travel or a
+// till that never created the account can never sign it in. The row is only
+// released to a device holding a valid signed license for the same tenant —
+// the same trust boundary the till's own SQLite file already sits behind — and
+// `token_version` (nor any column added later) does not leak with it.
+const PULL_TABLES: Record<string, { from: string; select: string }> = {
+  users: {
+    from: 'pos_users',
+    select:
+      'id, username, role, active, pw_salt, pw_hash, permissions, is_demo, deleted_at, created_at, received_at',
+  },
+  shifts: { from: 'shifts', select: '*' },
+  sales: { from: 'sales', select: '*' },
+  sale_items: { from: 'sale_items', select: '*' },
+  cash_movements: { from: 'cash_movements', select: '*' },
+  void_requests: { from: 'void_requests', select: '*' },
+};
+const TABLES = Object.keys(PULL_TABLES);
 
 // Entity vocabulary the staging table accepts. Both the client's own names
 // ('sale') and the table names older outboxes used ('sales') are folded here;
@@ -256,8 +276,9 @@ async function push(db: any, auth: { customerId: string; fingerprint: string }, 
 }
 
 // ---------------------------------------------------------------------------
-// Action: pull — delta feed for future multi-register/devices (Phase 18 ships
-// the endpoint; the till does not call it yet, phones/dashboard will).
+// Action: pull — delta feed so every device of a shop sees the same ledger.
+// Clients page ONE table at a time (a keyset cursor is only ordered within a
+// single table), so `tables: ['sales']` is the normal call shape.
 // ---------------------------------------------------------------------------
 async function pull(db: any, auth: { customerId: string }, body: any): Promise<Response> {
   // Cursor is either a keyset {received_at, id} (preferred, exact pagination)
@@ -265,13 +286,20 @@ async function pull(db: any, auth: { customerId: string }, body: any): Promise<R
   // ambiguous because a push stamps every row it applied with one timestamp, so
   // the id tiebreaker makes the walk strictly ordered and gap-free.
   const cursor = body.cursor && typeof body.cursor === 'object' ? body.cursor : null;
-  const since = String(body.since ?? '');
-  if (!cursor && (!since || Number.isNaN(Date.parse(since)))) {
-    return json({ ok: false, error: 'since (ISO timestamp) or cursor required.' }, 400);
+  // A first sync has no cursor yet. Start from the beginning of the tenant's
+  // history instead of rejecting the call — the request is already
+  // authenticated by a signed license, and the tenant filter is applied below.
+  const since = String(body.since ?? '') || '1970-01-01T00:00:00Z';
+  if (!cursor && Number.isNaN(Date.parse(since))) {
+    return json({ ok: false, error: 'since must be an ISO timestamp, or pass a cursor.' }, 400);
   }
-  const wanted: string[] = Array.isArray(body.tables) && body.tables.length > 0
-    ? body.tables.filter((t: string) => TABLES.includes(t as any))
-    : [...TABLES];
+  const requested: string[] = Array.isArray(body.tables) && body.tables.length > 0
+    ? body.tables.map((t: unknown) => String(t))
+    : TABLES;
+  const wanted = requested.filter((t) => TABLES.includes(t));
+  if (wanted.length === 0) {
+    return json({ ok: false, error: `tables must be a subset of: ${TABLES.join(', ')}` }, 400);
+  }
   // Rows per table per page. Callers loop on has_more/next_cursor so a busy
   // tenant's backlog is delivered in full rather than silently truncated at a
   // hard cap (audit #12: skipped rows / no pagination).
@@ -282,7 +310,8 @@ async function pull(db: any, auth: { customerId: string }, body: any): Promise<R
   let maxId = '';
   let hasMore = false;
   for (const t of wanted) {
-    let q = db.from(t).select('*').eq('customer_id', auth.customerId);
+    const spec = PULL_TABLES[t];
+    let q = db.from(spec.from).select(spec.select).eq('customer_id', auth.customerId);
     if (cursor) {
       const cAt = String(cursor.received_at ?? '');
       const cId = String(cursor.id ?? '');

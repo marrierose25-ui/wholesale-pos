@@ -65,6 +65,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS pos_users_customer_username
 CREATE INDEX IF NOT EXISTS pos_users_customer_active
   ON pos_users (customer_id, active);
 
+-- Delta-feed support (multi-device sync). The `sync` gateway pages a tenant's
+-- rows by (received_at, id), the same keyset every operational table uses, so
+-- a till can download the shop's accounts the same way it downloads sales.
+-- Additive and idempotent: existing rows are stamped at migration time and
+-- ordered by id, which is enough for a strictly monotonic walk.
+ALTER TABLE pos_users
+  ADD COLUMN IF NOT EXISTS received_at timestamptz NOT NULL DEFAULT now();
+
+CREATE INDEX IF NOT EXISTS pos_users_customer_received
+  ON pos_users (customer_id, received_at, id);
+
 -- Lock the table down. RLS with no policies = anon/authenticated see zero rows
 -- and write nothing; only service_role (the pos-api Edge Function) passes.
 ALTER TABLE pos_users ENABLE ROW LEVEL SECURITY;

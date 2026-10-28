@@ -181,4 +181,75 @@ class SyncGatewayBackend implements SyncBackend {
     }
     return acked;
   }
+
+  /// Fetches every transaction recorded after [cursor] — including the ones
+  /// other devices of the same tenant wrote — so a fresh login can show the
+  /// whole shop's history.
+  ///
+  /// The first call passes no cursor and the server starts from the tenant's
+  /// beginning, one page at a time ([SyncPullResult.hasMore]); the caller
+  /// persists `nextCursor` after each page so a crash resumes instead of
+  /// restarting. [tables] restricts a page to one table, because a keyset
+  /// cursor is only ordered within a single table.
+  @override
+  Future<SyncPullResult> pull({
+    Map<String, String>? cursor,
+    int limit = 1000,
+    List<String>? tables,
+  }) async {
+    final license = await _licenseProvider();
+    if (license == null || license.trim().isEmpty) {
+      throw StateError('Sync gateway: no activated license on this device.');
+    }
+
+    final res = await _client.post(
+      Uri.parse(_fnUrl),
+      headers: const {
+        'Content-Type': 'application/json',
+        'User-Agent': 'WholesalePOS-Sync/1.0',
+      },
+      body: jsonEncode({
+        'action': 'pull',
+        'license': license.trim(),
+        'limit': limit,
+        if (tables != null && tables.isNotEmpty) 'tables': tables,
+        if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
+      }),
+    );
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception(
+        'Sync gateway pull failed (HTTP ${res.statusCode}): ${res.body}',
+      );
+    }
+    final decoded = jsonDecode(res.body);
+    if (decoded is! Map) throw Exception('Sync gateway pull: unexpected body.');
+    if (decoded['ok'] == false) {
+      throw Exception('Sync gateway rejected pull: ${decoded['error']}');
+    }
+
+    final changes = <String, List<Map<String, dynamic>>>{};
+    final raw = decoded['changes'];
+    if (raw is Map) {
+      raw.forEach((table, rows) {
+        if (rows is List) {
+          changes['$table'] = [
+            for (final row in rows)
+              if (row is Map) row.cast<String, dynamic>(),
+          ];
+        }
+      });
+    }
+
+    final nc = decoded['next_cursor'];
+    Map<String, String>? nextCursor;
+    if (nc is Map && nc['received_at'] != null && nc['id'] != null) {
+      nextCursor = {'received_at': '${nc['received_at']}', 'id': '${nc['id']}'};
+    }
+
+    return SyncPullResult(
+      changes: changes,
+      nextCursor: nextCursor,
+      hasMore: decoded['has_more'] == true,
+    );
+  }
 }

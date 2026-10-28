@@ -109,17 +109,24 @@ BEGIN
   END IF;
 END $$;
 
--- H (#6): one receipt number per tenant. Guarded so pre-existing duplicates
--- (a counter reset or a retried sale) do not abort the run.
+-- H (#6, revised for multi-device): one receipt number per DEVICE per
+-- tenant. Each till allocates its receipt number locally and OFFLINE, so two
+-- registers of the same shop legitimately issue REC-<day>-0001 on the same
+-- day. The original tenant-wide index rejected the second one, and that sale
+-- stayed rejected in the sync mirror forever — invisible on every other
+-- device. The sale `id` is the global identity; the receipt number is a
+-- per-till artefact (never shown in the sales-history UI).
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM sales GROUP BY customer_id, receipt_number HAVING count(*) > 1
+    SELECT 1 FROM sales
+    GROUP BY customer_id, device_id, receipt_number HAVING count(*) > 1
   ) THEN
-    CREATE UNIQUE INDEX IF NOT EXISTS sales_receipt_unique
-      ON sales (customer_id, receipt_number);
+    DROP INDEX IF EXISTS sales_receipt_unique;
+    CREATE UNIQUE INDEX IF NOT EXISTS sales_receipt_per_device
+      ON sales (customer_id, device_id, receipt_number);
   ELSE
-    RAISE NOTICE 'sales_receipt_unique SKIPPED: duplicate receipt numbers exist; reconcile then re-run.';
+    RAISE NOTICE 'sales_receipt_per_device SKIPPED: a device has duplicate receipt numbers; reconcile then re-run.';
   END IF;
 END $$;
 

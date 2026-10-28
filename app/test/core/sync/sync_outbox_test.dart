@@ -27,6 +27,13 @@ class RecordingBackend implements SyncBackend {
     // Confirm every entry so the service marks the whole batch synced.
     return entries.map((e) => e.id).toSet();
   }
+
+  @override
+  Future<SyncPullResult> pull({
+    Map<String, String>? cursor,
+    int limit = 1000,
+    List<String>? tables,
+  }) async => const SyncPullResult.empty();
 }
 
 void main() {

@@ -18,6 +18,7 @@ import 'core/repositories/shift_repository.dart';
 import 'core/repositories/user_repository.dart';
 import 'core/sync/sync_gateway_backend.dart';
 import 'core/sync/sync_outbox_repository.dart';
+import 'core/sync/sync_pull_applier.dart';
 import 'core/sync/sync_service.dart';
 import 'core/theme/app_design.dart';
 import 'core/theme/app_theme.dart';
@@ -73,9 +74,12 @@ Future<void> main() async {
     licenseProvider: () =>
         LocalDatabase.getSetting(db, SyncGatewayBackend.licenseSettingKey),
   );
+  final outbox = SyncOutboxRepository(db);
+  final puller = CloudSyncPuller(backend: syncBackend, db: db);
+  final syncService = SyncService(outbox, syncBackend, puller: puller);
+  final runtime = SyncRuntime(service: syncService, puller: puller);
   if (syncBackend.isConfigured) {
-    final outbox = SyncOutboxRepository(db);
-    _startSyncLoop(SyncService(outbox, syncBackend), outbox);
+    _startSyncLoop(syncService, outbox);
   }
 
   runApp(
@@ -90,14 +94,30 @@ Future<void> main() async {
       // Dark is the flagship look; honour an explicit 'light' choice, but
       // default to dark on fresh installs / when unset.
       initialDarkMode: themeSetting != 'light',
+      syncRuntime: runtime,
     ),
   );
 }
 
+/// Everything the UI needs from the sync engine.
+///
+/// Two moments need it directly instead of waiting for the timer: a device that
+/// joins an existing shop must pull its accounts BEFORE the login screen
+/// decides whether this is first-time setup, and a sign-in should refresh the
+/// ledger immediately rather than on the next tick.
+class SyncRuntime {
+  final SyncService service;
+  final CloudSyncPuller puller;
+
+  const SyncRuntime({required this.service, required this.puller});
+}
+
 /// Drains the outbox to the cloud on a timer. The first attempt runs on
-/// startup (to catch anything queued while offline); then every 30 seconds.
-/// Any error (offline, backend down) is swallowed: rows stay queued and the
-/// next tick retries, so syncing can never crash the register.
+/// startup (to catch anything queued while offline); then every 30 seconds —
+/// which pushes immediately and pulls on its own (slower) cadence, see
+/// [SyncService.pullInterval]. Any error (offline, backend down) is swallowed:
+/// rows stay queued and the next tick retries, so syncing can never crash the
+/// register.
 void _startSyncLoop(SyncService service, SyncOutboxRepository outbox) {
   Future<void> drain() async {
     try {
@@ -122,6 +142,7 @@ class WholesalePosApp extends StatefulWidget {
   final FinanceRepository financeRepository;
   final String deviceId;
   final bool initialDarkMode;
+  final SyncRuntime? syncRuntime;
 
   const WholesalePosApp({
     super.key,
@@ -133,6 +154,7 @@ class WholesalePosApp extends StatefulWidget {
     required this.financeRepository,
     required this.deviceId,
     required this.initialDarkMode,
+    this.syncRuntime,
   });
 
   @override
@@ -183,6 +205,7 @@ class _WholesalePosAppState extends State<WholesalePosApp> {
         deviceId: widget.deviceId,
         isDarkMode: _themeMode == ThemeMode.dark,
         onToggleTheme: () => _toggleTheme(_themeMode == ThemeMode.light),
+        syncRuntime: widget.syncRuntime,
       ),
     );
   }
@@ -198,6 +221,7 @@ class LicenseWrapper extends StatefulWidget {
   final String deviceId;
   final bool isDarkMode;
   final VoidCallback onToggleTheme;
+  final SyncRuntime? syncRuntime;
 
   const LicenseWrapper({
     super.key,
@@ -210,6 +234,7 @@ class LicenseWrapper extends StatefulWidget {
     required this.deviceId,
     required this.isDarkMode,
     required this.onToggleTheme,
+    this.syncRuntime,
   });
 
   @override
@@ -263,6 +288,14 @@ class _LicenseWrapperState extends State<LicenseWrapper> {
       licenseText: storedCode,
       deviceFingerprint: _fingerprint,
     );
+
+    // A device joining an existing shop has a valid license and an EMPTY
+    // ledger. Pull the shop's accounts/history BEFORE the login gate decides
+    // between "create the first owner" and "sign in", otherwise the second
+    // till offers first-time setup and quietly creates a duplicate owner.
+    if (license != null && license['error'] == null) {
+      await _firstPullIfNewDevice();
+    }
     if (!mounted) return;
 
     setState(() {
@@ -341,6 +374,7 @@ class _LicenseWrapperState extends State<LicenseWrapper> {
     }
 
     await LocalDatabase.setSetting(widget.db, _licenseCodeKey, licenseToStore);
+    await _firstPullIfNewDevice();
     if (!mounted) return null;
     setState(() {
       _isLicensed = true;
@@ -348,6 +382,20 @@ class _LicenseWrapperState extends State<LicenseWrapper> {
       _isChecking = false;
     });
     return null;
+  }
+
+  /// One best-effort pull on a device that has no accounts yet. Swallows every
+  /// failure: offline is the normal state of a shop till, and the regular loop
+  /// retries — the setup screen stays the fallback for a genuinely new shop.
+  Future<void> _firstPullIfNewDevice() async {
+    final runtime = widget.syncRuntime;
+    if (runtime == null) return;
+    try {
+      if (await widget.userRepository.hasUsers()) return;
+      await runtime.puller.pullNow();
+    } catch (_) {
+      // Ignored on purpose: nothing is lost, the next tick retries.
+    }
   }
 
   @override
@@ -378,6 +426,7 @@ class _LicenseWrapperState extends State<LicenseWrapper> {
       deviceId: widget.deviceId,
       isDarkMode: widget.isDarkMode,
       onToggleTheme: widget.onToggleTheme,
+      syncRuntime: widget.syncRuntime,
     );
   }
 }
@@ -392,6 +441,7 @@ class AuthWrapper extends StatefulWidget {
   final String deviceId;
   final bool isDarkMode;
   final VoidCallback onToggleTheme;
+  final SyncRuntime? syncRuntime;
 
   const AuthWrapper({
     super.key,
@@ -404,6 +454,7 @@ class AuthWrapper extends StatefulWidget {
     required this.deviceId,
     required this.isDarkMode,
     required this.onToggleTheme,
+    this.syncRuntime,
   });
 
   @override
@@ -462,6 +513,13 @@ class _AuthWrapperState extends State<AuthWrapper> {
 
   Future<void> _onLoginSuccess(User user) async {
     setState(() => _currentUser = user);
+    // "Sign in and see the whole shop": refresh immediately instead of waiting
+    // for the periodic tick. Fire-and-forget so a dead network can never hold
+    // up a cashier who is standing at the till ready to sell.
+    final runtime = widget.syncRuntime;
+    if (runtime != null) {
+      unawaited(runtime.service.syncNow(forcePull: true));
+    }
     final remember = await LocalDatabase.getSetting(
       widget.db,
       SessionStore.rememberKey,
