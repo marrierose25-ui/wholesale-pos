@@ -1096,4 +1096,36 @@ $$;
 REVOKE ALL ON FUNCTION pos_cashier_performance FROM public;
 GRANT EXECUTE ON FUNCTION pos_cashier_performance TO service_role;
 
+-- ---------------------------------------------------------------------------
+-- Privilege hardening for every pos_* RPC (audit 2 #27).
+--
+-- `REVOKE ... FROM public` alone is NOT enough: Supabase's default privileges
+-- hand EXECUTE on new functions to `anon` and `authenticated` directly, so the
+-- roles kept executing SECURITY DEFINER RPCs. Any holder of the published
+-- anon key (every web build ships it) could therefore pass another tenant's
+-- customer uuid to pos_create_sale, pos_open_shift or pos_sales_totals and
+-- read or write that shop's books — the definer rights bypass RLS.
+--
+-- Nothing client-side calls these functions: the till and the PWA go through
+-- the pos-api / sync Edge Functions, which hold the service key. So the only
+-- executable role is service_role. This block is idempotent and covers future
+-- pos_* functions too, so a later migration that forgets its own REVOKE is
+-- still closed.
+-- ---------------------------------------------------------------------------
+DO $$
+DECLARE
+  fn record;
+BEGIN
+  FOR fn IN
+    SELECT p.oid::regprocedure AS sig
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.proname LIKE 'pos\_%'
+  LOOP
+    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC, anon, authenticated', fn.sig);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO service_role', fn.sig);
+  END LOOP;
+END;
+$$;
+
 COMMIT;

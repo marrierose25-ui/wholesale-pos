@@ -93,12 +93,27 @@ class SupabaseSyncBackend implements SyncBackend {
 
   @override
   Future<Set<String>> push(List<SyncOutboxEntry> entries) async {
+    // Acked incrementally, per entry (audit 2 #25). It used to `continue` past
+    // an unknown entity type and then ack the whole batch at the end, so a row
+    // that was never sent looked synced. An unknown type is terminal here (this
+    // legacy sink has no way to store it) and is acked with a notice; every
+    // other entry is acked only after its write returned 2xx.
+    final acked = <String>{};
     for (final entry in entries) {
       final table = _tableFor(entry.entityType);
-      if (table == null) continue; // Unknown entity type: nothing to push.
+      if (table == null) {
+        // ignore: avoid_print
+        print(
+          'WholesalePOS sync: dropping outbox entry ${entry.id} — unknown '
+          'entity type "${entry.entityType}".',
+        );
+        acked.add(entry.id);
+        continue;
+      }
 
       if (entry.operation == SyncOperations.delete) {
         await _delete(table, entry);
+        acked.add(entry.id);
         continue;
       }
 
@@ -129,11 +144,11 @@ class SupabaseSyncBackend implements SyncBackend {
         default:
           break;
       }
+      acked.add(entry.id);
     }
-    // This direct-PostgREST sink applies each row synchronously and throws on
-    // the first failure, so reaching here means the whole batch landed: ack
-    // every outbox id (matches the prior "mark all synced" behaviour).
-    return entries.map((e) => e.id).toSet();
+    // Every write above throws on the first failure, so reaching here means the
+    // acked rows landed. Rows not in this set stay queued.
+    return acked;
   }
 
   static String? _tableFor(String entityType) => switch (entityType) {

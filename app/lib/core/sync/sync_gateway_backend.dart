@@ -61,13 +61,15 @@ class SyncGatewayBackend implements SyncBackend {
   /// Pure selection logic, unit-testable without [Platform] or DB access.
   ///
   /// Priority:
-  ///  1. Desktop with the legacy baked secret (owner's own shop PCs, keys in
-  ///     a locked back-office exe) keeps the direct PostgREST path unchanged.
-  ///  2. Otherwise the gateway whenever its URL is configured — every mobile
-  ///     build and every buyer desktop.
-  ///  3. Otherwise the legacy mobile private-use opt-in (unsafe flag + keys),
-  ///     kept only so pre-gateway shop-phone builds still work if rebuilt
-  ///     without a gateway URL.
+  ///  1. The gateway whenever its URL is configured. It is the only path that
+  ///     ships no key, and it stages rather than writes — a build that also
+  ///     carried a legacy baked secret used to prefer the secret, keeping a
+  ///     distributable key in use for no benefit (audit 2 #24).
+  ///  2. Desktop with the legacy baked secret (the owner's own shop PCs, keys
+  ///     in a locked back-office exe) keeps the direct PostgREST path.
+  ///  3. The legacy mobile private-use opt-in (unsafe flag + keys), kept only
+  ///     so pre-gateway shop-phone builds still work if rebuilt without a
+  ///     gateway URL.
   ///  4. Otherwise Noop.
   static SyncBackend selectBackend({
     required String gatewayUrl,
@@ -77,15 +79,15 @@ class SyncGatewayBackend implements SyncBackend {
     required bool isMobile,
     required Future<String?> Function() licenseProvider,
   }) {
-    final hasSecret = secretUrl.isNotEmpty && secretKey.isNotEmpty;
-    if (!isMobile && hasSecret) {
-      return SupabaseSyncBackend(url: secretUrl, key: secretKey);
-    }
     if (gatewayUrl.isNotEmpty) {
       return SyncGatewayBackend(
         fnUrl: gatewayUrl,
         licenseProvider: licenseProvider,
       );
+    }
+    final hasSecret = secretUrl.isNotEmpty && secretKey.isNotEmpty;
+    if (!isMobile && hasSecret) {
+      return SupabaseSyncBackend(url: secretUrl, key: secretKey);
     }
     if (isMobile && unsafeAllowEmbed && hasSecret) {
       return SupabaseSyncBackend(url: secretUrl, key: secretKey);
@@ -111,8 +113,12 @@ class SyncGatewayBackend implements SyncBackend {
       'entries': [
         for (final e in entries)
           {
-            // Send the LOCAL vocabulary ('sale' etc.); the gateway maps it
-            // to cloud table names, mirroring SupabaseSyncBackend._tableFor.
+            // The outbox row id, echoed back per entry so the ack marks exactly
+            // the rows the server processed — two edits to one entity no longer
+            // share one verdict (audit 2 #21).
+            'entryId': e.id,
+            // Send the LOCAL vocabulary ('sale' etc.); the gateway folds it
+            // onto a staging entity and never writes a cloud table directly.
             'entityType': e.entityType,
             'entityId': e.entityId,
             'operation': e.operation,
@@ -143,25 +149,33 @@ class SyncGatewayBackend implements SyncBackend {
       throw Exception('Sync gateway rejected push: ${decoded['error']}');
     }
 
-    // Per-entry ack (audit #20): only mark outbox rows the server actually
-    // processed. 'applied' and 'rejected' (a permanent unknown-type refusal,
-    // never worth retrying) are both acked; 'failed' entries stay queued for
-    // the next drain. If the server sent no results list (older function),
-    // fall back to acking the whole batch like the pre-per-entry contract.
+    // Per-entry ack (audit #20 / #21): only outbox rows the server actually
+    // processed are marked synced. 'applied' (landed through the till RPC),
+    // 'stored' (safe in the staging table, applied on the next drain) and
+    // 'rejected' (a permanent refusal, never worth retrying) are acked;
+    // 'failed' stays queued. The server echoes the outbox id it saw, so two
+    // queued edits to one sale no longer share a single verdict; a server that
+    // predates entryId falls back to the entityId mapping, and one that sends
+    // no results list falls back to acking the whole batch.
     final results = decoded is Map ? decoded['results'] : null;
     if (results is! List || results.isEmpty) {
       return entries.map((e) => e.id).toSet();
     }
-    // One entity can back several queued rows (e.g. two edits to one sale);
-    // map its verdict onto every outbox id sharing that entityId.
     final idsByEntity = <String, List<String>>{};
     for (final e in entries) {
       (idsByEntity[e.entityId] ??= <String>[]).add(e.id);
     }
+    final known = entries.map((e) => e.id).toSet();
     final acked = <String>{};
     for (final r in results.whereType<Map>()) {
-      final status = r['status'];
-      if (status == 'applied' || status == 'rejected') {
+      final status = '${r['status']}';
+      if (status != 'applied' && status != 'stored' && status != 'rejected') {
+        continue;
+      }
+      final entryId = '${r['entryId'] ?? ''}';
+      if (entryId.isNotEmpty && known.contains(entryId)) {
+        acked.add(entryId);
+      } else {
         acked.addAll(idsByEntity['${r['entityId']}'] ?? const <String>[]);
       }
     }

@@ -74,9 +74,26 @@ void main() {
   });
 
   group('selectBackend priority', () {
-    test('desktop with baked secret keeps the legacy direct backend', () {
+    test(
+      'desktop with a gateway URL prefers the gateway over a baked secret',
+      () {
+        // Audit 2 #24: a build carrying both used to take the secret path,
+        // keeping a distributable key in use for no benefit.
+        final backend = SyncGatewayBackend.selectBackend(
+          gatewayUrl: gateway,
+          secretUrl: 'https://example.supabase.co',
+          secretKey: 'sb_secret_test',
+          unsafeAllowEmbed: false,
+          isMobile: false,
+          licenseProvider: licenseProviding(license),
+        );
+        expect(backend, isA<SyncGatewayBackend>());
+      },
+    );
+
+    test('desktop without a gateway URL keeps the legacy secret path', () {
       final backend = SyncGatewayBackend.selectBackend(
-        gatewayUrl: gateway,
+        gatewayUrl: '',
         secretUrl: 'https://example.supabase.co',
         secretKey: 'sb_secret_test',
         unsafeAllowEmbed: false,
@@ -200,9 +217,11 @@ void main() {
         final entries = body['entries'] as List;
         expect(entries, hasLength(1));
         final e = entries.first as Map<String, dynamic>;
-        expect(e['entityType'], 'sale'); // local vocabulary, mapped server-side
+        expect(e['entityType'], 'sale'); // local vocabulary, folded server-side
         expect(e['entityId'], 'sale-1');
         expect(e['operation'], SyncOperations.upsert);
+        // The outbox id travels with the entry so the ack can be exact.
+        expect(e['entryId'], isNotEmpty);
         expect((e['payload'] as Map)['sale'], isNotNull);
       },
     );
@@ -341,10 +360,87 @@ void main() {
         fnUrl: gateway,
         licenseProvider: licenseProviding(license),
         client: MockClient(
-          (_) async => http.Response('{"ok":true,"applied":1}', 200),
+          (_) async => http.Response('{"ok":true,"stored":1}', 200),
         ),
       );
       expect(await backend.push([a]), {a.id});
+    });
+
+    test(
+      'the echoed entryId acks that row alone, not its whole entity',
+      () async {
+        // Two queued edits to one sale: only the row the server names is acked
+        // (audit 2 #21). The second stays queued for the next drain.
+        final first = _entry(
+          entityType: SyncEntities.sale,
+          entityId: 'sale-shared',
+          payload: {
+            'sale': {'id': 'sale-shared'},
+          },
+        );
+        final second = _entry(
+          entityType: SyncEntities.sale,
+          entityId: 'sale-shared',
+          payload: {
+            'sale': {'id': 'sale-shared'},
+          },
+        );
+        final backend = SyncGatewayBackend(
+          fnUrl: gateway,
+          licenseProvider: licenseProviding(license),
+          client: MockClient(
+            (_) async => http.Response(
+              jsonEncode({
+                'ok': true,
+                'stored': 2,
+                'results': [
+                  {
+                    'entryId': first.id,
+                    'entityId': 'sale-shared',
+                    'status': 'applied',
+                  },
+                  {
+                    'entryId': second.id,
+                    'entityId': 'sale-shared',
+                    'status': 'failed',
+                    'error': 'boom',
+                  },
+                ],
+              }),
+              200,
+            ),
+          ),
+        );
+
+        expect(await backend.push([first, second]), {first.id});
+      },
+    );
+
+    test('a stored-but-not-yet-applied entry is acked', () async {
+      final e = _entry(
+        entityType: SyncEntities.sale,
+        entityId: 's-staged',
+        payload: {
+          'sale': {'id': 's-staged'},
+        },
+      );
+      final backend = SyncGatewayBackend(
+        fnUrl: gateway,
+        licenseProvider: licenseProviding(license),
+        client: MockClient(
+          (_) async => http.Response(
+            jsonEncode({
+              'ok': true,
+              'stored': 1,
+              'results': [
+                {'entryId': e.id, 'entityId': 's-staged', 'status': 'stored'},
+              ],
+            }),
+            200,
+          ),
+        ),
+      );
+      expect(await backend.push([e]), {e.id});
     });
   });
 }

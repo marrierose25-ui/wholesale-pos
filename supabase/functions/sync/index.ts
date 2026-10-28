@@ -25,13 +25,20 @@
 //
 // Actions (POST /functions/v1/sync):
 //   { action: 'push', license: '<licenseCode>', entries: [outbox entries] }
-//     -> { ok, applied: n, results: [{entityId, status, error?}] }
+//     -> { ok, stored: n, apply: {applied, rejected, pending},
+//          results: [{entryId, entityId, status, error?}] }
 //   { action: 'pull', license: '<licenseCode>', since: '<iso>',
 //     tables?: [], cursor?: {received_at, id}, limit?: n }
 //     -> { ok, changes: { sales: [...], ... }, server_time, next_cursor,
 //          has_more }
 //   { action: 'ping', license: '<licenseCode>' }
 //     -> { ok, customer_id, seats_active }  (cheap connectivity/auth probe)
+//
+// Staging, not writing (audit 2 #2): a push only ever APPENDS to
+// `sync_mirror`. `pos_sync_apply` then promotes pending entries through the
+// same RPCs the tills use (`pos_create_sale`, `pos_add_cash_movement`), so a
+// device can neither publish totals it chose nor delete a cloud row — a
+// DELETE entry is stored and rejected. See docs/supabase_sync_mirror.sql.
 
 import { ed25519 } from 'https://esm.sh/@noble/curves@1.4.0/ed25519';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
@@ -42,17 +49,23 @@ const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 // bakes into WHOLESALE_POS_LICENSE_PUBLIC_KEY.
 const PUBLIC_KEY_HEX = Deno.env.get('SYNC_LICENSE_PUBLIC_KEY')!;
 
-// Mirror tables the gateway knows. Anything else is refused.
+// Operational tables a pull may read. A push cannot touch them: it only
+// appends to `sync_mirror` and lets pos_sync_apply decide.
 const TABLES = ['sales', 'sale_items', 'shifts', 'cash_movements', 'void_requests'] as const;
 
-// The client enqueues with the LOCAL entity vocabulary (SyncEntities in
-// Dart: 'sale' | 'shift' | 'cash_movement' | 'void_request'); map to the
-// cloud table names here, exactly like SupabaseSyncBackend._tableFor did.
-const ENTITY_TABLE: Record<string, string> = {
-  sale: 'sales',
-  shift: 'shifts',
-  cash_movement: 'cash_movements',
-  void_request: 'void_requests',
+// Entity vocabulary the staging table accepts. Both the client's own names
+// ('sale') and the table names older outboxes used ('sales') are folded here;
+// anything else is refused per entry rather than stored.
+const ENTITY_ALIAS: Record<string, string> = {
+  sales: 'sale',
+  sale_items: 'sale',
+  shifts: 'shift',
+  cash_movements: 'cash_movement',
+  void_requests: 'void_request',
+  sale: 'sale',
+  shift: 'shift',
+  cash_movement: 'cash_movement',
+  void_request: 'void_request',
 };
 
 // Max outbox entries accepted in one push batch (abuse guard).
@@ -145,99 +158,100 @@ function fail(status: number, error: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Action: push — drain a client outbox into the mirror.
+// Action: push — stage a client outbox, then let the server apply it.
 // ---------------------------------------------------------------------------
 // Entry shape (identical to the local SyncOutboxEntry jsonEncode):
-//   { entityType, entityId, operation: 'upsert'|'delete', payload: {...}, ... }
-// Payload sub-rows carry local columns only; customer_id is stamped HERE.
-async function push(db: any, auth: { customerId: string }, body: any): Promise<Response> {
+//   { entryId, entityType, entityId, operation: 'upsert'|'delete', payload }
+// The payload is stored verbatim; nothing from it is trusted until
+// pos_sync_apply re-derives the money through the till RPCs.
+async function push(db: any, auth: { customerId: string; fingerprint: string }, body: any): Promise<Response> {
   const entries = Array.isArray(body.entries) ? body.entries : [];
-  if (entries.length === 0) return json({ ok: true, applied: 0, results: [] });
+  if (entries.length === 0) return json({ ok: true, stored: 0, results: [] });
   if (entries.length > MAX_BATCH) {
     return json({ ok: false, error: `Batch too large (max ${MAX_BATCH}).` }, 413);
   }
 
-  // Stamp every applied row with the server's receive time. Previously
-  // received_at defaulted only on INSERT, so an UPDATE left it stale and a
-  // pull keyed on received_at never re-surfaced the change (audit #12).
-  const receivedAt = new Date().toISOString();
-  let applied = 0;
-  const results: { entityId: string; status: string; error?: string }[] = [];
+  let stored = 0;
+  const results: { entryId: string; entityId: string; status: string; error?: string }[] = [];
+  const staged: { entryId: string; entityId: string; entityType: string }[] = [];
 
   for (const entry of entries) {
+    const entryId = String(entry.entryId ?? '');
     const entityId = String(entry.entityId ?? '');
-    // Accept both the local vocabulary ('sale') and the table name ('sales')
-    // so older enqueued rows and hand-tested payloads keep working.
     const rawType = String(entry.entityType ?? '');
-    const table = ENTITY_TABLE[rawType] ?? (TABLES.includes(rawType as any) ? rawType : '');
-    // A non-empty entity type we do not recognise is a permanent rejection,
-    // reported per-entry so the client can drop it instead of silently acking
-    // un-processed data OR retrying it forever (audit #20).
-    if (!table) {
-      results.push({ entityId, status: 'rejected', error: `unknown entity type: ${rawType}` });
+    const entityType = ENTITY_ALIAS[rawType] ?? '';
+    // A type we do not recognise is a permanent rejection: report it per entry
+    // so the client drops it instead of acking unprocessed data or retrying
+    // forever (audit #20).
+    if (!entityType || !entityId) {
+      results.push({
+        entryId, entityId, status: 'rejected',
+        error: !entityType ? `unknown entity type: ${rawType}` : 'missing entity id',
+      });
       continue;
     }
 
-    try {
-      if (String(entry.operation ?? '').toUpperCase() === 'DELETE') {
-        const del = await db.from(table)
-          .delete()
-          .eq('customer_id', auth.customerId)
-          .eq('id', entityId);
-        if (del.error) throw new Error(`delete ${table}: ${del.error.message}`);
-        // A deleted sale must also drop its orphaned line items.
-        if (table === 'sales') {
-          const delItems = await db.from('sale_items')
-            .delete().eq('customer_id', auth.customerId)
-            .eq('sale_id', entityId);
-          if (delItems.error) throw new Error(`delete sale_items: ${delItems.error.message}`);
-        }
-        applied++;
-        results.push({ entityId, status: 'applied' });
-        continue;
-      }
+    // Append-only. An entity that is already staged (pending or already
+    // applied) is left untouched, so a replay cannot overwrite an applied row
+    // with a different payload.
+    const ins = await db.from('sync_mirror').upsert({
+      customer_id: auth.customerId,
+      entity_type: entityType,
+      entity_id: entityId,
+      operation: String(entry.operation ?? 'UPSERT').toUpperCase(),
+      device_id: auth.fingerprint,
+      payload: entry.payload ?? {},
+    }, { onConflict: 'customer_id,entity_type,entity_id', ignoreDuplicates: true });
+    if (ins.error) {
+      results.push({ entryId, entityId, status: 'failed', error: ins.error.message });
+      continue;
+    }
+    stored++;
+    staged.push({ entryId, entityId, entityType });
+  }
 
-      // Collect the rows this entry writes: sale = header + items, rest = 1 row.
-      const rows: { table: string; row: any }[] = [];
-      const p = entry.payload ?? {};
-      switch (table) {
-        case 'sales':
-          if (p.sale) rows.push({ table: 'sales', row: p.sale });
-          for (const it of (Array.isArray(p.items) ? p.items : [])) {
-            rows.push({ table: 'sale_items', row: it });
-          }
-          break;
-        case 'shifts': if (p.shift) rows.push({ table: 'shifts', row: p.shift }); break;
-        case 'cash_movements': if (p.cash_movement) rows.push({ table: 'cash_movements', row: p.cash_movement }); break;
-        case 'void_requests': if (p.void_request) rows.push({ table: 'void_requests', row: p.void_request }); break;
+  // Applying is server-owned and idempotent: every staged entry is replayed
+  // through pos_create_sale / pos_add_cash_movement, which recompute the money
+  // and enforce the shift and receipt invariants.
+  if (staged.length > 0) {
+    const { data, error } = await db.rpc('pos_sync_apply', {
+      p_customer: auth.customerId, p_limit: Math.max(staged.length, 200),
+    });
+    if (error) {
+      // The entries are safely stored; report them retryable so the client
+      // keeps its outbox until the apply path works again.
+      for (const s of staged) {
+        results.push({ entryId: s.entryId, entityId: s.entityId, status: 'failed', error: error.message });
       }
-
-      for (const { table: t, row } of rows) {
-        // Stamp, never trust: the license decides ownership, not the payload.
-        const stamped = { ...row, customer_id: auth.customerId, received_at: receivedAt };
-        const up = await db.from(t)
-          .upsert(stamped, { onConflict: 'id,customer_id' });
-        if (up.error) throw new Error(`upsert ${t}: ${up.error.message}`);
+    } else {
+      // Read back the verdict per staged entity: APPLIED, REJECTED (permanent,
+      // with the server's reason) or still PENDING (stored, will be applied on
+      // the next push).
+      const { data: rows, error: readErr } = await db.from('sync_mirror')
+        .select('entity_type, entity_id, apply_status, apply_error')
+        .eq('customer_id', auth.customerId)
+        .in('entity_id', staged.map((s) => s.entityId));
+      if (readErr) throw new Error(readErr.message);
+      const byKey: Record<string, any> = {};
+      for (const r of rows ?? []) byKey[`${r.entity_type}:${r.entity_id}`] = r;
+      for (const s of staged) {
+        const r = byKey[`${s.entityType}:${s.entityId}`];
+        const state = String(r?.apply_status ?? 'PENDING');
+        results.push({
+          entryId: s.entryId, entityId: s.entityId,
+          status: state === 'APPLIED' ? 'applied' : state === 'REJECTED' ? 'rejected' : 'stored',
+          error: state === 'REJECTED' ? String(r?.apply_error ?? '') : undefined,
+        });
       }
-      applied++;
-      results.push({ entityId, status: 'applied' });
-    } catch (err: any) {
-      // A transient failure for ONE entry must not abort the batch or get the
-      // entry acked; report 'failed' so the client leaves only it queued.
-      results.push({ entityId, status: 'failed', error: String(err?.message ?? err) });
     }
   }
-  // Transition safety: a batch with any transiently-'failed' entry reports
-  // ok:false so BOTH the new per-entry-ack client and the older deployed tills
-  // (which ack the whole batch on ok:true) retry rather than silently drop the
-  // failed rows. Re-applied 'applied' rows are idempotent upserts, so the
-  // retry is harmless. 'rejected' (unknown type) never counts as retryable.
+
   const anyFailed = results.some((r) => r.status === 'failed');
   return json({
     ok: !anyFailed,
-    applied,
+    stored,
     results,
-    error: anyFailed ? 'Some entries failed to apply.' : undefined,
+    error: anyFailed ? 'Some entries failed to store.' : undefined,
   });
 }
 
