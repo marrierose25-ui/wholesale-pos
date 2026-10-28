@@ -48,6 +48,19 @@ Future<void> main(List<String> args) async {
     exitCode = 2;
     return;
   }
+  // A Management API token (sbp_…) and the service-role key are both
+  // "a Supabase secret", and pasting the wrong one answers the misleading
+  // `Invalid API key` from PostgREST. Name the mistake instead.
+  if (secret.startsWith('sbp_')) {
+    stderr.writeln(
+      'SUPABASE_SECRET is a Management API personal access token (sbp_…). '
+      'This tool needs the project\'s service_role key instead: dashboard -> '
+      'Project Settings -> API -> service_role (sb_secret_… or the legacy '
+      'eyJ… JWT). Management tokens cannot read or write table data.',
+    );
+    exitCode = 2;
+    return;
+  }
 
   final seats = int.tryParse(flags['seats'] ?? '3') ?? 3;
   if (seats < 1) {
