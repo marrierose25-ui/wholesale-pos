@@ -130,11 +130,12 @@ void main() {
 
     final updated = await repository.getById(demo.id);
     expect(updated, isNotNull);
-    expect(
-      updated!.permissions,
-      normalizeFeatureKeys(const ['pos', 'finance']),
-    );
-    expect(updated.can('finance'), isTrue);
+    // Money Tracking is owner-only on both backends (audit 2 #3), so a staff
+    // tick list can never carry 'finance': the crafted key is dropped rather
+    // than stored, and the tab stays hidden.
+    expect(updated!.permissions, normalizeFeatureKeys(const ['pos']));
+    expect(updated.can('finance'), isFalse);
+    expect(updated.can('pos'), isTrue);
     expect(updated.can('reports'), isFalse);
     // Editing permissions never clears the protected flag.
     expect(updated.isDemo, isTrue);

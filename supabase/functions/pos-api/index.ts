@@ -58,11 +58,13 @@ const CORS_HEADERS: Record<string, string> = {
 const OWNER = 'OWNER';
 const CASHIER = 'CASHIER';
 
-// The canonical feature-tab keys, mirroring app/lib/core/auth/features.dart.
-// A staff account's `permissions` column stores a subset of these; the OWNER
-// account bypasses them entirely.
+// The canonical GRANTABLE feature-tab keys, mirroring the non-owner-only part of
+// app/lib/core/auth/features.dart. A staff account's `permissions` column stores
+// a subset of these; the OWNER account bypasses them entirely. `finance` is
+// deliberately absent: it is owner-only on both backends, so it can never be
+// granted to a staff account.
 const FEATURE_KEYS = new Set([
-  'dashboard', 'pos', 'register', 'finance', 'history', 'reports',
+  'dashboard', 'pos', 'register', 'history', 'reports',
   'users', 'audit', 'register_history',
 ]);
 
@@ -79,9 +81,16 @@ const OWNER_ONLY = new Set([
   // Account administration + credential/status mutations.
   'reset_password', 'set_user_active', 'create_user', 'set_user_permissions',
   'set_user_phone', 'delete_user',
-  // Finance recycle-bin mutations (delete/restore/permanently-delete).
+  // Money Tracking, in full (audit 2 #3). The native repository verifies an
+  // ACTIVE OWNER inside every method, reads included; the cloud used to gate
+  // these on a `finance` staff tick, so a cashier could call the API directly.
+  // A hidden tab is not a permission — the server now matches the desktop rule.
+  'finance_categories', 'finance_deleted_categories', 'finance_summaries',
+  'finance_create_category', 'finance_rename_category',
   'finance_delete_category', 'finance_restore_category',
-  'finance_permanently_delete_category',
+  'finance_permanently_delete_category', 'finance_add_entry',
+  'finance_update_entry', 'finance_mark_completed', 'finance_search_entries',
+  'finance_person_totals',
 ]);
 
 // Feature-gated actions: allowed when the actor is an OWNER or holds ANY of the
@@ -102,12 +111,7 @@ const ACTION_FEATURES: Record<string, string[]> = {
   // is always the OPEN one; shiftSummary() refuses any other shift for a
   // non-owner so this tick cannot be used to browse past sessions.
   shift_summary: ['register'],
-  // Finance (Money Tracking) — non-destructive browsing + entry writes.
-  finance_categories: ['finance'], finance_deleted_categories: ['finance'],
-  finance_summaries: ['finance'], finance_create_category: ['finance'],
-  finance_rename_category: ['finance'], finance_search_entries: ['finance'],
-  finance_add_entry: ['finance'], finance_update_entry: ['finance'],
-  finance_mark_completed: ['finance'], finance_person_totals: ['finance'],
+  // Finance is OWNER_ONLY above — no tick can unlock it.
   // History. search_sales is also needed by the Register History day drill-down
   // (which sales brought cash in that day), so register_history unlocks it too.
   search_sales: ['history', 'register_history'],
@@ -125,8 +129,12 @@ const ACTION_FEATURES: Record<string, string[]> = {
   shift_history: ['register_history'], list_cash_movements: ['register_history'],
 };
 
-// get_setting / set_setting are intentionally absent: Settings is always
-// visible to every account (logout / theme), so they stay authenticated-only.
+// get_setting / set_setting used to be served to every authenticated account
+// with an arbitrary key, which let staff overwrite reserved server state — the
+// demo-credential version marker included (audit 2 #4). The PWA keeps its
+// preferences in browser storage and never called them, so they are gone.
+// Server-only state (pos_settings.demo_pw_version) is written below by the
+// service role, never by a client action.
 
 Deno.serve(async (req) => {
   // Answer the browser's CORS preflight before the POST-only guard, otherwise
@@ -193,7 +201,7 @@ Deno.serve(async (req) => {
       case 'search_sales': return await searchSales(db, ctx, body);
       case 'void_sale': return await voidSale(db, ctx, body);
       case 'request_void': return await requestVoid(db, ctx, body);
-      case 'list_void_requests': return await listVoidRequests(db, ctx);
+      case 'list_void_requests': return await listVoidRequests(db, ctx, body);
       case 'approve_void': return await decideVoid(db, ctx, body, 'APPROVED');
       case 'reject_void': return await decideVoid(db, ctx, body, 'REJECTED');
 
@@ -232,9 +240,8 @@ Deno.serve(async (req) => {
       case 'finance_search_entries': return await financeSearchEntries(db, ctx, body);
       case 'finance_person_totals': return await financePersonTotals(db, ctx, body);
 
-      // Settings, counters, reporting
-      case 'get_setting': return await getSetting(db, ctx, body);
-      case 'set_setting': return await setSetting(db, ctx, body);
+      // Counters, reporting, audit. There is no client-writable key/value
+      // surface: tenant settings are server-owned (audit 2 #4).
       case 'dashboard_summary': return await dashboardSummary(db, ctx, body);
       case 'revenue_trend': return await revenueTrend(db, ctx, body);
       case 'report_summary': return await reportSummary(db, ctx, body);
@@ -252,16 +259,34 @@ Deno.serve(async (req) => {
 // Tenancy + authentication
 // ===========================================================================
 
-// Resolves an activation code to its tenant, refusing revoked licenses. The
-// activation code is itself the shared secret proving tenancy (same trust the
-// licensing/sync functions already place in it).
-async function tenantForActivationCode(db: any, code: string): Promise<string | null> {
-  if (!code) return null;
-  const { data } = await db
-    .from('licenses').select('customer_id, revoked_at')
+// Resolves an activation code to its tenant. The activation code is itself the
+// shared secret proving tenancy (same trust the licensing/sync functions
+// already place in it).
+//
+// ONE licence gate for every unauthenticated entry point (audit 2 #1).
+// The licensing function has always refused a lapsed licence, but the POS
+// authentication path used to check only `revoked_at`, so an expired shop
+// could still sign in — and even bootstrap a new owner — through the PWA.
+// `expires_at IS NULL` is the documented never-expiring licence.
+type LicenseCheck =
+  | { ok: true; customerId: string }
+  | { ok: false; error: string };
+
+async function licenseForActivationCode(db: any, code: string): Promise<LicenseCheck> {
+  if (!code) return { ok: false, error: 'Invalid activation code.' };
+  const { data, error } = await db
+    .from('licenses').select('customer_id, revoked_at, expires_at')
     .eq('activation_code', code).maybeSingle();
-  if (!data || data.revoked_at) return null;
-  return String(data.customer_id);
+  if (error) throw new Error(error.message);
+  if (!data) return { ok: false, error: 'Invalid activation code.' };
+  if (data.revoked_at) return { ok: false, error: 'This licence has been revoked.' };
+  if (data.expires_at && Date.parse(String(data.expires_at)) < Date.now()) {
+    return {
+      ok: false,
+      error: 'This licence has expired. Check the expiry date on the Devices screen.',
+    };
+  }
+  return { ok: true, customerId: String(data.customer_id) };
 }
 
 // --- Best-effort login throttle (audit #14) --------------------------------
@@ -322,8 +347,9 @@ function loginIdentifier(raw: string): string {
 
 async function hasUsers(db: any, body: any): Promise<Response> {
   const code = str(body.activation_code);
-  const customerId = await tenantForActivationCode(db, code);
-  if (!customerId) return json({ ok: false, error: 'Invalid activation code.' }, 403);
+  const lic = await licenseForActivationCode(db, code);
+  if (!lic.ok) return json({ ok: false, error: lic.error }, 403);
+  const customerId = lic.customerId;
   const { count } = await db.from('pos_users')
     .select('*', { count: 'exact', head: true }).eq('customer_id', customerId)
     .is('deleted_at', null);
@@ -335,8 +361,9 @@ async function login(db: any, body: any): Promise<Response> {
   const username = loginIdentifier(str(body.username));
   const password = String(body.password ?? '');
   if (!code || !username || !password) return json({ ok: false, error: 'Missing fields' }, 400);
-  const customerId = await tenantForActivationCode(db, code);
-  if (!customerId) return json({ ok: false, error: 'Invalid activation code.' }, 403);
+  const lic = await licenseForActivationCode(db, code);
+  if (!lic.ok) return json({ ok: false, error: lic.error }, 403);
+  const customerId = lic.customerId;
 
   // Brute-force throttle (audit #14): reject before deriving so a locked
   // account cannot be used to burn PBKDF2 CPU.
@@ -358,12 +385,12 @@ async function login(db: any, body: any): Promise<Response> {
   if (!ok) { loginRecordFail(tkey); return json({ ok: false, error: 'Invalid credentials.' }, 401); }
   loginClear(tkey);
 
-  // Best-effort: guarantee the tenant's permanent training demo account exists
-  // the first time anyone signs in. A failure here must never block a login.
-  // When it mints (or rotates) the random demo password, the OWNER's response
-  // carries it once so they can hand it to a trainee (audit #2).
+  // Best-effort: guarantee the tenant's permanent training demo account exists.
+  // A failure here must never block a login. Only an OWNER's sign-in may seed
+  // or rotate it, and only that response carries the new password once so they
+  // can hand it to a trainee (audit #2, audit 2 #10).
   let demoPassword: string | null = null;
-  try { demoPassword = await ensureDemoUser(db, customerId); } catch { /* non-fatal */ }
+  try { demoPassword = await ensureDemoUser(db, customerId, user.role === OWNER); } catch { /* non-fatal */ }
 
   const token = await signJwt({ sub: user.id, cid: customerId, role: user.role, tv: Number(user.token_version ?? 0) });
   return json({
@@ -385,8 +412,9 @@ async function setupOwner(db: any, body: any): Promise<Response> {
   if (!code || !rawName || !password) return json({ ok: false, error: 'Missing fields' }, 400);
   const username = normalizePhone(rawName);
   if (!username) return json({ ok: false, error: PHONE_INVALID }, 400);
-  const customerId = await tenantForActivationCode(db, code);
-  if (!customerId) return json({ ok: false, error: 'Invalid activation code.' }, 403);
+  const lic = await licenseForActivationCode(db, code);
+  if (!lic.ok) return json({ ok: false, error: lic.error }, 403);
+  const customerId = lic.customerId;
 
   const minLen = 12; // owner policy, matches UserRepository.ownerPasswordLength
   if (password.length < minLen) {
@@ -410,7 +438,7 @@ async function setupOwner(db: any, body: any): Promise<Response> {
   // Seed the demo account alongside the first owner so it is ready immediately;
   // its random password is returned once, here, for the owner to keep.
   let demoPassword: string | null = null;
-  try { demoPassword = await ensureDemoUser(db, customerId); } catch { /* non-fatal */ }
+  try { demoPassword = await ensureDemoUser(db, customerId, true); } catch { /* non-fatal */ }
   const token = await signJwt({ sub: id, cid: customerId, role: OWNER, tv: 0 });
   return json({ ok: true, token, user_id: id, username, role: OWNER, permissions: [], customer_id: customerId,
     ...(demoPassword ? { demo_password: demoPassword } : {}) });
@@ -620,16 +648,21 @@ async function searchSales(db: any, ctx: Ctx, body: any): Promise<Response> {
     // filter, so resolve the item- and cashier-matching sale ids first and OR
     // them into the main query via id.in.(...).
     const esc = query.replace(/[%_,()]/g, ' ');
-    const { data: itemRows } = await db.from('sale_items').select('sale_id')
+    // Each lookup is checked: an ignored error used to shrink the id set, so a
+    // search quietly returned fewer sales than matched (audit 2 #18).
+    const { data: itemRows, error: itemErr } = await db.from('sale_items').select('sale_id')
       .eq('customer_id', ctx.customerId)
       .or(`product_name_snapshot.ilike.%${esc}%,quantity_text.ilike.%${esc}%,notes.ilike.%${esc}%`);
-    const { data: userRows } = await db.from('pos_users').select('id')
+    if (itemErr) throw new Error(itemErr.message);
+    const { data: userRows, error: userErr } = await db.from('pos_users').select('id')
       .eq('customer_id', ctx.customerId).ilike('username', `%${esc}%`);
+    if (userErr) throw new Error(userErr.message);
     const userIds = strip(userRows).map((r: any) => r.id);
     let cashierSaleIds: string[] = [];
     if (userIds.length) {
-      const { data: cs } = await db.from('sales').select('id')
+      const { data: cs, error: csErr } = await db.from('sales').select('id')
         .eq('customer_id', ctx.customerId).in('cashier_id', userIds);
+      if (csErr) throw new Error(csErr.message);
       cashierSaleIds = strip(cs).map((r: any) => r.id);
     }
     const matchedIds = Array.from(new Set<string>([
@@ -673,8 +706,9 @@ async function voidSale(db: any, ctx: Ctx, body: any): Promise<Response> {
 async function requestVoid(db: any, ctx: Ctx, body: any): Promise<Response> {
   const reason = str(body.reason);
   if (!reason || reason.length > 240) return json({ ok: false, error: 'Void reason required.' }, 400);
-  const { data: sale } = await db.from('sales').select('status')
+  const { data: sale, error: saleErr } = await db.from('sales').select('status')
     .eq('customer_id', ctx.customerId).eq('id', String(body.sale_id ?? '')).maybeSingle();
+  if (saleErr) throw new Error(saleErr.message);
   if (!sale || sale.status !== 'COMPLETED') return json({ ok: false, error: 'Sale not voidable.' }, 400);
   const id = crypto.randomUUID();
   const ins = await db.from('void_requests').insert({
@@ -687,10 +721,13 @@ async function requestVoid(db: any, ctx: Ctx, body: any): Promise<Response> {
   return json({ ok: true, id });
 }
 
-async function listVoidRequests(db: any, ctx: Ctx): Promise<Response> {
+async function listVoidRequests(db: any, ctx: Ctx, body: any): Promise<Response> {
+  // Paged like every other list: the unbounded query used to truncate at the
+  // fetch cap without saying so (audit 2 #18).
+  const limit = pageLimit(body, MAX_PAGE);
   const { data, error } = await db.from('void_requests').select('*')
     .eq('customer_id', ctx.customerId).eq('status', 'PENDING')
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false }).limit(limit);
   if (error) throw new Error(error.message);
   const reqs = strip(data);
   const names = await usernamesById(db, ctx, reqs.map((r: any) => r.requested_by));
@@ -992,20 +1029,31 @@ function randomDemoPassword(): string {
 }
 
 async function demoVersionMarked(db: any, customerId: string): Promise<boolean> {
-  const { data } = await db.from('pos_settings').select('value')
+  const { data, error } = await db.from('pos_settings').select('value')
     .eq('customer_id', customerId).eq('key', 'demo_pw_version').maybeSingle();
+  // A failed read must not read as "not marked": that would rotate the demo
+  // password again on the next sign-in (audit 2 #10).
+  if (error) throw new Error(error.message);
   return data?.value === DEMO_PW_VERSION;
 }
 async function markDemoVersion(db: any, customerId: string): Promise<void> {
-  await db.from('pos_settings').upsert(
+  const up = await db.from('pos_settings').upsert(
     { customer_id: customerId, key: 'demo_pw_version', value: DEMO_PW_VERSION },
     { onConflict: 'customer_id,key' });
+  // Checked, not fire-and-forget: an unwritten marker would keep the legacy
+  // password alive and re-run the PBKDF2 probe on every sign-in.
+  if (up.error) throw new Error(up.error.message);
 }
 
-async function ensureDemoUser(db: any, customerId: string): Promise<string | null> {
+async function ensureDemoUser(db: any, customerId: string, ownerSession: boolean): Promise<string | null> {
+  // Only an owner's sign-in may seed or rotate the training credentials. A
+  // cashier signing in used to trigger the rotation and then never see the new
+  // password, silently locking the trainee out (audit 2 #10).
+  if (!ownerSession) return null;
   const marked = await demoVersionMarked(db, customerId);
-  const { data: existing } = await db.from('pos_users').select('id, pw_salt, pw_hash')
+  const { data: existing, error: readErr } = await db.from('pos_users').select('id, pw_salt, pw_hash')
     .eq('customer_id', customerId).eq('is_demo', true).maybeSingle();
+  if (readErr) throw new Error(readErr.message);
 
   if (existing) {
     if (marked) return null;
@@ -1018,8 +1066,14 @@ async function ensureDemoUser(db: any, customerId: string): Promise<string | nul
     }
     const password = randomDemoPassword();
     const { salt, hash } = await hashPassword(password);
-    await db.from('pos_users').update({ pw_salt: salt, pw_hash: hash })
-      .eq('customer_id', customerId).eq('id', existing.id);
+    const up = await db.from('pos_users').update({ pw_salt: salt, pw_hash: hash })
+      .eq('customer_id', customerId).eq('id', existing.id).select('id');
+    if (up.error) throw new Error(up.error.message);
+    // Never mark a rotation that did not land, or the tenant keeps an unknown
+    // password while the marker claims it was rotated.
+    if (!Array.isArray(up.data) || up.data.length !== 1) {
+      throw new Error('Demo account could not be rotated.');
+    }
     await markDemoVersion(db, customerId);
     return password;
   }
@@ -1028,11 +1082,16 @@ async function ensureDemoUser(db: any, customerId: string): Promise<string | nul
   const { salt, hash } = await hashPassword(password);
   // Adopt a pre-existing 'demo' username (created before the flag) so the
   // unique index can't reject the seed, else insert a fresh one.
-  const { data: byName } = await db.from('pos_users').select('id')
+  const { data: byName, error: nameErr } = await db.from('pos_users').select('id')
     .eq('customer_id', customerId).ilike('username', 'demo').maybeSingle();
+  if (nameErr) throw new Error(nameErr.message);
   if (byName) {
-    await db.from('pos_users').update({ is_demo: true, pw_salt: salt, pw_hash: hash })
-      .eq('customer_id', customerId).eq('id', byName.id);
+    const up = await db.from('pos_users').update({ is_demo: true, pw_salt: salt, pw_hash: hash })
+      .eq('customer_id', customerId).eq('id', byName.id).select('id');
+    if (up.error) throw new Error(up.error.message);
+    if (!Array.isArray(up.data) || up.data.length !== 1) {
+      throw new Error('Demo account could not be adopted.');
+    }
   } else {
     const ins = await db.from('pos_users').insert({
       id: crypto.randomUUID(), customer_id: customerId, username: 'demo', role: CASHIER,
@@ -1102,27 +1161,45 @@ async function resetPassword(db: any, ctx: Ctx, body: any): Promise<Response> {
 
 async function setUserActive(db: any, ctx: Ctx, body: any): Promise<Response> {
   const target = String(body.target_user_id ?? '');
-  const active = body.active === true;
+  if (!target) return json({ ok: false, error: 'Target user is required.' }, 400);
+  // `body.active === true` used to fold "missing" into "deactivate"; a boolean
+  // is now required so a malformed body can never flip an account (audit 2 #16).
+  if (typeof body.active !== 'boolean') {
+    return json({ ok: false, error: 'active must be true or false.' }, 400);
+  }
+  const active: boolean = body.active;
   if (target === ctx.userId && !active) return json({ ok: false, error: 'You cannot deactivate your own account.' }, 400);
+
+  // Both directions load and validate the target. Activation used to skip this,
+  // so an unknown id updated 0 rows, was audited as USER_ACTIVATED and answered
+  // ok:true (audit 2 #16).
+  const { data: t, error: readErr } = await db.from('pos_users')
+    .select('role, is_demo, username, token_version')
+    .eq('customer_id', ctx.customerId).eq('id', target).is('deleted_at', null).maybeSingle();
+  if (readErr) throw new Error(readErr.message);
+  if (!t) return json({ ok: false, error: 'User not found.' }, 404);
   if (!active) {
-    const { data: t } = await db.from('pos_users').select('role, is_demo').eq('customer_id', ctx.customerId).eq('id', target).is('deleted_at', null).maybeSingle();
-    if (!t) return json({ ok: false, error: 'User not found.' }, 404);
     if (t.is_demo) return json({ ok: false, error: 'The demo account cannot be deactivated.' }, 400);
-    if (t?.role === OWNER) {
-      const { count } = await db.from('pos_users').select('*', { count: 'exact', head: true })
+    if (t.role === OWNER) {
+      const { count, error: countErr } = await db.from('pos_users').select('*', { count: 'exact', head: true })
         .eq('customer_id', ctx.customerId).eq('role', OWNER).eq('active', true);
+      if (countErr) throw new Error(countErr.message);
       if ((count ?? 0) <= 1) return json({ ok: false, error: 'At least one active owner is required.' }, 409);
     }
   }
   // Deactivating an account must also invalidate its live sessions, and
   // resetting the version on activation is harmless (there is no valid token),
   // so bump unconditionally — any previously issued JWT is now stale (audit #6).
-  const { data: cur } = await db.from('pos_users').select('token_version, username')
-    .eq('customer_id', ctx.customerId).eq('id', target).maybeSingle();
-  const up = await db.from('pos_users').update({ active, token_version: (cur?.token_version ?? 0) + 1 }).eq('customer_id', ctx.customerId).eq('id', target);
+  const up = await db.from('pos_users')
+    .update({ active, token_version: Number(t.token_version ?? 0) + 1 })
+    .eq('customer_id', ctx.customerId).eq('id', target).is('deleted_at', null)
+    .select('id');
   if (up.error) throw new Error(up.error.message);
+  if (!Array.isArray(up.data) || up.data.length !== 1) {
+    return json({ ok: false, error: 'User not found.' }, 404);
+  }
   // Log the phone number, not the row id: the audit screen is read by the owner.
-  await audit(db, ctx.customerId, ctx.userId, active ? 'USER_ACTIVATED' : 'USER_DEACTIVATED', `Account "${cur?.username ?? target}" ${active ? 'activated' : 'deactivated'}.`);
+  await audit(db, ctx.customerId, ctx.userId, active ? 'USER_ACTIVATED' : 'USER_DEACTIVATED', `Account "${t.username ?? target}" ${active ? 'activated' : 'deactivated'}.`);
   return json({ ok: true });
 }
 
@@ -1199,10 +1276,14 @@ async function financeDeletedCategories(db: any, ctx: Ctx): Promise<Response> {
   return json({ ok: true, categories: cats });
 }
 async function financeSummaries(db: any, ctx: Ctx): Promise<Response> {
-  const { data: cats } = await db.from('pos_finance_categories').select('id, name')
+  // Both reads are checked: an ignored error used to return zeroed totals, so
+  // the owner read "nothing pending" off a failed query (audit 2 #12).
+  const { data: cats, error: catErr } = await db.from('pos_finance_categories').select('id, name')
     .eq('customer_id', ctx.customerId).is('deleted_at', null).order('name');
-  const { data: entries } = await db.from('pos_finance_entries').select('category_id, amount_minor_units')
+  if (catErr) throw new Error(catErr.message);
+  const { data: entries, error: entErr } = await db.from('pos_finance_entries').select('category_id, amount_minor_units')
     .eq('customer_id', ctx.customerId).eq('status', 'PENDING');
+  if (entErr) throw new Error(entErr.message);
   const totals: Record<string, { count: number; total: number }> = {};
   for (const e of entries ?? []) {
     const t = (totals[e.category_id] ??= { count: 0, total: 0 });
@@ -1231,10 +1312,17 @@ async function financeCreateCategory(db: any, ctx: Ctx, body: any): Promise<Resp
 async function financeRenameCategory(db: any, ctx: Ctx, body: any): Promise<Response> {
   const newName = str(body.new_name);
   if (!newName) return json({ ok: false, error: 'A name is required.' }, 400);
+  const id = String(body.category_id ?? '');
+  // Round-trip the row: an unchecked update let a rename against a missing or
+  // binned id answer ok:true and leave an audit line naming a change that never
+  // happened (audit 2 #14).
   const up = await db.from('pos_finance_categories').update({ name: newName, updated_at: new Date().toISOString() })
-    .eq('customer_id', ctx.customerId).eq('id', String(body.category_id ?? ''));
+    .eq('customer_id', ctx.customerId).eq('id', id).is('deleted_at', null).select('id, name');
   if (up.error) throw new Error(up.error.message);
-  await audit(db, ctx.customerId, ctx.userId, 'FINANCE_CATEGORY_RENAMED', `Person ${body.category_id} renamed.`);
+  if (!Array.isArray(up.data) || up.data.length !== 1) {
+    return json({ ok: false, error: 'Person not found.' }, 404);
+  }
+  await audit(db, ctx.customerId, ctx.userId, 'FINANCE_CATEGORY_RENAMED', `Person "${up.data[0].name}" renamed.`);
   return json({ ok: true });
 }
 // Soft-delete: move a person to the recycle bin, keeping their history.
@@ -1264,20 +1352,15 @@ async function financeRestoreCategory(db: any, ctx: Ctx, body: any): Promise<Res
   await audit(db, ctx.customerId, ctx.userId, 'FINANCE_CATEGORY_RESTORED', `Person "${existing.name}" restored.`);
   return json({ ok: true });
 }
-// Permanent delete: only for a binned person; drops their entries then the row.
+// Permanent delete: only for a binned person. Entries and the person leave in
+// one RPC transaction (audit 2 #15); the RPC writes the audit line itself.
 async function financePermanentlyDeleteCategory(db: any, ctx: Ctx, body: any): Promise<Response> {
   const id = String(body.category_id ?? '');
-  const { data: existing } = await db.from('pos_finance_categories').select('id, name, deleted_at')
-    .eq('customer_id', ctx.customerId).eq('id', id).maybeSingle();
-  if (!existing) return json({ ok: false, error: 'Person not found.' }, 404);
-  if (!existing.deleted_at) return json({ ok: false, error: 'Move the person to the recycle bin first.' }, 409);
-  const delEntries = await db.from('pos_finance_entries').delete()
-    .eq('customer_id', ctx.customerId).eq('category_id', id);
-  if (delEntries.error) throw new Error(delEntries.error.message);
-  const delCat = await db.from('pos_finance_categories').delete()
-    .eq('customer_id', ctx.customerId).eq('id', id);
-  if (delCat.error) throw new Error(delCat.error.message);
-  await audit(db, ctx.customerId, ctx.userId, 'FINANCE_CATEGORY_PERMANENTLY_DELETED', `Person "${existing.name}" permanently deleted.`);
+  if (!id) return json({ ok: false, error: 'Person not found.' }, 404);
+  const { error } = await db.rpc('pos_delete_finance_category', {
+    p_customer: ctx.customerId, p_id: id, p_user: ctx.userId,
+  });
+  if (error) return rpcFailure(error.message);
   return json({ ok: true });
 }
 async function financeAddEntry(db: any, ctx: Ctx, body: any): Promise<Response> {
@@ -1402,21 +1485,8 @@ async function categoryNames(db: any, ctx: Ctx): Promise<Record<string, string>>
 }
 
 // ===========================================================================
-// Settings, reporting, audit
+// Reporting, audit
 // ===========================================================================
-async function getSetting(db: any, ctx: Ctx, body: any): Promise<Response> {
-  const { data } = await db.from('pos_settings').select('value')
-    .eq('customer_id', ctx.customerId).eq('key', String(body.key ?? '')).maybeSingle();
-  return json({ ok: true, value: data ? data.value : null });
-}
-async function setSetting(db: any, ctx: Ctx, body: any): Promise<Response> {
-  const up = await db.from('pos_settings').upsert(
-    { customer_id: ctx.customerId, key: String(body.key ?? ''), value: String(body.value ?? '') },
-    { onConflict: 'customer_id,key' });
-  if (up.error) throw new Error(up.error.message);
-  return json({ ok: true });
-}
-
 async function dashboardSummary(db: any, ctx: Ctx, body: any): Promise<Response> {
   const start = body.period_start ?? null;
   const end = body.period_end ?? null;

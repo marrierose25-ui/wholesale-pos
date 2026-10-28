@@ -513,8 +513,10 @@ class _AddUserDialogState extends State<_AddUserDialog> {
   }
 }
 
-/// A reusable tick list over [kFeatures]. When [enabled] is false the whole
-/// grid is greyed and inert (used when "Owner access" overrides the ticks).
+/// A reusable tick list over [kGrantableFeatures]. When [enabled] is false the
+/// whole grid is greyed and inert (used when "Owner access" overrides the
+/// ticks). Owner-only surfaces (Money Tracking) are not offered: they are
+/// enforced as owner-only on both backends.
 class _FeaturePicker extends StatelessWidget {
   final Set<String> selected;
   final bool enabled;
@@ -543,7 +545,7 @@ class _FeaturePicker extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 4),
-            for (final f in kFeatures)
+            for (final f in kGrantableFeatures)
               CheckboxListTile(
                 dense: true,
                 controlAffinity: ListTileControlAffinity.leading,

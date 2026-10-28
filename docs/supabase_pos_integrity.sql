@@ -207,6 +207,7 @@ AS $$
 DECLARE
   item       jsonb;
   computed   bigint;
+  line_disc  bigint;
   bq         bigint;
   price      bigint;
   subtotal   bigint := 0;
@@ -276,6 +277,15 @@ BEGIN
         RAISE EXCEPTION 'Line %: numeric overflow.', n;
       END IF;
       computed := (price * bq + 500) / 1000;  -- round half up, integer
+      -- A line discount is subtracted BEFORE the comparison, exactly as the
+      -- native repository does: line_total = base - discount. Storing a
+      -- discount while comparing against the undiscounted base let the cloud
+      -- persist a discount that was never applied to the total (audit 2 #9).
+      line_disc := COALESCE((item->>'line_discount_minor_units')::bigint, 0);
+      IF line_disc < 0 OR line_disc > computed THEN
+        RAISE EXCEPTION 'Line %: discount must be between 0 and the line total.', n;
+      END IF;
+      computed := computed - line_disc;
       IF COALESCE((item->>'line_total_minor_units')::bigint, -1) <> computed THEN
         RAISE EXCEPTION 'Line %: total mismatch (server %, client %).',
           n, computed, COALESCE((item->>'line_total_minor_units')::bigint, -1);
@@ -322,8 +332,11 @@ BEGIN
       p_shift_id, p_customer_name, p_payment, subtotal,
       p_discount, total_val, p_amount_paid, chg, 'COMPLETED', now());
   EXCEPTION WHEN unique_violation THEN
-    -- Same sale id replayed, or the same receipt already stored: return the
-    -- existing row and let the idempotent contract hold.
+    -- ONLY the same sale id may be answered as an idempotent replay. A receipt
+    -- number that already belongs to a DIFFERENT sale is a real conflict: the
+    -- old handler returned that other sale with duplicate:true, so a cashier
+    -- was told a sale was saved while its own row and lines were never
+    -- inserted (audit 2 #7).
     SELECT jsonb_build_object('id', s.id, 'receipt_number', s.receipt_number,
         'subtotal_minor_units', s.subtotal_minor_units,
         'total_minor_units', s.total_minor_units,
@@ -331,13 +344,12 @@ BEGIN
         'change_minor_units', s.change_minor_units, 'duplicate', true)
       INTO res
       FROM public.sales s
-      WHERE s.customer_id = p_customer
-        AND (s.id = sale_id OR s.receipt_number = p_receipt)
-      LIMIT 1;
-    IF res IS NULL THEN
-      RAISE;
+      WHERE s.customer_id = p_customer AND s.id = sale_id;
+    IF res IS NOT NULL THEN
+      RETURN res;
     END IF;
-    RETURN res;
+    RAISE EXCEPTION 'Receipt % is already used by another sale.', p_receipt
+      USING ERRCODE = 'unique_violation';
   END;
 
   FOR item IN SELECT * FROM jsonb_array_elements(p_items)
@@ -390,6 +402,7 @@ DECLARE
   vr            record;
   active_shift  text;
   sale_updated  int;
+  decided       int;
 BEGIN
   SELECT * INTO vr FROM public.void_requests
   WHERE customer_id = p_customer AND id = p_request_id AND status = 'PENDING';
@@ -400,9 +413,17 @@ BEGIN
   UPDATE public.void_requests
   SET status = 'APPROVED', decided_by = p_user, decided_at = now()
   WHERE customer_id = p_customer AND id = p_request_id AND status = 'PENDING';
+  GET DIAGNOSTICS decided = ROW_COUNT;
+  IF decided <> 1 THEN
+    RAISE EXCEPTION 'Void request was decided by someone else.';
+  END IF;
 
+  -- Share-lock the open drawer for the same reason as the sale/movement RPCs:
+  -- a close must not reconcile the shift while a void is being attributed to
+  -- it. No open shift means an explicit after-close adjustment (NULL), never a
+  -- half-attributed one.
   SELECT id INTO active_shift FROM public.shifts
-  WHERE customer_id = p_customer AND status = 'OPEN' LIMIT 1;
+  WHERE customer_id = p_customer AND status = 'OPEN' LIMIT 1 FOR SHARE;
 
   UPDATE public.sales
   SET status = 'VOIDED', void_reason = vr.reason, voided_at = now(),
@@ -466,8 +487,9 @@ DECLARE
   active_shift text;
   updated      int;
 BEGIN
+  -- Same lock protocol as pos_close_shift / pos_create_sale (audit 2 #6).
   SELECT id INTO active_shift FROM public.shifts
-  WHERE customer_id = p_customer AND status = 'OPEN' LIMIT 1;
+  WHERE customer_id = p_customer AND status = 'OPEN' LIMIT 1 FOR SHARE;
 
   UPDATE public.sales
   SET status = 'VOIDED', void_reason = p_reason, voided_at = now(),
@@ -490,6 +512,16 @@ GRANT EXECUTE ON FUNCTION pos_void_sale TO service_role;
 -- 3f. pos_complete_finance: entry COMPLETED + (for CASH) DEPOSIT movement +
 -- audit, atomically (audit #4-finance).
 -- ---------------------------------------------------------------------------
+-- A completed collection may deposit into the drawer AT MOST ONCE. The row
+-- lock below is the primary guard; this partial unique index is the belt: even
+-- if a future code path forgets the lock, the second DEPOSIT is refused
+-- instead of silently overstating the drawer (audit 2 #5).
+ALTER TABLE public.cash_movements
+  ADD COLUMN IF NOT EXISTS source_finance_entry_id text;
+CREATE UNIQUE INDEX IF NOT EXISTS cash_movements_one_per_finance_entry
+  ON public.cash_movements (customer_id, source_finance_entry_id)
+  WHERE source_finance_entry_id IS NOT NULL;
+
 CREATE OR REPLACE FUNCTION pos_complete_finance(
   p_customer uuid,
   p_user     text,
@@ -503,9 +535,15 @@ DECLARE
   entry      record;
   cat_name   text;
   shift_found text;
+  updated    int;
 BEGIN
+  -- FOR UPDATE: two concurrent completions used to both read PENDING, one
+  -- updated the row and the loser updated nothing yet still deposited the
+  -- collection a second time. Now the loser blocks, re-reads and finds no
+  -- pending row (audit 2 #5).
   SELECT * INTO entry FROM public.pos_finance_entries
-  WHERE customer_id = p_customer AND id = p_entry_id AND status = 'PENDING';
+  WHERE customer_id = p_customer AND id = p_entry_id AND status = 'PENDING'
+  FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Entry is not pending.';
   END IF;
@@ -513,26 +551,25 @@ BEGIN
   UPDATE public.pos_finance_entries
   SET status = 'COMPLETED', completed_at = now(), completed_by = p_user, updated_at = now()
   WHERE customer_id = p_customer AND id = p_entry_id AND status = 'PENDING';
+  GET DIAGNOSTICS updated = ROW_COUNT;
+  IF updated <> 1 THEN
+    RAISE EXCEPTION 'Entry is not pending.';
+  END IF;
 
   IF entry.payment_method = 'CASH' THEN
     SELECT name INTO cat_name FROM public.pos_finance_categories
     WHERE customer_id = p_customer AND id = entry.category_id;
 
-    SELECT id INTO shift_found FROM public.shifts
-    WHERE customer_id = p_customer AND status = 'OPEN' LIMIT 1;
-
-    IF shift_found IS NULL THEN
-      shift_found := gen_random_uuid()::text;
-      INSERT INTO public.shifts (id, customer_id, cashier_id, opening_cash_minor_units,
-        status, opened_at, device_id)
-      VALUES (shift_found, p_customer, p_user, 0, 'OPEN', now(), NULL);
-    END IF;
+    -- Follow the shared open-or-create protocol instead of inserting a shift
+    -- here: the old code bypassed the tenant advisory lock and could race
+    -- pos_open_shift / pos_ensure_shift (audit 2 #6).
+    shift_found := public.pos_ensure_shift(p_customer, p_user, NULL);
 
     INSERT INTO public.cash_movements (id, customer_id, shift_id, user_id,
-      type, amount_minor_units, reason, created_at)
+      type, amount_minor_units, reason, created_at, source_finance_entry_id)
     VALUES (gen_random_uuid(), p_customer, shift_found, p_user,
       'DEPOSIT', entry.amount_minor_units,
-      'Collected from ' || COALESCE(cat_name, 'a person'), now());
+      'Collected from ' || COALESCE(cat_name, 'a person'), now(), p_entry_id);
   END IF;
 
   INSERT INTO public.pos_audit_logs (id, customer_id, user_id, action, details, created_at)
@@ -542,6 +579,47 @@ END;
 $$;
 REVOKE ALL ON FUNCTION pos_complete_finance FROM public;
 GRANT EXECUTE ON FUNCTION pos_complete_finance TO service_role;
+
+-- ---------------------------------------------------------------------------
+-- 3f-2. pos_delete_finance_category: permanent delete of a binned person.
+-- Entries and the person must leave together: the client used to send two
+-- separate requests, so a failure in between erased a person's ledger while
+-- the person stayed visible (audit 2 #15). Mirrors the native transaction.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION pos_delete_finance_category(
+  p_customer uuid,
+  p_id       text,
+  p_user     text
+)
+RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  cat record;
+BEGIN
+  SELECT id, name, deleted_at INTO cat FROM public.pos_finance_categories
+  WHERE customer_id = p_customer AND id = p_id
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Person not found.';
+  END IF;
+  IF cat.deleted_at IS NULL THEN
+    RAISE EXCEPTION 'Move the person to the recycle bin first.';
+  END IF;
+
+  DELETE FROM public.pos_finance_entries
+  WHERE customer_id = p_customer AND category_id = p_id;
+  DELETE FROM public.pos_finance_categories
+  WHERE customer_id = p_customer AND id = p_id;
+
+  INSERT INTO public.pos_audit_logs (id, customer_id, user_id, action, details, created_at)
+  VALUES (gen_random_uuid(), p_customer, p_user, 'FINANCE_CATEGORY_PERMANENTLY_DELETED',
+    'Person "' || cat.name || '" and their entries permanently deleted.', now());
+END;
+$$;
+REVOKE ALL ON FUNCTION pos_delete_finance_category FROM public;
+GRANT EXECUTE ON FUNCTION pos_delete_finance_category TO service_role;
 
 -- ---------------------------------------------------------------------------
 -- 3g. pos_ensure_shift: find or atomically create the OPEN shift (audit #3).

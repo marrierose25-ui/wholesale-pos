@@ -9,7 +9,13 @@ class FeatureDef {
   final String key;
   final String label;
   final IconData icon;
-  const FeatureDef(this.key, this.label, this.icon);
+
+  /// Owner-administered surface. Mirrors the server's OWNER_ONLY set, so it is
+  /// absent from the tick grid and can never be held by a staff account — the
+  /// finance tab is owner-only in the native repository and in pos-api.
+  final bool ownerOnly;
+
+  const FeatureDef(this.key, this.label, this.icon, {this.ownerOnly = false});
 }
 
 /// Ordered exactly as the navigation renders them. Settings is deliberately
@@ -20,7 +26,12 @@ const List<FeatureDef> kFeatures = [
   FeatureDef('dashboard', 'Dashboard', Icons.dashboard),
   FeatureDef('pos', 'POS', Icons.shopping_cart),
   FeatureDef('register', 'Register', Icons.point_of_sale),
-  FeatureDef('finance', 'Money Tracking', Icons.account_balance_wallet),
+  FeatureDef(
+    'finance',
+    'Money Tracking',
+    Icons.account_balance_wallet,
+    ownerOnly: true,
+  ),
   FeatureDef('reports', 'Reports', Icons.bar_chart),
   FeatureDef('users', 'Users', Icons.people),
   FeatureDef('audit', 'Audit Logs', Icons.security),
@@ -32,6 +43,11 @@ const List<FeatureDef> kFeatures = [
 /// old History tab is gone; Reports keeps a cashier's sales visibility).
 const List<String> kDefaultStaffPermissions = ['pos', 'register', 'reports'];
 
+/// The subset of [kFeatures] the owner can hand to a staff account. Owner-only
+/// surfaces are rendered top-level for the OWNER and never offered as a tick.
+List<FeatureDef> get kGrantableFeatures =>
+    kFeatures.where((f) => !f.ownerOnly).toList();
+
 /// Owner accounts bypass the tick list entirely, so they store no permissions.
 const List<String> kOwnerPermissions = <String>[];
 
@@ -39,12 +55,17 @@ const List<String> kOwnerPermissions = <String>[];
 /// lists at the repository boundary.
 bool isValidFeatureKey(String key) => kFeatures.any((f) => f.key == key);
 
-/// Keeps only recognised keys, drops duplicates, and preserves [kFeatures]
+/// True when [key] may be granted to a staff account. Owner-only surfaces are
+/// real features that a staff list must never contain.
+bool isGrantableFeatureKey(String key) =>
+    kFeatures.any((f) => f.key == key && !f.ownerOnly);
+
+/// Keeps only grantable keys, drops duplicates, and preserves [kFeatures]
 /// ordering so a stored list reads consistently everywhere.
 List<String> normalizeFeatureKeys(Iterable<String> keys) {
   final seen = <String>{};
   for (final key in keys) {
-    if (isValidFeatureKey(key)) seen.add(key);
+    if (isGrantableFeatureKey(key)) seen.add(key);
   }
   return [
     for (final f in kFeatures)

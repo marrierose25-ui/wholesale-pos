@@ -20,12 +20,25 @@ class CloudSaleRepository implements SaleRepository {
 
   CloudSaleRepository(this._api);
 
+  /// Posts the cart and refuses to report success unless the server booked the
+  /// sale we sent. `pos_create_sale` answers with the row it matched on either
+  /// the sale id or the receipt number, so a receipt collision used to come
+  /// back as `ok: true` carrying someone else's sale and the screen still said
+  /// "Sale recorded" (audit 2 #7). The RPC now raises on a foreign receipt, and
+  /// this check catches any remaining mismatch at the client boundary.
   @override
   Future<void> saveSale(Sale sale) async {
-    await _api.call('insert_sale', {
+    final json = await _api.call('insert_sale', {
       'sale': sale.toMap(),
       'items': sale.items.map((item) => item.toMap()).toList(),
     });
+    final booked = json['id'];
+    if (booked is! String || booked != sale.id) {
+      throw CloudApiException(
+        'Receipt ${sale.receiptNumber} is already used by another sale. '
+        'Nothing was recorded — check the receipt number and try again.',
+      );
+    }
   }
 
   @override
