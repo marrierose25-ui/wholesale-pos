@@ -60,12 +60,22 @@ Write-Host "Pinning $Domain -> $DeployUrl"
 vercel alias set $DeployUrl $Domain 2>&1 | Out-String | Write-Host
 $ErrorActionPreference = 'Stop'
 
-# 4. Verify the public link actually serves the fresh build.
+# 4. Verify the public link actually serves the fresh build. HTTP 200 alone is
+#    not proof: a stalled `vercel deploy` leaves the alias on the previous
+#    deployment, which still answers 200 - with the OLD bundle. Compare the
+#    served bundle against the one just built, so a silent stale deploy fails
+#    loudly instead of shipping yesterday's code.
 Start-Sleep -Seconds 4
+$localBundle = Join-Path $WebDir 'main.dart.js'
+$localLen = (Get-Item $localBundle).Length
 try {
     $probe = Invoke-WebRequest -Uri "https://$Domain/index.html" -UseBasicParsing -TimeoutSec 30
     if ($probe.StatusCode -ne 200) { throw "HTTP $($probe.StatusCode)" }
-    Write-Host "OK: https://$Domain is live (HTTP $($probe.StatusCode))." -ForegroundColor Green
+    $served = Invoke-WebRequest -Uri "https://$Domain/main.dart.js" -UseBasicParsing -TimeoutSec 180
+    if ($served.RawContentLength -ne $localLen) {
+        throw "main.dart.js is $($served.RawContentLength) bytes but the build is $localLen - the alias is still pointing at an older deployment."
+    }
+    Write-Host "OK: https://$Domain is live (HTTP $($probe.StatusCode), bundle $localLen bytes)." -ForegroundColor Green
 } catch {
     throw "Verification failed for https://$Domain - $($_.Exception.Message)"
 }
