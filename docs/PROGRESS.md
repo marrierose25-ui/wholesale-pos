@@ -173,6 +173,13 @@
 - **Phase 23 wave** was gated the same way after `docs/supabase_pos_integrity.sql` was reapplied: all 5 invariant indexes and 19 RPCs present, `cash_movements.source_finance_entry_id` in place, and zero double deposits, duplicate receipts or multi-open shifts in the live tenant. pos-api is deployed at version 15.
 - Live SQL, phase 24: `sync_mirror` and `pos_sync_apply` exist and the mirror is empty; the two dangerous shapes land `REJECTED` with their specific reasons and write nothing to `sales`; the table denies `anon`/`authenticated` select, insert and update while `service_role` still inserts, and all 20 `pos_*` RPCs deny anon (call-time `42501`) while `service_role` returns data. The sync gateway is deployed at version 9 and refuses a missing or malformed licence with 401 before touching the database.
 
+### Cross-device sign-in (schema 15)
+
+- **Bug**: an account created or reset in the PWA could not sign in on the Windows/Android app. `pos-api` stores `pw_hash = "<iterations>$<b64>"` derived over the **decoded** salt bytes; the till required its own `pbkdf2-sha256$v=1$i=` prefix and derived over the **salt text**, so the pulled row fell through to the legacy 10k-round comparison and every attempt answered "Invalid phone number or password". The demo hit the same wall: the pull could not reuse the name `demo` (this till had already seeded its own), so the browser password landed on a `demo#<id>` copy nobody types.
+- **Fix**: schema 15 adds `users.cloud_pw_hash` / `users.cloud_pw_salt`. The pull writes the browser credential there (never over the local pair, so a password set on either side keeps working), the verifier dispatches on the format it finds (cloud, local, or pre-schema-5 HMAC), and `ensureDemoUser` adopts the cloud demo credential onto the one login named `demo` — covering installs that already hold a `demo#<id>` duplicate.
+- `pos-api` (v16) now stamps `pos_users.received_at` on every edit. The gateway pages that table by that stamp, so without it a password reset in the browser was never re-sent to a till that already pulled the row.
+- `flutter analyze`: clean. `flutter test`: 337 passing (3 new: a browser-issued password signs in on this device, a pulled demo credential merges onto `demo`, and the pre-schema-15 `demo#` repair).
+
 ## Next Up
 
 - Stock/inventory movements and low-stock alerts.
