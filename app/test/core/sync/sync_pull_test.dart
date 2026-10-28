@@ -1,11 +1,36 @@
+import 'dart:convert';
+
+import 'package:cryptography/cryptography.dart' as cryptography;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:wholesale_pos_app/core/database/local_database.dart';
+import 'package:wholesale_pos_app/core/repositories/user_repository.dart';
 import 'package:wholesale_pos_app/core/sync/sync_backend.dart';
 import 'package:wholesale_pos_app/core/sync/sync_outbox_entry.dart';
 import 'package:wholesale_pos_app/core/sync/sync_outbox_repository.dart';
 import 'package:wholesale_pos_app/core/sync/sync_pull_applier.dart';
 import 'package:wholesale_pos_app/core/sync/sync_service.dart';
+
+/// Derives a credential exactly the way `pos-api` does for a browser account:
+/// PBKDF2-HMAC-SHA256 over the DECODED salt bytes, stored as
+/// `<iterations>$<base64>`.
+Future<String> cloudCredential(
+  String password,
+  List<int> saltBytes, {
+  int iterations = 2000,
+}) async {
+  final algorithm = cryptography.Pbkdf2(
+    macAlgorithm: cryptography.Hmac(cryptography.Sha256()),
+    iterations: iterations,
+    bits: 256,
+  );
+  final key = await algorithm.deriveKey(
+    secretKey: cryptography.SecretKey(utf8.encode(password)),
+    nonce: saltBytes,
+  );
+  final bytes = await key.extractBytes();
+  return '$iterations\$${base64.encode(bytes)}';
+}
 
 /// Backend double that serves pre-loaded rows one table at a time.
 ///
@@ -54,16 +79,19 @@ Map<String, dynamic> cloudUser({
   String username = '0700000001',
   String role = 'CASHIER',
   bool active = true,
+  bool isDemo = false,
+  String? pwSalt,
+  String? pwHash,
   List<String> permissions = const ['pos'],
 }) => {
   'id': id,
   'username': username,
   'role': role,
   'active': active,
-  'pw_salt': 'salt-$id',
-  'pw_hash': 'hash-$id',
+  'pw_salt': pwSalt ?? 'salt-$id',
+  'pw_hash': pwHash ?? 'hash-$id',
   'permissions': permissions,
-  'is_demo': false,
+  'is_demo': isDemo,
   'deleted_at': null,
   'created_at': '2026-10-28T08:00:00+00:00',
 };
@@ -228,9 +256,73 @@ void main() {
       await SyncPullApplier(db).apply(pageOf('users', [cloudUser()]));
 
       final user = (await db.query('users')).single;
-      expect(user['password_hash'], 'hash-user-1');
-      expect(user['salt'], 'salt-user-1');
+      // The web POS hash lives in its own pair: it is a different format, and a
+      // password set on this PC must not be silently overwritten by a pull.
+      expect(user['password_hash'], SyncPullApplier.cloudAccountMarker);
+      expect(user['cloud_pw_hash'], 'hash-user-1');
+      expect(user['cloud_pw_salt'], 'salt-user-1');
       expect(user['permissions'], '["pos"]');
+    });
+
+    test('accepts the browser password for an account created on the web', () async {
+      // An account added in the PWA: hashed by `pos-api` over the decoded salt
+      // bytes. Before this it could never sign in on a till.
+      const password = 'browser-password-1';
+      final saltBytes = List<int>.generate(16, (i) => i * 7 % 256);
+      await SyncPullApplier(db).apply(
+        pageOf('users', [
+          cloudUser(
+            pwSalt: base64.encode(saltBytes),
+            pwHash: await cloudCredential(password, saltBytes),
+          ),
+        ]),
+      );
+
+      final repository = SqfliteUserRepository(db);
+      final signedIn = await repository.authenticate('0700000001', password);
+      expect(signedIn, isNotNull);
+      expect(signedIn!.role, 'CASHIER');
+      expect(await repository.authenticate('0700000001', 'wrong-one'), isNull);
+    });
+
+    test('merges the web demo credential onto this till\'s demo login', () async {
+      // Every install seeds its own `demo` row; the browser seeds one too. Two
+      // rows would mean the owner's browser password cannot open the demo here.
+      await db.insert('users', {
+        'id': 'local-demo',
+        'username': 'demo',
+        'password_hash': 'pbkdf2-sha256\$v=1\$i=2000\$never-matches',
+        'salt': 'localdemo',
+        'role': 'CASHIER',
+        'is_active': 1,
+        'permissions': '["pos"]',
+        'is_demo': 1,
+        'deleted_at': null,
+        'created_at': DateTime.now().toIso8601String(),
+      });
+
+      const password = 'browser-demo-pw';
+      final saltBytes = List<int>.generate(16, (i) => 200 - i);
+      await SyncPullApplier(db).apply(
+        pageOf('users', [
+          cloudUser(
+            id: 'cloud-demo',
+            username: 'demo',
+            isDemo: true,
+            pwSalt: base64.encode(saltBytes),
+            pwHash: await cloudCredential(password, saltBytes),
+          ),
+        ]),
+      );
+
+      final rows = await db.query('users');
+      expect(rows, hasLength(1), reason: 'one demo login, not a demo# copy');
+      expect(rows.single['id'], 'local-demo');
+      expect(rows.single['cloud_pw_hash'], isNotNull);
+
+      final signedIn = await SqfliteUserRepository(db)
+          .authenticate('demo', password);
+      expect(signedIn, isNotNull);
     });
 
     test('is idempotent: replaying the same page writes nothing', () async {

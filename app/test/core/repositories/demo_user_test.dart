@@ -1,3 +1,6 @@
+import 'dart:convert';
+
+import 'package:cryptography/cryptography.dart' as cryptography;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:wholesale_pos_app/core/auth/features.dart';
@@ -120,6 +123,49 @@ void main() {
       repository.createUser('DEMO', 'password123', 'CASHIER'),
       throwsException,
     );
+  });
+
+  /// A credential exactly as `pos-api` mints it for a browser account:
+  /// PBKDF2-HMAC-SHA256 over the DECODED salt bytes, `<iterations>$<base64>`.
+  Future<String> cloudCredential(String password, List<int> saltBytes) async {
+    final algorithm = cryptography.Pbkdf2(
+      macAlgorithm: cryptography.Hmac(cryptography.Sha256()),
+      iterations: 2000,
+      bits: 256,
+    );
+    final key = await algorithm.deriveKey(
+      secretKey: cryptography.SecretKey(utf8.encode(password)),
+      nonce: saltBytes,
+    );
+    return '2000\$${base64.encode(await key.extractBytes())}';
+  }
+
+  test('adopts the browser demo password pulled as a demo# copy', () async {
+    // Installs that synced before schema 15 ended up with a SECOND demo row:
+    // the local seed kept the plain name, so the pulled copy became `demo#…`
+    // and the password the owner set in the browser landed on the copy nobody
+    // types. Recognising the credential has to move it onto `demo`.
+    await repository.ensureDemoUser();
+    final saltBytes = List<int>.generate(16, (i) => i + 1);
+    final salt = base64.encode(saltBytes);
+    await db.insert('users', {
+      'id': 'cloud-demo',
+      'username': 'demo#cloud1',
+      'password_hash': await cloudCredential('browser-demo-pw', saltBytes),
+      'salt': salt,
+      'role': 'CASHIER',
+      'is_active': 1,
+      'permissions': '["pos"]',
+      'is_demo': 1,
+      'deleted_at': null,
+      'created_at': DateTime.now().toIso8601String(),
+    });
+
+    await repository.ensureDemoUser();
+
+    final signedIn = await repository.authenticate('demo', 'browser-demo-pw');
+    expect(signedIn, isNotNull);
+    expect(signedIn!.isDemo, isTrue);
   });
 
   test('the owner can retrain the demo account permissions', () async {

@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:sqflite/sqflite.dart';
 
+import '../repositories/user_repository.dart';
 import 'sync_backend.dart';
 
 /// What one page of cloud changes actually did to the local database.
@@ -88,11 +89,12 @@ class SyncPullApplier {
 
   const SyncPullApplier(this.db);
 
-  /// Marker written into `users.password_hash` when the cloud row carried no
-  /// usable credential. It is not a valid PBKDF2 string, so it can never match
-  /// a typed password: the account exists only so foreign keys resolve and
-  /// reports can name the cashier.
-  static const String cloudAccountMarker = '!cloud-account';
+  /// Marker written into `users.password_hash` when the credential lives in the
+  /// cloud pair instead. It is not a valid PBKDF2 string, so it can never match
+  /// a typed password on its own: the account exists so foreign keys resolve
+  /// and reports can name the cashier. Values are defined once, on
+  /// [UserRepository], because the login path compares against them.
+  static const String cloudAccountMarker = UserRepository.cloudAccountMarker;
 
   Future<SyncApplyReport> apply(SyncPullResult page) async {
     var sales = 0,
@@ -152,7 +154,60 @@ class SyncPullApplier {
     for (final row in rows) {
       final id = _str(row['id']);
       if (id == null || id.isEmpty) continue;
-      if (await _exists(txn, 'users', id)) continue;
+
+      // Login is verified offline, so a device that never created the account
+      // can only sign it in if the credential travels with the identity. The
+      // gateway releases this row to a device holding a VALID SIGNED LICENSE
+      // for the same tenant — the same trust boundary the local database file
+      // already sits behind — and the hash is still only usable after the same
+      // offline brute-force an attacker who copied the SQLite file would face.
+      //
+      // `pos-api` hashes with its own iteration count and derives over the
+      // decoded salt bytes, so the value cannot be written into the local
+      // `password_hash`/`salt` pair (a different format, and one a password
+      // reset on this PC would overwrite). It lands in the cloud pair instead,
+      // which `UserRepository` also verifies.
+      final hash = _str(row['pw_hash']);
+      final salt = _str(row['pw_salt']);
+      final hasCredential =
+          hash != null && salt != null && hash.isNotEmpty && salt.isNotEmpty;
+      final credential = hasCredential
+          ? <String, Object?>{'cloud_pw_hash': hash, 'cloud_pw_salt': salt}
+          : const <String, Object?>{};
+
+      // The training account is ONE login whatever the row id says: the browser
+      // seeds it server-side while this till seeds its own copy, so inserting a
+      // second `demo` row would leave the owner's browser password unable to
+      // open the demo here. Adopt the cloud credential onto the local demo.
+      if (row['is_demo'] == true) {
+        final demo = await _localDemo(txn, id);
+        if (demo != null) {
+          if (credential.isNotEmpty) {
+            await txn.update(
+              'users',
+              {...credential, 'is_demo': 1},
+              where: 'id = ?',
+              whereArgs: [demo],
+            );
+          }
+          continue;
+        }
+      }
+
+      if (await _exists(txn, 'users', id)) {
+        // A credential created, reset or rotated in the browser has to land or
+        // the account can only sign in on the web. Only the cloud pair is
+        // written: the local pair may hold a newer password set on this PC.
+        if (credential.isNotEmpty) {
+          await txn.update(
+            'users',
+            credential,
+            where: 'id = ?',
+            whereArgs: [id],
+          );
+        }
+        continue;
+      }
 
       var username = _str(row['username']) ?? '';
       if (username.isEmpty) username = 'user-$id';
@@ -164,25 +219,15 @@ class SyncPullApplier {
         username = '$username#${_short(id, 6)}';
       }
 
-      // Login is verified offline against the local PBKDF2 hash, so a device
-      // that never created the account can only sign it in if the credential
-      // travels with the identity. The gateway releases this row to a device
-      // holding a VALID SIGNED LICENSE for the same tenant — the same trust
-      // boundary the local database file already sits behind — and the hash is
-      // still only usable after the same offline brute-force an attacker who
-      // copied the SQLite file would face. Without it, "log in on the other
-      // till" is impossible: there is no password check to run.
-      final hash = _str(row['pw_hash']);
-      final salt = _str(row['pw_salt']);
-      final hasCredential =
-          hash != null && salt != null && hash.isNotEmpty && salt.isNotEmpty;
       final permissions = row['permissions'];
 
       created += await _insert(txn, 'users', {
         'id': id,
         'username': username,
-        'password_hash': hasCredential ? hash : cloudAccountMarker,
-        'salt': hasCredential ? salt : '',
+        'password_hash': cloudAccountMarker,
+        'salt': '',
+        'cloud_pw_hash': hasCredential ? hash : null,
+        'cloud_pw_salt': hasCredential ? salt : null,
         'role': _str(row['role']) ?? 'CASHIER',
         'is_active': row['active'] == false ? 0 : 1,
         // jsonb arrives as a decoded list; a text column arrives as the JSON
@@ -196,6 +241,23 @@ class SyncPullApplier {
       });
     }
     return created;
+  }
+
+  /// The account this till already treats as the training login: the flagged
+  /// row, else one that signs in as `demo`. [excludeId] is the incoming cloud
+  /// row, which by definition is not the local one yet.
+  Future<String?> _localDemo(Transaction txn, String excludeId) async {
+    final rows = await txn.query(
+      'users',
+      columns: const ['id'],
+      where:
+          'deleted_at IS NULL AND (is_demo = 1 OR LOWER(username) = ?) '
+          'AND id <> ?',
+      whereArgs: ['demo', excludeId],
+      orderBy: 'is_demo DESC',
+      limit: 1,
+    );
+    return rows.isEmpty ? null : rows.first['id'] as String;
   }
 
   /// Another till's device id has to resolve for the sale's foreign key even

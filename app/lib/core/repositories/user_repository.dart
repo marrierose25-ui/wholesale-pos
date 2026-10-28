@@ -34,6 +34,13 @@ abstract class UserRepository {
   /// [minPasswordLengthFor] everywhere the role is available.
   static const int minimumPasswordLength = cashierPasswordLength;
 
+  /// Marker stored in `users.password_hash` for an account whose credential
+  /// lives only in the cloud. It is not a valid hash, so it can never match a
+  /// typed password on its own: the row exists so sales keep their cashier and
+  /// reports keep a name, while sign-in goes through the cloud credential pair
+  /// the sync pull writes beside it.
+  static const String cloudAccountMarker = '!cloud-account';
+
   static int minPasswordLengthFor(String? role) =>
       role != null && role.toUpperCase() == 'OWNER'
       ? ownerPasswordLength
@@ -139,6 +146,15 @@ class SqfliteUserRepository implements UserRepository {
   static const int _minimumIterations = 1000;
   static const int _maximumIterations = 2000000;
 
+  /// A credential minted by the web POS (`pos-api`): `<iterations>$<base64>`.
+  /// Its PBKDF2 is derived over the DECODED salt bytes, not over the salt text
+  /// this app hashes, so the two formats cannot be read with one verifier.
+  /// Accounts created or reset in the browser arrive here through sync, so this
+  /// format has to be accepted or that phone number can never sign in on a till.
+  static final RegExp _cloudHash = RegExp(
+    r'^(\d{1,9})\$([A-Za-z0-9+/]+={0,2})$',
+  );
+
   /// Marker for the demo-credential format. Version 2 means the demo login is
   /// no longer the published `demo1234`; it is a per-install secret whose only
   /// stored form is a hash, so nobody can sign into it until the owner sets a
@@ -168,12 +184,22 @@ class SqfliteUserRepository implements UserRepository {
   /// isolates, and web login is hashed server-side by `pos-api`, so this local
   /// path never runs there).
   static Future<String> _derive(String password, String salt, int iterations) {
-    return runIsolated(() => _deriveKey(password, salt, iterations));
+    return _deriveBytes(password, utf8.encode(salt), iterations);
+  }
+
+  /// The same derivation over raw salt bytes, which is the form the web POS
+  /// stores. [Isolate.run] copies the arguments, so only plain values cross.
+  static Future<String> _deriveBytes(
+    String password,
+    List<int> saltBytes,
+    int iterations,
+  ) {
+    return runIsolated(() => _deriveKey(password, saltBytes, iterations));
   }
 
   static Future<String> _deriveKey(
     String password,
-    String salt,
+    List<int> saltBytes,
     int iterations,
   ) async {
     final algorithm = cryptography.Pbkdf2(
@@ -183,9 +209,24 @@ class SqfliteUserRepository implements UserRepository {
     );
     final key = await algorithm.deriveKey(
       secretKey: cryptography.SecretKey(utf8.encode(password)),
-      nonce: utf8.encode(salt),
+      nonce: saltBytes,
     );
     return base64.encode(await key.extractBytes());
+  }
+
+  /// Decodes a stored salt, tolerating both base64 alphabets. Null when the
+  /// value is empty or not base64 at all (the cloud-account marker).
+  static List<int>? _decodeSalt(String salt) {
+    if (salt.isEmpty) return null;
+    try {
+      return base64.decode(base64.normalize(salt));
+    } on FormatException {
+      try {
+        return base64Url.decode(base64Url.normalize(salt));
+      } on FormatException {
+        return null;
+      }
+    }
   }
 
   String _formatHash(int iterations, String derived) {
@@ -244,14 +285,62 @@ class SqfliteUserRepository implements UserRepository {
     return _constantTimeEquals(_formatHash(iterations, derived), storedHash);
   }
 
-  Future<bool> _verifyUserPassword(User user, String password) async {
-    if (user.passwordHash.startsWith(_pbkdf2Prefix)) {
-      return _verifyPassword(password, user.salt, user.passwordHash);
+  /// Verifies a typed password against one stored credential, dispatching on
+  /// the format that credential was written in: this app's PBKDF2 row, the web
+  /// POS's `<iterations>$<hash>` row, or a pre-schema-5 bare HMAC.
+  Future<bool> _verifyCredential(
+    String password,
+    String salt,
+    String storedHash,
+  ) async {
+    if (storedHash.isEmpty || storedHash == UserRepository.cloudAccountMarker) {
+      return false;
     }
-    return _constantTimeEquals(
-      _hashPasswordLegacy(password, user.salt),
-      user.passwordHash,
-    );
+    if (storedHash.startsWith(_pbkdf2Prefix)) {
+      return _verifyPassword(password, salt, storedHash);
+    }
+    final cloud = _cloudHash.firstMatch(storedHash);
+    if (cloud != null) {
+      final iterations = int.tryParse(cloud.group(1)!);
+      final saltBytes = _decodeSalt(salt);
+      if (iterations == null ||
+          iterations < _minimumIterations ||
+          iterations > _maximumIterations ||
+          saltBytes == null ||
+          saltBytes.isEmpty) {
+        return false;
+      }
+      final derived = await _deriveBytes(password, saltBytes, iterations);
+      return _constantTimeEquals(derived, cloud.group(2)!);
+    }
+    return _constantTimeEquals(_hashPasswordLegacy(password, salt), storedHash);
+  }
+
+  /// Every credential a row can be signed in with, in preference order: the one
+  /// this device set, then the one the web POS issued. The two are kept apart
+  /// so a password reset on either side never silently invalidates the other.
+  Future<bool> _verifyRowPassword(
+    Map<String, Object?> row,
+    String password,
+  ) async {
+    final localHash = row['password_hash'] as String? ?? '';
+    final localSalt = row['salt'] as String? ?? '';
+    if (await _verifyCredential(password, localSalt, localHash)) return true;
+    final cloudHash = row['cloud_pw_hash'] as String? ?? '';
+    if (cloudHash.isEmpty) return false;
+    final cloudSalt = row['cloud_pw_salt'] as String? ?? '';
+    return _verifyCredential(password, cloudSalt, cloudHash);
+  }
+
+  /// Releases before schema 5 stored a bare 10,000-round HMAC and are upgraded
+  /// on a successful sign-in. A cloud hash or the cloud-account marker must
+  /// never be: the first is re-issued by the web POS, the second means the
+  /// credential only lives there.
+  static bool _isLegacyCredential(String storedHash) {
+    return storedHash.isNotEmpty &&
+        storedHash != UserRepository.cloudAccountMarker &&
+        !storedHash.startsWith(_pbkdf2Prefix) &&
+        !_cloudHash.hasMatch(storedHash);
   }
 
   Future<void> _upgradePasswordHash(User user, String password) async {
@@ -391,9 +480,9 @@ class SqfliteUserRepository implements UserRepository {
     }
 
     final user = User.fromMap(maps.first);
-    if (await _verifyUserPassword(user, password)) {
+    if (await _verifyRowPassword(maps.first, password)) {
       _loginGuards.remove(guardKey);
-      if (!user.passwordHash.startsWith(_pbkdf2Prefix)) {
+      if (_isLegacyCredential(user.passwordHash)) {
         await _upgradePasswordHash(user, password);
         await _audit(
           userId: user.id,
@@ -489,6 +578,34 @@ class SqfliteUserRepository implements UserRepository {
 
   @override
   Future<void> ensureDemoUser() async {
+    // The training login is the row named `demo`, whatever else was seeded or
+    // pulled alongside it: a sync pull cannot reuse the name, so a second copy
+    // may exist under `demo#<id>` carrying the password the owner set in the
+    // browser. Resolving the name first keeps the one password they know
+    // attached to the identifier they type.
+    final byName = await _db.query(
+      'users',
+      columns: ['id', 'is_demo'],
+      where: 'LOWER(username) = ? AND deleted_at IS NULL',
+      whereArgs: ['demo'],
+      limit: 1,
+    );
+    if (byName.isNotEmpty) {
+      final id = byName.first['id'] as String;
+      // Adopt a pre-existing 'demo' username (e.g. one created before the flag
+      // existed) so the UNIQUE index can't reject the seed.
+      if (byName.first['is_demo'] != 1) {
+        await _db.update(
+          'users',
+          {'is_demo': 1},
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+      }
+      await _adoptCloudDemoCredential(id);
+      await _retirePublishedDemoPassword(id);
+      return;
+    }
     final flagged = await _db.query(
       'users',
       columns: ['id'],
@@ -496,26 +613,8 @@ class SqfliteUserRepository implements UserRepository {
       limit: 1,
     );
     if (flagged.isNotEmpty) {
-      await _retirePublishedDemoPassword(flagged.first['id'] as String);
-      return;
-    }
-    // Adopt a pre-existing 'demo' username (e.g. one created before the flag
-    // existed) so the UNIQUE index can't reject the seed, else insert fresh.
-    final byName = await _db.query(
-      'users',
-      columns: ['id'],
-      where: 'LOWER(username) = ? AND deleted_at IS NULL',
-      whereArgs: ['demo'],
-      limit: 1,
-    );
-    if (byName.isNotEmpty) {
-      final id = byName.first['id'] as String;
-      await _db.update(
-        'users',
-        {'is_demo': 1},
-        where: 'id = ?',
-        whereArgs: [id],
-      );
+      final id = flagged.first['id'] as String;
+      await _adoptCloudDemoCredential(id);
       await _retirePublishedDemoPassword(id);
       return;
     }
@@ -539,6 +638,55 @@ class SqfliteUserRepository implements UserRepository {
     );
   }
 
+  /// Repairs installs that pulled the cloud's demo row as a SECOND account
+  /// (`demo#<id>`): this till had already seeded its own `demo`, so the pull
+  /// could not reuse the name, and the password the owner set in the browser
+  /// ended up on the copy nobody types. Copy that credential onto the one login
+  /// named `demo` — the point of a training account is one shared password.
+  ///
+  /// A no-op once the demo carries a cloud credential, and it never touches the
+  /// local password pair.
+  Future<void> _adoptCloudDemoCredential(String demoId) async {
+    final own = await _db.query(
+      'users',
+      columns: ['cloud_pw_hash'],
+      where: 'id = ?',
+      whereArgs: [demoId],
+      limit: 1,
+    );
+    if (own.isEmpty) return;
+    final current = own.first['cloud_pw_hash'] as String?;
+    if (current != null && current.isNotEmpty) return;
+
+    // The donor may still hold the credential in the local pair: builds before
+    // schema 15 wrote the pulled hash straight into `password_hash`.
+    final donors = await _db.query(
+      'users',
+      columns: ['cloud_pw_hash', 'cloud_pw_salt', 'password_hash', 'salt'],
+      where: 'id <> ? AND deleted_at IS NULL AND is_demo = 1',
+      whereArgs: [demoId],
+      orderBy: 'created_at DESC',
+    );
+    Map<String, Object?>? credential;
+    for (final row in donors) {
+      final cloudHash = (row['cloud_pw_hash'] as String?) ?? '';
+      if (cloudHash.isNotEmpty) {
+        credential = {
+          'cloud_pw_hash': cloudHash,
+          'cloud_pw_salt': row['cloud_pw_salt'],
+        };
+        break;
+      }
+      final localHash = (row['password_hash'] as String?) ?? '';
+      if (_cloudHash.hasMatch(localHash)) {
+        credential = {'cloud_pw_hash': localHash, 'cloud_pw_salt': row['salt']};
+        break;
+      }
+    }
+    if (credential == null) return;
+    await _db.update('users', credential, where: 'id = ?', whereArgs: [demoId]);
+  }
+
   /// Replaces the demo login's published `demo1234` with an unknowable secret,
   /// so a stale install never keeps a credential anyone can look up. Runs once
   /// per database — the marker row makes the PBKDF2 check a startup no-op.
@@ -559,10 +707,7 @@ class SqfliteUserRepository implements UserRepository {
       limit: 1,
     );
     if (rows.isNotEmpty &&
-        await _verifyUserPassword(
-          User.fromMap(rows.first),
-          _legacyDemoPassword,
-        )) {
+        await _verifyRowPassword(rows.first, _legacyDemoPassword)) {
       final salt = _generateSalt();
       final hash = await _hashPassword(_randomDemoPassword(), salt);
       await _db.update(
@@ -692,7 +837,7 @@ class SqfliteUserRepository implements UserRepository {
     if (maps.isEmpty) throw Exception('User not found.');
     final user = User.fromMap(maps.first);
     _validatePassword(newPassword, user.role);
-    if (!await _verifyUserPassword(user, currentPassword)) {
+    if (!await _verifyRowPassword(maps.first, currentPassword)) {
       throw Exception('Current password is incorrect.');
     }
     await _upgradePasswordHash(user, newPassword);

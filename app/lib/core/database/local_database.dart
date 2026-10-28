@@ -8,7 +8,7 @@ import 'package:uuid/uuid.dart';
 
 class LocalDatabase {
   static const String databaseName = 'wholesale_pos.db';
-  static const int schemaVersion = 14;
+  static const int schemaVersion = 15;
   static const String deviceIdFileName = 'device_id.txt';
   static const String themeSettingKey = 'theme_mode';
 
@@ -346,6 +346,21 @@ class LocalDatabase {
         await db.execute('ALTER TABLE users ADD COLUMN deleted_at TEXT');
       }
     }
+    if (oldVersion < 15) {
+      // An account created or reset in the browser is hashed by `pos-api` into
+      // a different format from this app's PBKDF2 rows, and it is re-issued
+      // whenever the owner resets it there. Keeping it in its own pair means a
+      // browser password can be accepted here without ever overwriting a
+      // password this device set. Additive columns, guarded so a re-run is a
+      // no-op.
+      final userCols = await db.rawQuery('PRAGMA table_info(users)');
+      if (!userCols.any((column) => column['name'] == 'cloud_pw_hash')) {
+        await db.execute('ALTER TABLE users ADD COLUMN cloud_pw_hash TEXT');
+      }
+      if (!userCols.any((column) => column['name'] == 'cloud_pw_salt')) {
+        await db.execute('ALTER TABLE users ADD COLUMN cloud_pw_salt TEXT');
+      }
+    }
   }
 
   /// Schema 6 stored quantities as plain integers. Schema 7 keeps the exact
@@ -495,6 +510,8 @@ class LocalDatabase {
         username TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
         salt TEXT NOT NULL,
+        cloud_pw_hash TEXT,
+        cloud_pw_salt TEXT,
         role TEXT NOT NULL,
         is_active INTEGER NOT NULL DEFAULT 1,
         permissions TEXT NOT NULL DEFAULT '[]',

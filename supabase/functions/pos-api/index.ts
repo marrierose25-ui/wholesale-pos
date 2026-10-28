@@ -461,7 +461,7 @@ async function changePassword(db: any, ctx: Ctx, body: any): Promise<Response> {
   // Bumping token_version revokes every JWT issued for this account before the
   // change (audit #6) — the current session's token is now stale too, so the
   // client must log back in with the new password to obtain a fresh tv.
-  const up = await db.from('pos_users').update({ pw_salt: salt, pw_hash: hash, token_version: (user.token_version ?? 0) + 1 })
+  const up = await db.from('pos_users').update(userStamp({ pw_salt: salt, pw_hash: hash, token_version: (user.token_version ?? 0) + 1 }))
     .eq('customer_id', ctx.customerId).eq('id', ctx.userId);
   if (up.error) throw new Error(up.error.message);
   await audit(db, ctx.customerId, ctx.userId, 'PASSWORD_CHANGED', 'Password changed.');
@@ -960,6 +960,15 @@ async function listUsers(db: any, ctx: Ctx): Promise<Response> {
   return json({ ok: true, users: strip(data) });
 }
 
+// Every edit to an account has to move `received_at`: the sync gateway pages
+// `pos_users` by that stamp, so without it a password set here never reaches a
+// till that already pulled the row — the till keeps signing in with the old
+// one, which reads as "invalid password" to whoever was given the new one.
+// (A fresh INSERT is stamped by the column default.)
+function userStamp(patch: Record<string, unknown>): Record<string, unknown> {
+  return { ...patch, received_at: new Date().toISOString() };
+}
+
 async function createUser(db: any, ctx: Ctx, body: any): Promise<Response> {
   const rawName = str(body.username);
   const role = String(body.role ?? '');
@@ -994,10 +1003,10 @@ async function createUser(db: any, ctx: Ctx, body: any): Promise<Response> {
   // A deleted account still holds the number. Reuse its row instead of
   // violating the unique index: the sales it recorded keep the same cashier.
   if (dup?.deleted_at) {
-    const up = await db.from('pos_users').update({
+    const up = await db.from('pos_users').update(userStamp({
       username, role, pw_salt: salt, pw_hash: hash, active: true,
       permissions: perms, is_demo: false, deleted_at: null,
-    }).eq('customer_id', ctx.customerId).eq('id', dup.id);
+    })).eq('customer_id', ctx.customerId).eq('id', dup.id);
     if (up.error) throw new Error(up.error.message);
     await audit(db, ctx.customerId, ctx.userId, 'USER_CREATED', `Deleted account "${username}" reused (${role}).`);
     return json({ ok: true, id: dup.id });
@@ -1066,7 +1075,7 @@ async function ensureDemoUser(db: any, customerId: string, ownerSession: boolean
     }
     const password = randomDemoPassword();
     const { salt, hash } = await hashPassword(password);
-    const up = await db.from('pos_users').update({ pw_salt: salt, pw_hash: hash })
+    const up = await db.from('pos_users').update(userStamp({ pw_salt: salt, pw_hash: hash }))
       .eq('customer_id', customerId).eq('id', existing.id).select('id');
     if (up.error) throw new Error(up.error.message);
     // Never mark a rotation that did not land, or the tenant keeps an unknown
@@ -1086,7 +1095,7 @@ async function ensureDemoUser(db: any, customerId: string, ownerSession: boolean
     .eq('customer_id', customerId).ilike('username', 'demo').maybeSingle();
   if (nameErr) throw new Error(nameErr.message);
   if (byName) {
-    const up = await db.from('pos_users').update({ is_demo: true, pw_salt: salt, pw_hash: hash })
+    const up = await db.from('pos_users').update(userStamp({ is_demo: true, pw_salt: salt, pw_hash: hash }))
       .eq('customer_id', customerId).eq('id', byName.id).select('id');
     if (up.error) throw new Error(up.error.message);
     if (!Array.isArray(up.data) || up.data.length !== 1) {
@@ -1114,7 +1123,7 @@ async function setUserPermissions(db: any, ctx: Ctx, body: any): Promise<Respons
     .eq('customer_id', ctx.customerId).eq('id', target).is('deleted_at', null).maybeSingle();
   if (!t) return json({ ok: false, error: 'User not found.' }, 404);
   if (t.role === OWNER) return json({ ok: false, error: 'Owner accounts bypass feature permissions.' }, 400);
-  const up = await db.from('pos_users').update({ permissions: perms })
+  const up = await db.from('pos_users').update(userStamp({ permissions: perms }))
     .eq('customer_id', ctx.customerId).eq('id', target);
   if (up.error) throw new Error(up.error.message);
   await audit(db, ctx.customerId, ctx.userId, 'USER_PERMISSIONS_SET', `Permissions for "${t.username}": ${perms.join(', ') || '(none)'}.`);
@@ -1136,7 +1145,7 @@ async function setUserPhone(db: any, ctx: Ctx, body: any): Promise<Response> {
     .eq('customer_id', ctx.customerId).ilike('username', phone).neq('id', target).maybeSingle();
   if (dupErr) throw new Error(`duplicate phone check: ${dupErr.message}`);
   if (dup) return json({ ok: false, error: 'That phone number is already in use.' }, 409);
-  const up = await db.from('pos_users').update({ username: phone })
+  const up = await db.from('pos_users').update(userStamp({ username: phone }))
     .eq('customer_id', ctx.customerId).eq('id', target);
   if (up.error) throw new Error(up.error.message);
   await audit(db, ctx.customerId, ctx.userId, 'USER_PHONE_CHANGED', `Login phone for "${t.username}" is now "${phone}".`);
@@ -1152,7 +1161,7 @@ async function resetPassword(db: any, ctx: Ctx, body: any): Promise<Response> {
   const minLen = t.role === OWNER ? 12 : 8;
   if (password.length < minLen) return json({ ok: false, error: `Password must be at least ${minLen} characters.` }, 400);
   const { salt, hash } = await hashPassword(password);
-  const up = await db.from('pos_users').update({ pw_salt: salt, pw_hash: hash, token_version: (t.token_version ?? 0) + 1 })
+  const up = await db.from('pos_users').update(userStamp({ pw_salt: salt, pw_hash: hash, token_version: (t.token_version ?? 0) + 1 }))
     .eq('customer_id', ctx.customerId).eq('id', target);
   if (up.error) throw new Error(up.error.message);
   await audit(db, ctx.customerId, ctx.userId, 'PASSWORD_RESET', `Password reset for "${t.username}".`);
@@ -1191,7 +1200,7 @@ async function setUserActive(db: any, ctx: Ctx, body: any): Promise<Response> {
   // resetting the version on activation is harmless (there is no valid token),
   // so bump unconditionally — any previously issued JWT is now stale (audit #6).
   const up = await db.from('pos_users')
-    .update({ active, token_version: Number(t.token_version ?? 0) + 1 })
+    .update(userStamp({ active, token_version: Number(t.token_version ?? 0) + 1 }))
     .eq('customer_id', ctx.customerId).eq('id', target).is('deleted_at', null)
     .select('id');
   if (up.error) throw new Error(up.error.message);
@@ -1231,10 +1240,10 @@ async function deleteUser(db: any, ctx: Ctx, body: any): Promise<Response> {
     (await counted('pos_finance_entries', 'created_by'));
 
   if (records > 0) {
-    const up = await db.from('pos_users').update({
+    const up = await db.from('pos_users').update(userStamp({
       deleted_at: new Date().toISOString(),
       token_version: (t.token_version ?? 0) + 1,
-    }).eq('customer_id', ctx.customerId).eq('id', target);
+    })).eq('customer_id', ctx.customerId).eq('id', target);
     if (up.error) throw new Error(up.error.message);
   } else {
     const del = await db.from('pos_users').delete()
