@@ -26,15 +26,25 @@ class DataExporter {
       throw Exception('Only an active owner can export data.');
     }
 
-    // Business data only. Credentials are NEVER written to the plaintext
-    // backup: `users` is exported without password_hash / salt, and the
-    // licensing / session secrets are stripped from `settings` below. This
-    // backup is an operational snapshot, not a full-fidelity DB restore (the
-    // app has no importer that re-derives hashes, so restoring user logins
-    // would require re-seeding them anyway).
+    // Credentials are NEVER written to the plaintext backup: `users` is
+    // exported without password_hash / salt, and the licensing / session /
+    // device-identity secrets are stripped from `settings` below. This is an
+    // operational snapshot, not a full-fidelity credential restore (audit #7).
+    // DataImporter tolerates the omitted hashes by preserving the restoring
+    // owner's live password and re-seeding every other account with an unusable
+    // hash, so a leaked backup can never be replayed into logins. The
+    // non-secret `permissions` list IS carried so a restored staff account
+    // keeps its feature ticks.
     final users = await db.query(
       'users',
-      columns: ['id', 'username', 'role', 'is_active', 'created_at'],
+      columns: [
+        'id',
+        'username',
+        'role',
+        'is_active',
+        'permissions',
+        'created_at',
+      ],
     );
     final products = await db.query('products');
     final sales = await db.query('sales');
@@ -45,9 +55,12 @@ class DataExporter {
     final auditLogs = await db.query('audit_logs');
     final devices = await db.query('devices');
     final counters = await db.query('counters');
-    // Drop keys that hold secrets / device identity: the signed license, the
-    // activation code, the per-install + hardware UUIDs, and the cached auth
-    // session. Everything else (theme, shop prefs, etc.) is safe to carry.
+    // Drop keys that hold licensing / session / device-identity secrets: the
+    // signed license, the activation code, the per-install + hardware UUIDs,
+    // and the cached auth session. None of these are needed to restore the
+    // business data (they are re-derived on next activation / login), and all
+    // of them are directly exploitable if a backup leaks. Everything else
+    // (theme, shop prefs, etc.) is safe to carry.
     const secretSettingKeys = {
       'auth_session',
       'license_code',

@@ -141,4 +141,38 @@ void main() {
       expect(find.text('Welcome back'), findsOneWidget);
     },
   );
+
+  // Feature-driven nav: an account's ticks decide the visible destinations,
+  // and Settings is always present. A zero-tick staff session is the one
+  // shell render that never mounts a data-loading screen (all feature screens
+  // are filtered out), so the throwing repo stubs stay untouched.
+  testWidgets(
+    'staff with no ticks still enters the shell and sees only Settings',
+    (tester) async {
+      final backend = _FakeBackend();
+      backend._users.byId['staff-1'] = User(
+        id: 'staff-1',
+        username: 'sam',
+        passwordHash: 'h',
+        salt: 's',
+        role: 'CASHIER',
+        permissions: const [],
+      );
+      await backend.session.save(
+        SessionData.create('staff-1', lifetime: SessionStore.defaultLifetime),
+      );
+
+      await tester.pumpWidget(PosRoot(backend: backend, initialDarkMode: true));
+      await tester.pumpAndSettle();
+
+      // Resumed straight into the shell — no login screen.
+      expect(find.text('Welcome back'), findsNothing);
+      // Settings survives the feature filter (logout / theme always reachable).
+      expect(find.text('Settings'), findsWidgets);
+      // Every un-ticked destination is absent from the nav.
+      for (final label in const ['Dashboard', 'POS', 'Register', 'History']) {
+        expect(find.text(label), findsNothing);
+      }
+    },
+  );
 }

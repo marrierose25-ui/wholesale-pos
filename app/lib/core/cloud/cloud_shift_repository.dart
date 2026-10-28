@@ -72,12 +72,14 @@ class CloudShiftRepository implements ShiftRepository {
     int amount,
     String reason, {
     String? userId,
+    String? photo,
   }) async {
     await _api.call('add_cash_movement', {
       'shift_id': shiftId,
       'type': type,
       'amount_minor_units': amount,
       'reason': reason,
+      'photo': ?photo,
     });
   }
 

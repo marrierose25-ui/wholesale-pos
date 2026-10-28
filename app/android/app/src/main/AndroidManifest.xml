@@ -4,9 +4,21 @@
          reach the licensing Edge Function ("Could not reach the licensing
          server"). Harmless in debug (already granted there). -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- The UI is width-responsive (phone < 600dp, tablet/desktop >= 600dp), so
+         one APK serves phones AND tablets: Android picks the layout by the
+         actual screen width at runtime. Declaring every size bucket (and
+         resizeable) keeps tablets out of the compatibility "phone screen"
+         letterbox and lets split-screen / free-form resize the window. -->
+    <supports-screens
+        android:smallScreens="true"
+        android:normalScreens="true"
+        android:largeScreens="true"
+        android:xlargeScreens="true"
+        android:anyDensity="true"/>
     <application
         android:label="wholesale_pos_app"
         android:name="${applicationName}"
+        android:resizeableActivity="true"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"

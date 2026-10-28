@@ -58,33 +58,63 @@ const CORS_HEADERS: Record<string, string> = {
 const OWNER = 'OWNER';
 const CASHIER = 'CASHIER';
 
-// Actions that need an OWNER token. Everything authenticated is at least a
-// valid (inactive-revoked-checked) session for the tenant.
-//
-// This set MUST mirror the owner-only screens in the client nav matrix
-// (app/lib/app_shell.dart): Owner sees Dashboard / Money Tracking / Users /
-// Audit / Register History / Reports; a Cashier sees only POS / Register /
-// History / Settings. Reads the cashier's own Register/POS flow needs
-// (ensure_shift, register_snapshot, next_receipt_number, insert_sale,
-// request_void, open_shift/close_shift, add_cash_movement) stay OUT of this
-// set. list_void_requests/shift_summary are owner-gated in the UI, so they
-// belong here even though the Register screen builds for everyone.
+// The canonical feature-tab keys, mirroring app/lib/core/auth/features.dart.
+// A staff account's `permissions` column stores a subset of these; the OWNER
+// account bypasses them entirely.
+const FEATURE_KEYS = new Set([
+  'dashboard', 'pos', 'register', 'finance', 'history', 'reports',
+  'users', 'audit', 'register_history',
+]);
+
+// Permanently owner-only: a feature tick NEVER grants these. Money-integrity
+// and account-admin mutations stay reserved for the all-access OWNER account,
+// regardless of which tabs a staff account can see.
 const OWNER_ONLY = new Set([
   // Voids: a cashier may request_void, only an owner may void/approve/reject.
-  'void_sale', 'approve_void', 'reject_void', 'list_void_requests',
-  // User administration.
-  'list_users', 'create_user', 'reset_password', 'set_user_active',
-  // Money tracking (people + entries) incl. the recycle-bin mutations.
-  'finance_categories', 'finance_deleted_categories', 'finance_summaries',
-  'finance_create_category', 'finance_rename_category', 'finance_delete_category',
-  'finance_restore_category', 'finance_permanently_delete_category',
-  'finance_add_entry', 'finance_update_entry', 'finance_mark_completed',
-  'finance_search_entries', 'finance_person_totals',
-  // Ledger browsing + reporting aggregates (cross-shift; owner-only views).
-  'list_cash_movements', 'shift_history', 'shift_summary',
-  'dashboard_summary', 'revenue_trend', 'report_summary',
-  'list_audit',
+  'void_sale', 'approve_void', 'reject_void',
+  // Account administration + credential/status mutations.
+  'reset_password', 'set_user_active', 'create_user', 'set_user_permissions',
+  // Finance recycle-bin mutations (delete/restore/permanently-delete).
+  'finance_delete_category', 'finance_restore_category',
+  'finance_permanently_delete_category',
 ]);
+
+// Feature-gated actions: allowed when the actor is an OWNER or holds ANY of the
+// listed features. This replaces the old blanket OWNER_ONLY gate for the
+// readable/navigable actions so per-account ticks actually take effect. Keys
+// are action names; values are the feature keys that unlock them.
+const ACTION_FEATURES: Record<string, string[]> = {
+  // Dashboard
+  dashboard_summary: ['dashboard'], revenue_trend: ['dashboard'],
+  // POS / products
+  list_products: ['pos'], save_product: ['pos'], update_product: ['pos'],
+  deactivate_product: ['pos'], reactivate_product: ['pos'],
+  next_receipt_number: ['pos'], insert_sale: ['pos'],
+  // Register / shifts
+  get_shift: ['register'], ensure_shift: ['register'], register_snapshot: ['register'],
+  open_shift: ['register'], close_shift: ['register'], add_cash_movement: ['register'],
+  shift_summary: ['register'], list_void_requests: ['register'],
+  // Finance (Money Tracking) — non-destructive browsing + entry writes.
+  finance_categories: ['finance'], finance_deleted_categories: ['finance'],
+  finance_summaries: ['finance'], finance_create_category: ['finance'],
+  finance_rename_category: ['finance'], finance_search_entries: ['finance'],
+  finance_add_entry: ['finance'], finance_update_entry: ['finance'],
+  finance_mark_completed: ['finance'], finance_person_totals: ['finance'],
+  // History. search_sales is also needed by the Register History day drill-down
+  // (which sales brought cash in that day), so register_history unlocks it too.
+  search_sales: ['history', 'register_history'], request_void: ['history'],
+  // Reports
+  report_summary: ['reports'],
+  // Users (read-only list; mutations are OWNER_ONLY above)
+  list_users: ['users'],
+  // Audit
+  list_audit: ['audit'],
+  // Register History (cross-shift ledger browsing)
+  shift_history: ['register_history'], list_cash_movements: ['register_history'],
+};
+
+// get_setting / set_setting are intentionally absent: Settings is always
+// visible to every account (logout / theme), so they stay authenticated-only.
 
 Deno.serve(async (req) => {
   // Answer the browser's CORS preflight before the POST-only guard, otherwise
@@ -112,11 +142,27 @@ Deno.serve(async (req) => {
     // A revoked/deactivated cashier must lose access even on an unexpired JWT.
     const actor = await loadActiveUser(db, session.customerId, session.userId);
     if (!actor) return json({ ok: false, error: 'Session no longer valid.' }, 403);
+    // Session revocation (audit #6): any credential change bumps the user's
+    // token_version, so a JWT whose `tv` claim no longer matches is dead even
+    // though its 10-year `exp` has not passed. Persistent sign-in is preserved
+    // because we never shorten exp — only a tv mismatch kills the token.
+    if (session.tv !== actor.tokenVersion) {
+      return json({ ok: false, error: 'Session no longer valid.' }, 403);
+    }
     if (OWNER_ONLY.has(action) && actor.role !== OWNER) {
       return json({ ok: false, error: 'Owner access required.' }, 403);
     }
+    // Feature-tick enforcement: an OWNER passes everything; a staff account
+    // only reaches actions whose feature it was ticked.
+    const gated = ACTION_FEATURES[action];
+    if (gated && actor.role !== OWNER && !gated.some((f) => actor.permissions.includes(f))) {
+      return json({ ok: false, error: 'Not permitted for this account.' }, 403);
+    }
 
-    const ctx = { customerId: session.customerId, userId: session.userId, role: actor.role };
+    // Per-device identity for shift/receipt operations (audit D1). Optional:
+    // empty -> NULL so the shared perpetual shift still matches.
+    const deviceId = str(body.device_id) || null;
+    const ctx = { customerId: session.customerId, userId: session.userId, role: actor.role, deviceId };
 
     switch (action) {
       // Auth-adjacent
@@ -153,6 +199,7 @@ Deno.serve(async (req) => {
       // Users
       case 'list_users': return await listUsers(db, ctx);
       case 'create_user': return await createUser(db, ctx, body);
+      case 'set_user_permissions': return await setUserPermissions(db, ctx, body);
       case 'reset_password': return await resetPassword(db, ctx, body);
       case 'set_user_active': return await setUserActive(db, ctx, body);
 
@@ -203,6 +250,39 @@ async function tenantForActivationCode(db: any, code: string): Promise<string | 
   return String(data.customer_id);
 }
 
+// --- Best-effort login throttle (audit #14) --------------------------------
+// Edge Functions share memory only within a warm container, so this is a blunt
+// rate-limiter layered on top of the 210k-round PBKDF2 cost, NOT a durable
+// cross-instance lockout. It still stops rapid-fire guessing against a single
+// hot isolate, which is the realistic brute-force path for a hosted PWA.
+const LOGIN_MAX_ATTEMPTS = 10;
+const LOGIN_WINDOW_MS = 60_000;
+const LOGIN_LOCKOUT_MS = 300_000;
+type LoginBucket = { fails: number; first: number; lockedUntil: number };
+const loginAttempts = new Map<string, LoginBucket>();
+function loginThrottleKey(customerId: string, username: string): string {
+  return `${customerId}|${username.toLowerCase()}`;
+}
+function loginBlocked(key: string): number {
+  const b = loginAttempts.get(key);
+  if (!b) return 0;
+  const now = Date.now();
+  if (b.lockedUntil > now) return b.lockedUntil - now;
+  if (now - b.first > LOGIN_WINDOW_MS) loginAttempts.delete(key);
+  return 0;
+}
+function loginRecordFail(key: string) {
+  const now = Date.now();
+  const b = loginAttempts.get(key);
+  if (!b || now - b.first > LOGIN_WINDOW_MS) {
+    loginAttempts.set(key, { fails: 1, first: now, lockedUntil: 0 });
+    return;
+  }
+  b.fails += 1;
+  if (b.fails >= LOGIN_MAX_ATTEMPTS) b.lockedUntil = now + LOGIN_LOCKOUT_MS;
+}
+function loginClear(key: string) { loginAttempts.delete(key); }
+
 async function hasUsers(db: any, body: any): Promise<Response> {
   const code = str(body.activation_code);
   const customerId = await tenantForActivationCode(db, code);
@@ -220,18 +300,31 @@ async function login(db: any, body: any): Promise<Response> {
   const customerId = await tenantForActivationCode(db, code);
   if (!customerId) return json({ ok: false, error: 'Invalid activation code.' }, 403);
 
+  // Brute-force throttle (audit #14): reject before deriving so a locked
+  // account cannot be used to burn PBKDF2 CPU.
+  const tkey = loginThrottleKey(customerId, username);
+  const retryAfter = loginBlocked(tkey);
+  if (retryAfter > 0) {
+    return json({ ok: false, error: `Too many attempts. Retry in ${Math.ceil(retryAfter / 1000)}s.` }, 429);
+  }
+
+  // Case-insensitive username match, mirroring the native client (audit #10).
+  // Wildcard chars are stripped so ilike degrades to a literal comparison.
+  const needle = username.toLowerCase().replace(/[%_]/g, '');
   const { data: user } = await db.from('pos_users')
-    .select('*').eq('customer_id', customerId).eq('username', username)
+    .select('*').eq('customer_id', customerId).ilike('username', needle)
     .eq('active', true).maybeSingle();
-  if (!user) return json({ ok: false, error: 'Invalid credentials.' }, 401);
+  if (!user) { loginRecordFail(tkey); return json({ ok: false, error: 'Invalid credentials.' }, 401); }
 
   const ok = await verifyPassword(password, user.pw_salt, user.pw_hash);
-  if (!ok) return json({ ok: false, error: 'Invalid credentials.' }, 401);
+  if (!ok) { loginRecordFail(tkey); return json({ ok: false, error: 'Invalid credentials.' }, 401); }
+  loginClear(tkey);
 
-  const token = await signJwt({ sub: user.id, cid: customerId, role: user.role });
+  const token = await signJwt({ sub: user.id, cid: customerId, role: user.role, tv: Number(user.token_version ?? 0) });
   return json({
     ok: true, token,
     user_id: user.id, username: user.username, role: user.role,
+    permissions: Array.isArray(user.permissions) ? user.permissions : [],
     customer_id: customerId,
     expires_at: new Date(Date.now() + SESSION_TTL_SECONDS * 1000).toISOString(),
   });
@@ -247,24 +340,27 @@ async function setupOwner(db: any, body: any): Promise<Response> {
   const customerId = await tenantForActivationCode(db, code);
   if (!customerId) return json({ ok: false, error: 'Invalid activation code.' }, 403);
 
-  const { count } = await db.from('pos_users')
-    .select('*', { count: 'exact', head: true }).eq('customer_id', customerId);
-  if ((count ?? 0) > 0) return json({ ok: false, error: 'Owner already exists.' }, 409);
-
   const minLen = 12; // owner policy, matches UserRepository.ownerPasswordLength
   if (password.length < minLen) {
     return json({ ok: false, error: `Password must be at least ${minLen} characters.` }, 400);
   }
   const { salt, hash } = await hashPassword(password);
   const id = crypto.randomUUID();
-  const ins = await db.from('pos_users').insert({
-    id, customer_id: customerId, username, role: OWNER,
-    pw_salt: salt, pw_hash: hash, active: true,
+  // Atomic "no users exist" check + insert (audit #15): the count guard and the
+  // row write run in one transaction inside the RPC, with the one-owner unique
+  // index as the hard backstop against a racing second bootstrap.
+  const rpc = await db.rpc('pos_setup_owner', {
+    p_customer: customerId, p_id: id, p_username: username, p_pw_salt: salt, p_pw_hash: hash,
   });
-  if (ins.error) throw new Error(ins.error.message);
+  if (rpc.error) {
+    if (/already exists/i.test(rpc.error.message)) {
+      return json({ ok: false, error: 'Owner already exists.' }, 409);
+    }
+    throw new Error(rpc.error.message);
+  }
   await audit(db, customerId, id, 'OWNER_CREATED', `Web owner "${username}" created.`);
-  const token = await signJwt({ sub: id, cid: customerId, role: OWNER });
-  return json({ ok: true, token, user_id: id, username, role: OWNER, customer_id: customerId });
+  const token = await signJwt({ sub: id, cid: customerId, role: OWNER, tv: 0 });
+  return json({ ok: true, token, user_id: id, username, role: OWNER, permissions: [], customer_id: customerId });
 }
 
 async function changePassword(db: any, ctx: Ctx, body: any): Promise<Response> {
@@ -281,7 +377,10 @@ async function changePassword(db: any, ctx: Ctx, body: any): Promise<Response> {
     return json({ ok: false, error: `New password must be at least ${minLen} characters.` }, 400);
   }
   const { salt, hash } = await hashPassword(next);
-  const up = await db.from('pos_users').update({ pw_salt: salt, pw_hash: hash })
+  // Bumping token_version revokes every JWT issued for this account before the
+  // change (audit #6) — the current session's token is now stale too, so the
+  // client must log back in with the new password to obtain a fresh tv.
+  const up = await db.from('pos_users').update({ pw_salt: salt, pw_hash: hash, token_version: (user.token_version ?? 0) + 1 })
     .eq('customer_id', ctx.customerId).eq('id', ctx.userId);
   if (up.error) throw new Error(up.error.message);
   await audit(db, ctx.customerId, ctx.userId, 'PASSWORD_CHANGED', 'Password changed.');
@@ -302,6 +401,8 @@ async function listProducts(db: any, ctx: Ctx, body: any): Promise<Response> {
 
 async function saveProduct(db: any, ctx: Ctx, body: any): Promise<Response> {
   const p = body.product ?? {};
+  const invalid = validateProduct(p);
+  if (invalid) return json({ ok: false, error: invalid }, 400);
   if (await duplicateName(db, ctx, String(p.name ?? ''), null)) {
     return json({ ok: false, error: 'A saved name already exists.' }, 409);
   }
@@ -311,13 +412,20 @@ async function saveProduct(db: any, ctx: Ctx, body: any): Promise<Response> {
     created_at: p.created_at ?? new Date().toISOString(),
   });
   const ins = await db.from('pos_products').insert(row);
-  if (ins.error) throw new Error(ins.error.message);
+  if (ins.error) {
+    if (/duplicate key|unique/i.test(ins.error.message)) {
+      return json({ ok: false, error: 'A saved name already exists.' }, 409);
+    }
+    throw new Error(ins.error.message);
+  }
   return json({ ok: true, id: row.id });
 }
 
 async function updateProduct(db: any, ctx: Ctx, body: any): Promise<Response> {
   const p = body.product ?? {};
   if (!p.id) return json({ ok: false, error: 'Missing product id.' }, 400);
+  const invalid = validateProduct(p);
+  if (invalid) return json({ ok: false, error: invalid }, 400);
   if (await duplicateName(db, ctx, String(p.name ?? ''), String(p.id))) {
     return json({ ok: false, error: 'A saved name already exists.' }, 409);
   }
@@ -327,7 +435,12 @@ async function updateProduct(db: any, ctx: Ctx, body: any): Promise<Response> {
     is_active: p.is_active ?? 1,
     updated_at: new Date().toISOString(),
   }).eq('customer_id', ctx.customerId).eq('id', p.id);
-  if (up.error) throw new Error(up.error.message);
+  if (up.error) {
+    if (/duplicate key|unique/i.test(up.error.message)) {
+      return json({ ok: false, error: 'A saved name already exists.' }, 409);
+    }
+    throw new Error(up.error.message);
+  }
   return json({ ok: true });
 }
 
@@ -339,14 +452,36 @@ async function setProductActive(db: any, ctx: Ctx, body: any, active: number): P
   return json({ ok: true });
 }
 
-async function duplicateName(db: any, ctx: Ctx, name: string, excludeId: string | null) {
-  const trimmed = name.trim().toLowerCase();
+async function duplicateName(db: any, ctx: Ctx, name: string, excludeId: string | null): Promise<boolean> {
+  const trimmed = name.trim().toLowerCase().replace(/[%_]/g, '');
   if (!trimmed) return false;
+  // Case-insensitive exact match via ilike (no wildcards), avoiding the
+  // `.filter('lower(name)')` expression form PostgREST cannot parse — which
+  // previously errored and was silently read back as "no duplicate" (audit #10).
   let q = db.from('pos_products').select('id')
-    .eq('customer_id', ctx.customerId).filter(`lower(name)`, 'eq', trimmed);
+    .eq('customer_id', ctx.customerId).ilike('name', trimmed);
   if (excludeId) q = q.neq('id', excludeId);
-  const { data } = await q.maybeSingle();
+  const { data, error } = await q.maybeSingle();
+  if (error) throw new Error(`duplicate name check: ${error.message}`);
   return !!data;
+}
+
+// Server-side validation mirroring the native product form (audit #10): a
+// non-empty name and a finite, non-negative whole-number price. Prices are
+// minor units, so fractional/NaN/negative values are rejected before they can
+// poison the cloud ledger that syncs alongside native sales.
+function validateProduct(p: any): string | null {
+  const name = String(p.name ?? '').trim();
+  if (!name) return 'Product name is required.';
+  if (name.length > 200) return 'Product name is too long.';
+  const price = p.selling_price_minor_units;
+  if (price != null) {
+    const n = Number(price);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
+      return 'Selling price must be a non-negative whole number.';
+    }
+  }
+  return null;
 }
 
 // ===========================================================================
@@ -355,46 +490,50 @@ async function duplicateName(db: any, ctx: Ctx, name: string, excludeId: string 
 async function nextReceiptNumber(db: any, ctx: Ctx): Promise<Response> {
   const now = new Date();
   const day = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}${String(now.getUTCDate()).padStart(2, '0')}`;
-  const name = `receipt-${day}`;
-  const { data: cur } = await db.from('pos_counters').select('value')
-    .eq('customer_id', ctx.customerId).eq('name', name).maybeSingle();
-  const value = cur ? Number(cur.value) + 1 : 1;
-  const up = await db.from('pos_counters').upsert(
-    { customer_id: ctx.customerId, name, value }, { onConflict: 'customer_id,name' });
-  if (up.error) throw new Error(up.error.message);
-  return json({ ok: true, receipt_number: `REC-${day}-${String(value).padStart(4, '0')}` });
+  // Atomic allocation in a single DB op (audit #5): INSERT..ON CONFLICT DO
+  // UPDATE value=value+1 RETURNING, so two concurrent tills never read the same
+  // counter and collide on receipt_number.
+  const { data, error } = await db.rpc('pos_next_receipt', { p_customer: ctx.customerId, p_day: day });
+  if (error) throw new Error(error.message);
+  return json({ ok: true, receipt_number: String(data) });
 }
 
 async function insertSale(db: any, ctx: Ctx, body: any): Promise<Response> {
   const sale = body.sale ?? {};
   const items = Array.isArray(body.items) ? body.items : [];
-  if (!sale.id || items.length === 0) return json({ ok: false, error: 'Incomplete sale.' }, 400);
-  const subtotal = Number(sale.subtotal_minor_units ?? 0);
-  const discount = Number(sale.discount_minor_units ?? 0);
-  const total = Number(sale.total_minor_units ?? 0);
-  if (total !== subtotal - discount || total < 0) {
-    return json({ ok: false, error: 'Sale totals do not match.' }, 400);
+  if (items.length === 0) return json({ ok: false, error: 'Incomplete sale.' }, 400);
+  // The client pre-allocates the receipt via next_receipt_number (atomic cloud
+  // counter), so pass it through unchanged: the shown number equals the stored
+  // one and the counter is never double-incremented (audit D2).
+  const receipt = str(sale.receipt_number);
+  if (!receipt) return json({ ok: false, error: 'Sale requires a receipt number.' }, 400);
+  const payment = str(sale.payment_method).toUpperCase();
+  // Only the three till payment methods are accepted. LOAN is money owed, not
+  // collected: pos_create_sale treats any non-CASH payment as paid-in-full, and
+  // the revenue aggregates below filter to CASH/BANK so a loan never inflates the
+  // dashboard or register cash.
+  if (!['CASH', 'BANK', 'LOAN'].includes(payment)) {
+    return json({ ok: false, error: 'Invalid payment method.' }, 400);
   }
-  // Require an OPEN shift owned by this tenant.
-  const { data: shift } = await db.from('shifts').select('id')
-    .eq('customer_id', ctx.customerId).eq('id', sale.shift_id).eq('status', 'OPEN').maybeSingle();
-  if (!shift) return json({ ok: false, error: 'Sale requires an open shift.' }, 400);
-
-  const saleRow = tenantRow(ctx, sale, { status: 'COMPLETED', created_at: new Date().toISOString() });
-  const ins = await db.from('sales').insert(saleRow);
-  if (ins.error) throw new Error(`insert sale: ${ins.error.message}`);
-  const itemRows = items.map((it: any) => tenantRow(ctx, it, {}));
-  const insItems = await db.from('sale_items').insert(itemRows);
-  if (insItems.error) {
-    // Compensate: the sale is the parent, so a failed item batch must roll it
-    // back to keep the ledger consistent (best-effort; sync gateway is likewise
-    // non-atomic). 
-    await db.from('sales').delete().eq('customer_id', ctx.customerId).eq('id', sale.id);
-    throw new Error(`insert items: ${insItems.error.message}`);
-  }
-  await audit(db, ctx.customerId, ctx.userId, 'SALE_COMPLETED',
-    `Total: ${total} minor units, Lines: ${items.length}`);
-  return json({ ok: true, id: sale.id });
+  // Server-authoritative: cashier is the verified session user and every money
+  // figure is recomputed inside the RPC, so a crafted body cannot forge totals
+  // or post a sale under another operator (audit #2 + #4-sale).
+  const { data, error } = await db.rpc('pos_create_sale', {
+    p_customer: ctx.customerId,
+    p_cashier: ctx.userId,
+    p_device: str(sale.device_id) || ctx.deviceId || '',
+    p_shift_id: str(sale.shift_id),
+    p_receipt: receipt,
+    p_items: items,
+    p_payment: payment,
+    p_discount: Number(sale.discount_minor_units ?? 0),
+    p_amount_paid: Number(sale.amount_paid_minor_units ?? 0),
+    p_customer_name: sale.customer_name == null ? null : str(sale.customer_name) || null,
+  });
+  if (error) return rpcFailure(error.message);
+  const res = typeof data === 'string' ? JSON.parse(data) : (data ?? {});
+  return json({ ok: true, id: res.id, receipt_number: res.receipt_number,
+    subtotal_minor_units: res.subtotal_minor_units, total_minor_units: res.total_minor_units });
 }
 
 async function searchSales(db: any, ctx: Ctx, body: any): Promise<Response> {
@@ -450,18 +589,13 @@ async function searchSales(db: any, ctx: Ctx, body: any): Promise<Response> {
 async function voidSale(db: any, ctx: Ctx, body: any): Promise<Response> {
   const reason = str(body.reason);
   if (!reason || reason.length > 240) return json({ ok: false, error: 'Void reason required.' }, 400);
-  const { data: sale } = await db.from('sales').select('status')
-    .eq('customer_id', ctx.customerId).eq('id', String(body.sale_id ?? '')).maybeSingle();
-  if (!sale) return json({ ok: false, error: 'Sale not found.' }, 404);
-  if (sale.status === 'VOIDED') return json({ ok: false, error: 'Already voided.' }, 409);
-  const { data: active } = await db.from('shifts').select('id')
-    .eq('customer_id', ctx.customerId).eq('status', 'OPEN').maybeSingle();
-  const up = await db.from('sales').update({
-    status: 'VOIDED', void_reason: reason, voided_at: new Date().toISOString(),
-    voided_by: ctx.userId, voided_shift_id: active ? active.id : null,
-  }).eq('customer_id', ctx.customerId).eq('id', body.sale_id);
-  if (up.error) throw new Error(up.error.message);
-  await audit(db, ctx.customerId, ctx.userId, 'SALE_VOIDED', `Sale ${body.sale_id}: ${reason}`);
+  const saleId = String(body.sale_id ?? '');
+  if (!saleId) return json({ ok: false, error: 'Sale not found.' }, 404);
+  // Owner direct void: sale -> VOIDED + audit in one transaction (audit #4).
+  const { error } = await db.rpc('pos_void_sale', {
+    p_customer: ctx.customerId, p_user: ctx.userId, p_sale_id: saleId, p_reason: reason,
+  });
+  if (error) return rpcFailure(error.message);
   return json({ ok: true });
 }
 
@@ -506,23 +640,16 @@ async function listVoidRequests(db: any, ctx: Ctx): Promise<Response> {
 }
 
 async function decideVoid(db: any, ctx: Ctx, body: any, decision: string): Promise<Response> {
-  const { data: vr } = await db.from('void_requests').select('*')
-    .eq('customer_id', ctx.customerId).eq('id', String(body.request_id ?? '')).maybeSingle();
-  if (!vr) return json({ ok: false, error: 'Request not found.' }, 404);
-  if (vr.status !== 'PENDING') return json({ ok: false, error: 'Already decided.' }, 409);
-  const patch: any = { status: decision, decided_by: ctx.userId, decided_at: new Date().toISOString() };
-  const up = await db.from('void_requests').update(patch)
-    .eq('customer_id', ctx.customerId).eq('id', vr.id);
-  if (up.error) throw new Error(up.error.message);
-  if (decision === 'APPROVED') {
-    const { data: active } = await db.from('shifts').select('id')
-      .eq('customer_id', ctx.customerId).eq('status', 'OPEN').maybeSingle();
-    await db.from('sales').update({
-      status: 'VOIDED', void_reason: vr.reason, voided_at: new Date().toISOString(),
-      voided_by: ctx.userId, voided_shift_id: active ? active.id : null,
-    }).eq('customer_id', ctx.customerId).eq('id', vr.sale_id);
-  }
-  await audit(db, ctx.customerId, ctx.userId, `VOID_${decision}`, `Request ${vr.id} ${decision.toLowerCase()}.`);
+  const requestId = String(body.request_id ?? '');
+  if (!requestId) return json({ ok: false, error: 'Request not found.' }, 404);
+  // Approving marks the request APPROVED and flips the sale to VOIDED in one
+  // transaction; if the sale update affects 0 rows the RPC aborts so we never
+  // return success while the sale stays COMPLETED (audit #4-void).
+  const fn = decision === 'APPROVED' ? 'pos_approve_void' : 'pos_reject_void';
+  const { error } = await db.rpc(fn, {
+    p_customer: ctx.customerId, p_user: ctx.userId, p_request_id: requestId,
+  });
+  if (error) return rpcFailure(error.message);
   return json({ ok: true });
 }
 
@@ -536,22 +663,19 @@ async function getActiveShift(db: any, ctx: Ctx): Promise<Response> {
 }
 
 // Returns the perpetual open shift, creating one (opening cash 0) if none
-// exists so the register screen always has a balance to show. Racy double-open
-// is prevented server-side by re-checking inside the insert guard.
+// exists so the register screen always has a balance to show. The find-or-create
+// runs in one transaction guarded by a per-tenant advisory lock inside the RPC,
+// so two concurrent tills can no longer both see "no OPEN shift" and both insert
+// (audit #3).
 async function ensureShift(db: any, ctx: Ctx): Promise<Response> {
-  const { data: existing } = await db.from('shifts').select('*')
-    .eq('customer_id', ctx.customerId).eq('status', 'OPEN').limit(1).maybeSingle();
-  if (existing) return json({ ok: true, shift: deSnake(existing) });
-  const id = crypto.randomUUID();
-  const ins = await db.from('shifts').insert({
-    id, customer_id: ctx.customerId, cashier_id: ctx.userId,
-    opening_cash_minor_units: 0, status: 'OPEN', opened_at: new Date().toISOString(),
-  }).select().maybeSingle();
-  if (ins.error) throw new Error(ins.error.message);
-  // Another request may have opened a shift concurrently; prefer the OPEN row.
-  const { data: open } = await db.from('shifts').select('*')
-    .eq('customer_id', ctx.customerId).eq('status', 'OPEN').limit(1).maybeSingle();
-  return json({ ok: true, shift: deSnake(open ?? ins.data) });
+  const { data, error } = await db.rpc('pos_ensure_shift', {
+    p_customer: ctx.customerId, p_user: ctx.userId, p_device: ctx.deviceId,
+  });
+  if (error) throw new Error(error.message);
+  const shiftId = String(data);
+  const { data: row } = await db.from('shifts').select('*')
+    .eq('customer_id', ctx.customerId).eq('id', shiftId).maybeSingle();
+  return json({ ok: true, shift: row ? deSnake(row) : { id: shiftId } });
 }
 
 // Register balance (all-time expected cash) plus today's activity counters,
@@ -603,60 +727,42 @@ async function shiftHistory(db: any, ctx: Ctx, body: any): Promise<Response> {
 
 async function openShift(db: any, ctx: Ctx, body: any): Promise<Response> {
   const opening = Number(body.opening_cash_minor_units ?? 0);
-  if (opening < 0) return json({ ok: false, error: 'Opening cash cannot be negative.' }, 400);
-  const { data: existing } = await db.from('shifts').select('id')
-    .eq('customer_id', ctx.customerId).eq('status', 'OPEN').maybeSingle();
-  if (existing) return json({ ok: false, error: 'A shift is already open.' }, 409);
-  const id = crypto.randomUUID();
-  const ins = await db.from('shifts').insert({
-    id, customer_id: ctx.customerId, cashier_id: ctx.userId,
-    opening_cash_minor_units: opening, status: 'OPEN',
-    opened_at: new Date().toISOString(),
+  if (!Number.isFinite(opening) || opening < 0) return json({ ok: false, error: 'Opening cash cannot be negative.' }, 400);
+  // Advisory-locked open + the partial unique index backstop mean a racing
+  // second OPEN for the same device cannot both succeed (audit #3).
+  const { data, error } = await db.rpc('pos_open_shift', {
+    p_customer: ctx.customerId, p_user: ctx.userId, p_device: ctx.deviceId, p_opening: opening,
   });
-  if (ins.error) throw new Error(ins.error.message);
-  await audit(db, ctx.customerId, ctx.userId, 'SHIFT_OPENED', `Shift ${id} opened.`);
-  return json({ ok: true, id });
+  if (error) return rpcFailure(error.message);
+  return json({ ok: true, id: String(data) });
 }
 
 async function closeShift(db: any, ctx: Ctx, body: any): Promise<Response> {
   const closing = Number(body.closing_cash_minor_units ?? 0);
-  if (closing < 0) return json({ ok: false, error: 'Closing cash cannot be negative.' }, 400);
+  if (!Number.isFinite(closing) || closing < 0) return json({ ok: false, error: 'Closing cash cannot be negative.' }, 400);
   const shiftId = String(body.shift_id ?? '');
-  const { data: shift } = await db.from('shifts').select('*')
-    .eq('customer_id', ctx.customerId).eq('id', shiftId).eq('status', 'OPEN').maybeSingle();
-  if (!shift) return json({ ok: false, error: 'Shift is no longer open.' }, 409);
-  const expected = await computeExpectedCash(db, ctx.customerId, shift);
-  const up = await db.from('shifts').update({
-    closing_cash_minor_units: closing, expected_cash_minor_units: expected,
-    status: 'CLOSED', closed_at: new Date().toISOString(),
-  }).eq('customer_id', ctx.customerId).eq('id', shiftId).eq('status', 'OPEN');
-  if (up.error) throw new Error(up.error.message);
-  await audit(db, ctx.customerId, ctx.userId, 'SHIFT_CLOSED',
-    `Expected ${expected}, Counted ${closing}, Difference ${closing - expected}.`);
-  return json({ ok: true, expected_cash_minor_units: expected });
+  if (!shiftId) return json({ ok: false, error: 'Shift is no longer open.' }, 409);
+  // Reconciliation + close run inside one advisory-locked transaction, so a
+  // cash movement that races in just before close is still counted (audit #3).
+  const { data, error } = await db.rpc('pos_close_shift', {
+    p_customer: ctx.customerId, p_user: ctx.userId, p_shift_id: shiftId, p_closing: closing,
+  });
+  if (error) return rpcFailure(error.message);
+  return json({ ok: true, expected_cash_minor_units: Number(data) });
 }
 
-// Reconciliation shared by shift_summary + close_shift. Mirrors
-// ShiftRepository.getShiftSummary exactly, including the cross-shift cash
-// refund netting rule (a sale rung up in another shift but refunded while this
-// one was open is the only void that drains THIS drawer).
+// Reconciliation shared by register_snapshot + shift_summary + dashboard.
+// Delegates to the pos_expected_cash SQL aggregate (audit #9) so the drawer
+// balance stays exact even when a shift has more than PostgREST's 1000-row
+// fetch cap worth of sales/movements. Mirrors the native rule including the
+// cross-shift cash refund netting (a sale rung up in another shift but refunded
+// while this one was open is the only void that drains THIS drawer).
 async function computeExpectedCash(db: any, customerId: string, shift: any): Promise<number> {
-  const opening = Number(shift.opening_cash_minor_units ?? 0);
-  const { data: cash } = await db.from('sales').select('total_minor_units')
-    .eq('customer_id', customerId).eq('shift_id', shift.id).eq('status', 'COMPLETED').eq('payment_method', 'CASH');
-  const cashTotal = (cash ?? []).reduce((s: number, r: any) => s + Number(r.total_minor_units), 0);
-  const { data: mvs } = await db.from('cash_movements').select('type, amount_minor_units')
-    .eq('customer_id', customerId).eq('shift_id', shift.id);
-  let deposits = 0, withdrawals = 0;
-  for (const m of mvs ?? []) {
-    if (m.type === 'DEPOSIT') deposits += Number(m.amount_minor_units);
-    else withdrawals += Number(m.amount_minor_units);
-  }
-  const { data: refunds } = await db.from('sales').select('total_minor_units')
-    .eq('customer_id', customerId).eq('status', 'VOIDED').eq('payment_method', 'CASH')
-    .eq('voided_shift_id', shift.id).neq('shift_id', shift.id);
-  const refundTotal = (refunds ?? []).reduce((s: number, r: any) => s + Number(r.total_minor_units), 0);
-  return opening + cashTotal + deposits - withdrawals - refundTotal;
+  const { data, error } = await db.rpc('pos_expected_cash', {
+    p_customer: customerId, p_shift_id: shift.id,
+  });
+  if (error) throw new Error(error.message);
+  return Number(data ?? 0);
 }
 
 async function shiftSummary(db: any, ctx: Ctx, body: any): Promise<Response> {
@@ -704,9 +810,18 @@ async function addCashMovement(db: any, ctx: Ctx, body: any): Promise<Response> 
     .eq('customer_id', ctx.customerId).eq('id', String(body.shift_id ?? '')).eq('status', 'OPEN').maybeSingle();
   if (!shift) return json({ ok: false, error: 'Movement requires an open shift.' }, 400);
   const id = crypto.randomUUID();
+  // Optional proof photo (base64 image, usually attached on a debit as
+  // withdrawal evidence). Capped server-side so entries can't bloat the row.
+  const photo = typeof body.photo === 'string' && body.photo.length > 0
+    ? body.photo
+    : null;
+  if (photo !== null && photo.length > 4_000_000) {
+    return json({ ok: false, error: 'Proof photo is too large.' }, 400);
+  }
   const ins = await db.from('cash_movements').insert({
     id, customer_id: ctx.customerId, shift_id: body.shift_id, user_id: ctx.userId,
     type, amount_minor_units: amount, reason: str(body.reason),
+    photo,
     created_at: new Date().toISOString(),
   });
   if (ins.error) throw new Error(ins.error.message);
@@ -740,7 +855,7 @@ async function listCashMovements(db: any, ctx: Ctx, body: any): Promise<Response
 // ===========================================================================
 async function listUsers(db: any, ctx: Ctx): Promise<Response> {
   const { data, error } = await db.from('pos_users')
-    .select('id, username, role, active, created_at').eq('customer_id', ctx.customerId)
+    .select('id, username, role, active, created_at, permissions').eq('customer_id', ctx.customerId)
     .order('username');
   if (error) throw new Error(error.message);
   return json({ ok: true, users: strip(data) });
@@ -754,29 +869,51 @@ async function createUser(db: any, ctx: Ctx, body: any): Promise<Response> {
   if (![OWNER, CASHIER].includes(role)) return json({ ok: false, error: 'Invalid role.' }, 400);
   const minLen = role === OWNER ? 12 : 8;
   if (password.length < minLen) return json({ ok: false, error: `Password must be at least ${minLen} characters.` }, 400);
-  const { data: dup } = await db.from('pos_users').select('id')
-    .eq('customer_id', ctx.customerId).filter('lower(username)', 'eq', username.toLowerCase()).maybeSingle();
+  // Owners bypass the tick list (store []); a staff account keeps only the
+  // validated feature keys it was given, de-duplicated, in registry order.
+  const rawPerms = Array.isArray(body.permissions) ? body.permissions.map(String) : [];
+  const perms = role === OWNER ? [] : Array.from(new Set(rawPerms.filter((k) => FEATURE_KEYS.has(k))));
+  const { data: dup, error: dupErr } = await db.from('pos_users').select('id')
+    .eq('customer_id', ctx.customerId).ilike('username', username.toLowerCase().replace(/[%_]/g, '')).maybeSingle();
+  if (dupErr) throw new Error(`duplicate username check: ${dupErr.message}`);
   if (dup) return json({ ok: false, error: 'Username is already taken.' }, 409);
   const { salt, hash } = await hashPassword(password);
   const id = crypto.randomUUID();
   const ins = await db.from('pos_users').insert({
-    id, customer_id: ctx.customerId, username, role, pw_salt: salt, pw_hash: hash, active: true,
+    id, customer_id: ctx.customerId, username, role, pw_salt: salt, pw_hash: hash, active: true, permissions: perms,
   });
   if (ins.error) throw new Error(ins.error.message);
   await audit(db, ctx.customerId, ctx.userId, 'USER_CREATED', `User "${username}" (${role}).`);
   return json({ ok: true, id });
 }
 
+// Replaces a staff account's feature ticks. Owner rows are rejected (they
+// bypass the list). Enforced as OWNER_ONLY at the gate above.
+async function setUserPermissions(db: any, ctx: Ctx, body: any): Promise<Response> {
+  const target = String(body.target_user_id ?? '');
+  const rawPerms = Array.isArray(body.permissions) ? body.permissions.map(String) : [];
+  const perms = Array.from(new Set(rawPerms.filter((k) => FEATURE_KEYS.has(k))));
+  const { data: t } = await db.from('pos_users').select('role, username')
+    .eq('customer_id', ctx.customerId).eq('id', target).maybeSingle();
+  if (!t) return json({ ok: false, error: 'User not found.' }, 404);
+  if (t.role === OWNER) return json({ ok: false, error: 'Owner accounts bypass feature permissions.' }, 400);
+  const up = await db.from('pos_users').update({ permissions: perms })
+    .eq('customer_id', ctx.customerId).eq('id', target);
+  if (up.error) throw new Error(up.error.message);
+  await audit(db, ctx.customerId, ctx.userId, 'USER_PERMISSIONS_SET', `Permissions for "${t.username}": ${perms.join(', ') || '(none)'}.`);
+  return json({ ok: true });
+}
+
 async function resetPassword(db: any, ctx: Ctx, body: any): Promise<Response> {
   const target = String(body.target_user_id ?? '');
   const password = String(body.new_password ?? '');
-  const { data: t } = await db.from('pos_users').select('role, username')
+  const { data: t } = await db.from('pos_users').select('role, username, token_version')
     .eq('customer_id', ctx.customerId).eq('id', target).maybeSingle();
   if (!t) return json({ ok: false, error: 'User not found.' }, 404);
   const minLen = t.role === OWNER ? 12 : 8;
   if (password.length < minLen) return json({ ok: false, error: `Password must be at least ${minLen} characters.` }, 400);
   const { salt, hash } = await hashPassword(password);
-  const up = await db.from('pos_users').update({ pw_salt: salt, pw_hash: hash })
+  const up = await db.from('pos_users').update({ pw_salt: salt, pw_hash: hash, token_version: (t.token_version ?? 0) + 1 })
     .eq('customer_id', ctx.customerId).eq('id', target);
   if (up.error) throw new Error(up.error.message);
   await audit(db, ctx.customerId, ctx.userId, 'PASSWORD_RESET', `Password reset for "${t.username}".`);
@@ -795,16 +932,23 @@ async function setUserActive(db: any, ctx: Ctx, body: any): Promise<Response> {
       if ((count ?? 0) <= 1) return json({ ok: false, error: 'At least one active owner is required.' }, 409);
     }
   }
-  const up = await db.from('pos_users').update({ active }).eq('customer_id', ctx.customerId).eq('id', target);
+  // Deactivating an account must also invalidate its live sessions, and
+  // resetting the version on activation is harmless (there is no valid token),
+  // so bump unconditionally — any previously issued JWT is now stale (audit #6).
+  const { data: cur } = await db.from('pos_users').select('token_version')
+    .eq('customer_id', ctx.customerId).eq('id', target).maybeSingle();
+  const up = await db.from('pos_users').update({ active, token_version: (cur?.token_version ?? 0) + 1 }).eq('customer_id', ctx.customerId).eq('id', target);
   if (up.error) throw new Error(up.error.message);
   await audit(db, ctx.customerId, ctx.userId, active ? 'USER_ACTIVATED' : 'USER_DEACTIVATED', `Account ${target}.`);
   return json({ ok: true });
 }
 
-async function loadActiveUser(db: any, customerId: string, userId: string): Promise<{ role: string } | null> {
-  const { data } = await db.from('pos_users').select('role, active')
+async function loadActiveUser(db: any, customerId: string, userId: string): Promise<{ role: string; tokenVersion: number; permissions: string[] } | null> {
+  const { data } = await db.from('pos_users').select('role, active, token_version, permissions')
     .eq('customer_id', customerId).eq('id', userId).eq('active', true).maybeSingle();
-  return data ? { role: data.role } : null;
+  if (!data) return null;
+  const permissions = Array.isArray(data.permissions) ? data.permissions.map(String) : [];
+  return { role: data.role, tokenVersion: Number(data.token_version ?? 0), permissions };
 }
 
 // ===========================================================================
@@ -944,41 +1088,16 @@ async function financeUpdateEntry(db: any, ctx: Ctx, body: any): Promise<Respons
   return json({ ok: true });
 }
 async function financeMarkCompleted(db: any, ctx: Ctx, body: any): Promise<Response> {
-  const now = new Date().toISOString();
-  const { data: entry } = await db.from('pos_finance_entries').select('*')
-    .eq('customer_id', ctx.customerId).eq('id', String(body.entry_id ?? '')).eq('status', 'PENDING').maybeSingle();
-  if (!entry) return json({ ok: false, error: 'Entry is not pending.' }, 409);
-  const up = await db.from('pos_finance_entries').update({
-    status: 'COMPLETED', completed_at: now, completed_by: ctx.userId, updated_at: now,
-  }).eq('customer_id', ctx.customerId).eq('id', String(body.entry_id ?? '')).eq('status', 'PENDING').select('id');
-  if (up.error) throw new Error(up.error.message);
-  if (!up.data || up.data.length === 0) {
-    return json({ ok: false, error: 'Entry is not pending.' }, 409);
-  }
-  // A cash collection physically puts money into the drawer, so deposit it onto
-  // the open (perpetual) shift. Bank/non-cash collections never touch it.
-  if (entry.payment_method === 'CASH') {
-    const { data: cats } = await db.from('pos_finance_categories').select('name')
-      .eq('customer_id', ctx.customerId).eq('id', entry.category_id).maybeSingle();
-    let { data: shift } = await db.from('shifts').select('id')
-      .eq('customer_id', ctx.customerId).eq('status', 'OPEN').limit(1).maybeSingle();
-    if (!shift) {
-      const sid = crypto.randomUUID();
-      const ins = await db.from('shifts').insert({
-        id: sid, customer_id: ctx.customerId, cashier_id: ctx.userId,
-        opening_cash_minor_units: 0, status: 'OPEN', opened_at: now,
-      }).select('id').maybeSingle();
-      if (ins.error) throw new Error(ins.error.message);
-      shift = { id: sid };
-    }
-    const mv = await db.from('cash_movements').insert({
-      id: crypto.randomUUID(), customer_id: ctx.customerId, shift_id: shift!.id, user_id: ctx.userId,
-      type: 'DEPOSIT', amount_minor_units: Number(entry.amount_minor_units),
-      reason: `Collected from ${cats?.name ?? 'a person'}`, created_at: now,
-    });
-    if (mv.error) throw new Error(mv.error.message);
-  }
-  await audit(db, ctx.customerId, ctx.userId, 'FINANCE_ENTRY_COMPLETED', `Entry ${body.entry_id} taken.`);
+  const entryId = String(body.entry_id ?? '');
+  if (!entryId) return json({ ok: false, error: 'Entry is not pending.' }, 409);
+  // Flipping the entry to COMPLETED, depositing the CASH movement onto the open
+  // shift, and the audit all commit in one transaction, so a completed entry
+  // can never be missing its drawer deposit and become unretryable (audit
+  // #4-finance). Non-cash collections never touch the drawer (handled in RPC).
+  const { error } = await db.rpc('pos_complete_finance', {
+    p_customer: ctx.customerId, p_user: ctx.userId, p_entry_id: entryId,
+  });
+  if (error) return rpcFailure(error.message);
   return json({ ok: true });
 }
 async function financeSearchEntries(db: any, ctx: Ctx, body: any): Promise<Response> {
@@ -1073,39 +1192,17 @@ async function setSetting(db: any, ctx: Ctx, body: any): Promise<Response> {
 }
 
 async function dashboardSummary(db: any, ctx: Ctx, body: any): Promise<Response> {
-  const start = body.period_start;
-  const end = body.period_end;
-  const inRange = (q: any) => {
-    if (start) q = q.gte('created_at', start);
-    if (end) q = q.lt('created_at', end);
-    return q;
-  };
-  const { data: completed } = await inRange(
-    db.from('sales').select('total_minor_units, payment_method')
-      .eq('customer_id', ctx.customerId).eq('status', 'COMPLETED'));
-  const rows = completed ?? [];
-  const revenue = rows.reduce((s: number, r: any) => s + Number(r.total_minor_units), 0);
-  const cashRevenue = rows.filter((r: any) => r.payment_method === 'CASH')
-    .reduce((s: number, r: any) => s + Number(r.total_minor_units), 0);
-  const bankRevenue = rows.filter((r: any) => r.payment_method === 'BANK')
-    .reduce((s: number, r: any) => s + Number(r.total_minor_units), 0);
-  const count = rows.length;
-
-  const { count: voidCount } = await inRange(
-    db.from('sales').select('*', { count: 'exact', head: true })
-      .eq('customer_id', ctx.customerId).eq('status', 'VOIDED'));
-
-  // Pending cashier void requests whose target sale falls in the period.
-  const { data: periodSales } = await inRange(
-    db.from('sales').select('id').eq('customer_id', ctx.customerId));
-  const periodIds = (periodSales ?? []).map((s: any) => s.id);
-  let pendingRequests = 0;
-  if (periodIds.length) {
-    const { count: pc } = await db.from('void_requests')
-      .select('*', { count: 'exact', head: true })
-      .eq('customer_id', ctx.customerId).eq('status', 'PENDING').in('sale_id', periodIds);
-    pendingRequests = pc ?? 0;
-  }
+  const start = body.period_start ?? null;
+  const end = body.period_end ?? null;
+  // All headline totals come from the pos_sales_totals SQL aggregate so the
+  // numbers stay exact past PostgREST's 1000-row fetch cap (audit #9).
+  const { data: tot, error: totErr } = await db.rpc('pos_sales_totals', {
+    p_customer: ctx.customerId, p_start: start, p_end: end,
+  });
+  if (totErr) throw new Error(totErr.message);
+  const t = typeof tot === 'string' ? JSON.parse(tot) : (tot ?? {});
+  const revenue = Number(t.revenue ?? 0);
+  const count = Number(t.sales_count ?? 0);
 
   // Expected cash uses the currently open shift (mirrors the native dashboard).
   let expectedCash = 0;
@@ -1122,85 +1219,57 @@ async function dashboardSummary(db: any, ctx: Ctx, body: any): Promise<Response>
     stats: {
       revenue,
       sales_count: count,
-      cash_revenue: cashRevenue,
-      bank_revenue: bankRevenue,
+      cash_revenue: Number(t.cash_revenue ?? 0),
+      bank_revenue: Number(t.bank_revenue ?? 0),
       average_sale: count === 0 ? 0 : Math.floor(revenue / count),
       expected_cash: expectedCash,
       is_shift_open: shiftOpen,
-      void_count: voidCount ?? 0,
-      pending_void_requests: pendingRequests,
+      void_count: Number(t.void_count ?? 0),
+      pending_void_requests: Number(t.pending_void_requests ?? 0),
     },
   });
 }
 
 async function revenueTrend(db: any, ctx: Ctx, body: any): Promise<Response> {
-  let q = db.from('sales').select('created_at, total_minor_units')
-    .eq('customer_id', ctx.customerId).eq('status', 'COMPLETED');
-  if (body.period_start) q = q.gte('created_at', body.period_start);
-  if (body.period_end) q = q.lt('created_at', body.period_end);
-  const { data, error } = await q;
+  const { data, error } = await db.rpc('pos_revenue_trend', {
+    p_customer: ctx.customerId, p_start: body.period_start ?? null, p_end: body.period_end ?? null,
+  });
   if (error) throw new Error(error.message);
-  // Group by local calendar day (first 10 chars of the ISO timestamp), the same
-  // `substr(created_at,1,10)` bucketing the local report uses, oldest to newest.
-  const byDay: Record<string, { count: number; total: number }> = {};
-  for (const r of data ?? []) {
-    const day = String(r.created_at).slice(0, 10);
-    const a = (byDay[day] ??= { count: 0, total: 0 });
-    a.count += 1;
-    a.total += Number(r.total_minor_units);
-  }
-  const trend = Object.entries(byDay)
-    .map(([day, v]) => ({ day, count: v.count, total: v.total }))
-    .sort((a, b) => a.day.localeCompare(b.day));
+  const trend = typeof data === 'string' ? JSON.parse(data) : (data ?? []);
   return json({ ok: true, trend });
 }
 
 async function reportSummary(db: any, ctx: Ctx, body: any): Promise<Response> {
-  const rangeStart = body.period_start; const rangeEnd = body.period_end;
-  let q = db.from('sales').select('*').eq('customer_id', ctx.customerId).eq('status', 'COMPLETED');
-  if (rangeStart) q = q.gte('created_at', rangeStart);
-  if (rangeEnd) q = q.lt('created_at', rangeEnd);
-  const { data: sales } = await q;
-  const saleIds = (sales ?? []).map((s: any) => s.id);
-  const byProduct: Record<string, { qty: number; lines: number; revenue: number }> = {};
-  if (saleIds.length) {
-    const { data: items } = await db.from('sale_items').select('*')
-      .eq('customer_id', ctx.customerId).in('sale_id', saleIds);
-    for (const it of items ?? []) {
-      const k = it.product_name_snapshot;
-      const a = (byProduct[k] ??= { qty: 0, lines: 0, revenue: 0 });
-      a.qty += Number(it.billing_quantity_milliunits ?? 0);
-      a.lines += 1;
-      a.revenue += Number(it.line_total_minor_units ?? 0);
-    }
-  }
+  const rangeStart = body.period_start ?? null;
+  const rangeEnd = body.period_end ?? null;
+  // Product mix aggregated in SQL (audit #9): exact across every matching line
+  // item rather than the first 1000 sales PostgREST would return.
+  const { data, error } = await db.rpc('pos_product_summary', {
+    p_customer: ctx.customerId, p_start: rangeStart, p_end: rangeEnd,
+  });
+  if (error) throw new Error(error.message);
+  const productSummary = typeof data === 'string' ? JSON.parse(data) : (data ?? []);
   return json({
     ok: true,
-    product_summary: Object.entries(byProduct)
-      .map(([name, v]) => ({ product_name_snapshot: name, ...v }))
-      .sort((a, b) => b.revenue - a.revenue),
+    product_summary: productSummary,
     cashier_performance: await cashierPerformance(db, ctx, rangeStart, rangeEnd),
   });
 }
 
-// Sales count + revenue per cashier for the reports screen, highest revenue
-// first. Mirrors the local `getCashierPerformance` grouped join.
+// Sales count + revenue per cashier, aggregated in SQL and hydrated with the
+// operator username (cashier_id is the pos_users key) for the reports screen.
 async function cashierPerformance(db: any, ctx: Ctx, start: any, end: any): Promise<any[]> {
-  let q = db.from('sales').select('cashier_id, total_minor_units')
-    .eq('customer_id', ctx.customerId).eq('status', 'COMPLETED');
-  if (start) q = q.gte('created_at', start);
-  if (end) q = q.lt('created_at', end);
-  const { data } = await q;
-  const names = await usernamesById(db, ctx, (data ?? []).map((r: any) => r.cashier_id));
-  const byCashier: Record<string, { total_sales: number; total_revenue: number }> = {};
-  for (const r of data ?? []) {
-    const a = (byCashier[r.cashier_id] ??= { total_sales: 0, total_revenue: 0 });
-    a.total_sales += 1;
-    a.total_revenue += Number(r.total_minor_units);
-  }
-  return Object.entries(byCashier)
-    .map(([id, v]) => ({ username: names[id] ?? null, ...v }))
-    .sort((a, b) => b.total_revenue - a.total_revenue);
+  const { data, error } = await db.rpc('pos_cashier_performance', {
+    p_customer: ctx.customerId, p_start: start ?? null, p_end: end ?? null,
+  });
+  if (error) throw new Error(error.message);
+  const rows = (typeof data === 'string' ? JSON.parse(data) : (data ?? [])) as any[];
+  const names = await usernamesById(db, ctx, rows.map((r: any) => r.cashier_id));
+  return rows.map((r: any) => ({
+    username: names[r.cashier_id] ?? null,
+    total_sales: Number(r.total_sales ?? 0),
+    total_revenue: Number(r.total_revenue ?? 0),
+  }));
 }
 
 async function listAudit(db: any, ctx: Ctx, body: any): Promise<Response> {
@@ -1243,7 +1312,7 @@ async function derive(password: string, salt: Uint8Array, iterations: number): P
   return new Uint8Array(bits);
 }
 
-async function signJwt(claims: { sub: string; cid: string; role: string }): Promise<string> {
+async function signJwt(claims: { sub: string; cid: string; role: string; tv: number }): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: 'HS256', typ: 'JWT' };
   const payload = { ...claims, iat: now, exp: now + SESSION_TTL_SECONDS };
@@ -1253,7 +1322,7 @@ async function signJwt(claims: { sub: string; cid: string; role: string }): Prom
   return `${head}.${body}.${sig}`;
 }
 
-async function verifyJwt(token: string): Promise<{ userId: string; customerId: string } | null> {
+async function verifyJwt(token: string): Promise<{ userId: string; customerId: string; tv: number } | null> {
   const parts = token.split('.');
   if (parts.length !== 3) return null;
   const expectSig = await hmac(`${parts[0]}.${parts[1]}`);
@@ -1262,7 +1331,9 @@ async function verifyJwt(token: string): Promise<{ userId: string; customerId: s
   try { payload = JSON.parse(atob(b64uToB64(parts[1]))); } catch { return null; }
   if (!payload || typeof payload.exp !== 'number' || payload.exp * 1000 < Date.now()) return null;
   if (!payload.sub || !payload.cid) return null;
-  return { userId: String(payload.sub), customerId: String(payload.cid) };
+  // Tokens minted before the token_version migration carry no tv -> treated as
+  // 0, matching the column DEFAULT, so existing persistent sessions survive.
+  return { userId: String(payload.sub), customerId: String(payload.cid), tv: Number(payload.tv ?? 0) };
 }
 
 async function hmac(data: string): Promise<string> {
@@ -1274,7 +1345,7 @@ async function hmac(data: string): Promise<string> {
 // ===========================================================================
 // Small shared helpers
 // ===========================================================================
-type Ctx = { customerId: string; userId: string; role: string };
+type Ctx = { customerId: string; userId: string; role: string; deviceId: string | null };
 
 // Stamps ownership + defaults; strips any client-supplied customer_id so a
 // crafted body can never target another tenant.
@@ -1330,6 +1401,18 @@ function strip(rows: any[] | null): any[] {
 function deSnake(row: any): any { return row; }
 
 function str(v: unknown): string { return typeof v === 'string' ? v.trim() : ''; }
+
+// Maps a raised Postgres EXCEPTION (from a SECURITY DEFINER RPC) back to a
+// structured 4xx so the client sees the same ok:false/error contract it would
+// from a native failure, instead of a generic 500. Not-found / conflict wording
+// keeps its status; anything else is a client-correctable 400.
+function rpcFailure(message: string): Response {
+  const m = String(message || '').trim();
+  if (/not found|no longer|already voided|not voidable|not pending|already decided|already open|already exists|no longer open/i.test(m)) {
+    return json({ ok: false, error: m }, 409);
+  }
+  return json({ ok: false, error: m || 'Operation rejected.' }, 400);
+}
 
 function b64(bytes: Uint8Array): string {
   let s = ''; for (const x of bytes) s += String.fromCharCode(x);

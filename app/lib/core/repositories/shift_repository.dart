@@ -34,6 +34,7 @@ abstract class ShiftRepository {
     int amount,
     String reason, {
     String? userId,
+    String? photo,
   });
 
   /// The cash-register ledger, newest first, each carrying the username of
@@ -165,6 +166,7 @@ class SqfliteShiftRepository implements ShiftRepository {
     int amount,
     String reason, {
     String? userId,
+    String? photo,
   }) async {
     if (amount <= 0) throw Exception('Movement amount must be positive.');
     if (!{'WITHDRAWAL', 'DEPOSIT', 'EXPENSE'}.contains(type)) {
@@ -202,6 +204,8 @@ class SqfliteShiftRepository implements ShiftRepository {
         'amount_minor_units': amount,
         'reason': reason.trim(),
         'created_at': DateTime.now().toIso8601String(),
+        // Optional proof photo (base64 JPEG); null keeps the column empty.
+        'photo': photo,
       });
       await txn.insert('audit_logs', {
         'id': const Uuid().v4(),

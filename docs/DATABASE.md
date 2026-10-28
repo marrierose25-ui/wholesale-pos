@@ -45,7 +45,7 @@ A partial unique index (`one_open_shift`) plus insert/update triggers enforce at
 ### `sales`
 - `id` TEXT PK, `receipt_number` TEXT UNIQUE (`REC-YYYYMMDD-NNNN`, sequential per day)
 - `cashier_id` FK -> users, `device_id` FK -> devices, `shift_id` FK -> shifts
-- `customer_name`, `payment_method` (`CASH`/`BANK`)
+- `customer_name`, `payment_method` (`CASH`/`BANK`/`LOAN`). `LOAN` is recorded in history but collects no money, so it is excluded from the dashboard revenue, the reports aggregates and the register drawer math (only `CASH` feeds the drawer; `BANK`/`LOAN` never do).
 - `subtotal_minor_units`, `discount_minor_units`, `total_minor_units`
 - `amount_paid_minor_units`, `change_minor_units`
 - `status` (`COMPLETED`/`VOIDED`), `void_reason`, `voided_at`, `voided_by`, `voided_shift_id`

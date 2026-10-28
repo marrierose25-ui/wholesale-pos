@@ -92,7 +92,7 @@ class SupabaseSyncBackend implements SyncBackend {
   bool get isConfigured => _baseUrl.isNotEmpty && _apiKey.isNotEmpty;
 
   @override
-  Future<void> push(List<SyncOutboxEntry> entries) async {
+  Future<Set<String>> push(List<SyncOutboxEntry> entries) async {
     for (final entry in entries) {
       final table = _tableFor(entry.entityType);
       if (table == null) continue; // Unknown entity type: nothing to push.
@@ -130,6 +130,10 @@ class SupabaseSyncBackend implements SyncBackend {
           break;
       }
     }
+    // This direct-PostgREST sink applies each row synchronously and throws on
+    // the first failure, so reaching here means the whole batch landed: ack
+    // every outbox id (matches the prior "mark all synced" behaviour).
+    return entries.map((e) => e.id).toSet();
   }
 
   static String? _tableFor(String entityType) => switch (entityType) {

@@ -6,6 +6,7 @@ import 'package:cryptography/cryptography.dart' as cryptography;
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
+import '../auth/features.dart';
 import '../models/user.dart';
 import '../util/isolate_runner.dart'
     if (dart.library.io) '../util/isolate_runner_native.dart';
@@ -50,7 +51,20 @@ abstract class UserRepository {
 
   Future<User?> authenticate(String username, String password);
 
-  Future<void> createUser(String username, String password, String role);
+  /// Creates an account. OWNER rows ignore [permissions] (they bypass the tick
+  /// list and store `[]`); a staff row is granted exactly the feature keys in
+  /// [permissions], validated against the registry.
+  Future<void> createUser(
+    String username,
+    String password,
+    String role, {
+    List<String> permissions = const [],
+  });
+
+  /// Replaces a staff account's feature ticks. Immediate on the server side
+  /// (rows are read live per request) and on the next app open (session
+  /// restore reloads the user). Owner rows are rejected — they bypass ticks.
+  Future<void> setUserPermissions(String userId, List<String> permissions);
 
   Future<void> changePassword({
     required String userId,
@@ -334,7 +348,12 @@ class SqfliteUserRepository implements UserRepository {
   }
 
   @override
-  Future<void> createUser(String username, String password, String role) async {
+  Future<void> createUser(
+    String username,
+    String password,
+    String role, {
+    List<String> permissions = const [],
+  }) async {
     final name = username.trim();
     if (name.isEmpty) {
       throw Exception('Username cannot be empty.');
@@ -344,6 +363,12 @@ class SqfliteUserRepository implements UserRepository {
     }
     _validatePassword(password, role);
 
+    // Owners bypass the tick list; a staff account is granted exactly the
+    // validated subset it was given (unknown keys dropped, registry order).
+    final perms = role == 'OWNER'
+        ? kOwnerPermissions
+        : normalizeFeatureKeys(permissions);
+
     final salt = _generateSalt();
     final hash = await _hashPassword(password, salt);
     final user = User(
@@ -352,6 +377,7 @@ class SqfliteUserRepository implements UserRepository {
       passwordHash: hash,
       salt: salt,
       role: role,
+      permissions: perms,
     );
 
     await _db.transaction((txn) async {
@@ -370,7 +396,41 @@ class SqfliteUserRepository implements UserRepository {
     await _audit(
       userId: user.id,
       action: 'USER_CREATED',
-      details: 'User "$name" created with role $role.',
+      details:
+          'User "$name" created with role $role'
+          '${role == 'OWNER' ? '' : ' (${perms.isEmpty ? 'no features' : perms.join(', ')})'}',
+    );
+  }
+
+  @override
+  Future<void> setUserPermissions(
+    String userId,
+    List<String> permissions,
+  ) async {
+    final rows = await _db.query(
+      'users',
+      columns: ['username', 'role'],
+      where: 'id = ?',
+      whereArgs: [userId],
+      limit: 1,
+    );
+    if (rows.isEmpty) throw Exception('User not found.');
+    if (rows.first['role'] == 'OWNER') {
+      throw Exception('Owner accounts bypass feature permissions.');
+    }
+    final normalized = normalizeFeatureKeys(permissions);
+    await _db.update(
+      'users',
+      {'permissions': jsonEncode(normalized)},
+      where: 'id = ?',
+      whereArgs: [userId],
+    );
+    await _audit(
+      userId: userId,
+      action: 'USER_PERMISSIONS_SET',
+      details:
+          'Permissions for "${rows.first['username']}": '
+          '${normalized.isEmpty ? '(none)' : normalized.join(', ')}',
     );
   }
 

@@ -79,6 +79,10 @@ class CashMovement {
   final String reason;
   final DateTime createdAt;
 
+  /// Optional proof photo (compressed JPEG as base64), attached when the
+  /// movement was recorded. Mostly used on debits as withdrawal evidence.
+  final String? photo;
+
   /// Name of the user who recorded the movement, hydrated from the users
   /// table for the ledger view only; never persisted on the movement row.
   final String? userName;
@@ -90,6 +94,7 @@ class CashMovement {
     required this.amountMinorUnits,
     required this.reason,
     required this.createdAt,
+    this.photo,
     this.userName,
   });
 
@@ -104,6 +109,7 @@ class CashMovement {
       amountMinorUnits: (map['amount_minor_units'] as num?)?.toInt() ?? 0,
       reason: (map['reason'] as String?) ?? '',
       createdAt: DateTime.parse(map['created_at'] as String),
+      photo: map['photo'] as String?,
       userName: map['user_name'] as String?,
     );
   }

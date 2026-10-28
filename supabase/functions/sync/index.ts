@@ -25,9 +25,11 @@
 //
 // Actions (POST /functions/v1/sync):
 //   { action: 'push', license: '<licenseCode>', entries: [outbox entries] }
-//     -> { ok, applied: n }   (idempotent upserts keyed on (customer_id, id))
-//   { action: 'pull', license: '<licenseCode>', since: '<iso>', tables?: [] }
-//     -> { ok, changes: { sales: [...], ... }, server_time: '<iso>' }
+//     -> { ok, applied: n, results: [{entityId, status, error?}] }
+//   { action: 'pull', license: '<licenseCode>', since: '<iso>',
+//     tables?: [], cursor?: {received_at, id}, limit?: n }
+//     -> { ok, changes: { sales: [...], ... }, server_time, next_cursor,
+//          has_more }
 //   { action: 'ping', license: '<licenseCode>' }
 //     -> { ok, customer_id, seats_active }  (cheap connectivity/auth probe)
 
@@ -150,61 +152,93 @@ function fail(status: number, error: string) {
 // Payload sub-rows carry local columns only; customer_id is stamped HERE.
 async function push(db: any, auth: { customerId: string }, body: any): Promise<Response> {
   const entries = Array.isArray(body.entries) ? body.entries : [];
-  if (entries.length === 0) return json({ ok: true, applied: 0 });
+  if (entries.length === 0) return json({ ok: true, applied: 0, results: [] });
   if (entries.length > MAX_BATCH) {
     return json({ ok: false, error: `Batch too large (max ${MAX_BATCH}).` }, 413);
   }
 
+  // Stamp every applied row with the server's receive time. Previously
+  // received_at defaulted only on INSERT, so an UPDATE left it stale and a
+  // pull keyed on received_at never re-surfaced the change (audit #12).
+  const receivedAt = new Date().toISOString();
   let applied = 0;
+  const results: { entityId: string; status: string; error?: string }[] = [];
+
   for (const entry of entries) {
+    const entityId = String(entry.entityId ?? '');
     // Accept both the local vocabulary ('sale') and the table name ('sales')
     // so older enqueued rows and hand-tested payloads keep working.
     const rawType = String(entry.entityType ?? '');
     const table = ENTITY_TABLE[rawType] ?? (TABLES.includes(rawType as any) ? rawType : '');
-    if (!table) continue; // Unknown entity type: skip, like the old backend.
-
-    if (String(entry.operation ?? '').toUpperCase() === 'DELETE') {
-      const del = await db.from(table)
-        .delete()
-        .eq('customer_id', auth.customerId)
-        .eq('id', String(entry.entityId ?? ''));
-      if (del.error) throw new Error(`delete ${table}: ${del.error.message}`);
-      // A deleted sale must also drop its orphaned line items.
-      if (table === 'sales') {
-        const delItems = await db.from('sale_items')
-          .delete().eq('customer_id', auth.customerId)
-          .eq('sale_id', String(entry.entityId ?? ''));
-        if (delItems.error) throw new Error(`delete sale_items: ${delItems.error.message}`);
-      }
-      applied++;
+    // A non-empty entity type we do not recognise is a permanent rejection,
+    // reported per-entry so the client can drop it instead of silently acking
+    // un-processed data OR retrying it forever (audit #20).
+    if (!table) {
+      results.push({ entityId, status: 'rejected', error: `unknown entity type: ${rawType}` });
       continue;
     }
 
-    // Collect the rows this entry writes: sale = header + items, rest = 1 row.
-    const rows: { table: string; row: any }[] = [];
-    const p = entry.payload ?? {};
-    switch (table) {
-      case 'sales':
-        if (p.sale) rows.push({ table: 'sales', row: p.sale });
-        for (const it of (Array.isArray(p.items) ? p.items : [])) {
-          rows.push({ table: 'sale_items', row: it });
+    try {
+      if (String(entry.operation ?? '').toUpperCase() === 'DELETE') {
+        const del = await db.from(table)
+          .delete()
+          .eq('customer_id', auth.customerId)
+          .eq('id', entityId);
+        if (del.error) throw new Error(`delete ${table}: ${del.error.message}`);
+        // A deleted sale must also drop its orphaned line items.
+        if (table === 'sales') {
+          const delItems = await db.from('sale_items')
+            .delete().eq('customer_id', auth.customerId)
+            .eq('sale_id', entityId);
+          if (delItems.error) throw new Error(`delete sale_items: ${delItems.error.message}`);
         }
-        break;
-      case 'shifts': if (p.shift) rows.push({ table: 'shifts', row: p.shift }); break;
-      case 'cash_movements': if (p.cash_movement) rows.push({ table: 'cash_movements', row: p.cash_movement }); break;
-      case 'void_requests': if (p.void_request) rows.push({ table: 'void_requests', row: p.void_request }); break;
-    }
+        applied++;
+        results.push({ entityId, status: 'applied' });
+        continue;
+      }
 
-    for (const { table: t, row } of rows) {
-      // Stamp, never trust: the license decides ownership, not the payload.
-      const stamped = { ...row, customer_id: auth.customerId };
-      const up = await db.from(t)
-        .upsert(stamped, { onConflict: 'id,customer_id' });
-      if (up.error) throw new Error(`upsert ${t}: ${up.error.message}`);
+      // Collect the rows this entry writes: sale = header + items, rest = 1 row.
+      const rows: { table: string; row: any }[] = [];
+      const p = entry.payload ?? {};
+      switch (table) {
+        case 'sales':
+          if (p.sale) rows.push({ table: 'sales', row: p.sale });
+          for (const it of (Array.isArray(p.items) ? p.items : [])) {
+            rows.push({ table: 'sale_items', row: it });
+          }
+          break;
+        case 'shifts': if (p.shift) rows.push({ table: 'shifts', row: p.shift }); break;
+        case 'cash_movements': if (p.cash_movement) rows.push({ table: 'cash_movements', row: p.cash_movement }); break;
+        case 'void_requests': if (p.void_request) rows.push({ table: 'void_requests', row: p.void_request }); break;
+      }
+
+      for (const { table: t, row } of rows) {
+        // Stamp, never trust: the license decides ownership, not the payload.
+        const stamped = { ...row, customer_id: auth.customerId, received_at: receivedAt };
+        const up = await db.from(t)
+          .upsert(stamped, { onConflict: 'id,customer_id' });
+        if (up.error) throw new Error(`upsert ${t}: ${up.error.message}`);
+      }
       applied++;
+      results.push({ entityId, status: 'applied' });
+    } catch (err: any) {
+      // A transient failure for ONE entry must not abort the batch or get the
+      // entry acked; report 'failed' so the client leaves only it queued.
+      results.push({ entityId, status: 'failed', error: String(err?.message ?? err) });
     }
   }
-  return json({ ok: true, applied });
+  // Transition safety: a batch with any transiently-'failed' entry reports
+  // ok:false so BOTH the new per-entry-ack client and the older deployed tills
+  // (which ack the whole batch on ok:true) retry rather than silently drop the
+  // failed rows. Re-applied 'applied' rows are idempotent upserts, so the
+  // retry is harmless. 'rejected' (unknown type) never counts as retryable.
+  const anyFailed = results.some((r) => r.status === 'failed');
+  return json({
+    ok: !anyFailed,
+    applied,
+    results,
+    error: anyFailed ? 'Some entries failed to apply.' : undefined,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -212,28 +246,57 @@ async function push(db: any, auth: { customerId: string }, body: any): Promise<R
 // the endpoint; the till does not call it yet, phones/dashboard will).
 // ---------------------------------------------------------------------------
 async function pull(db: any, auth: { customerId: string }, body: any): Promise<Response> {
+  // Cursor is either a keyset {received_at, id} (preferred, exact pagination)
+  // or a bare `since` ISO timestamp (legacy first page). received_at alone is
+  // ambiguous because a push stamps every row it applied with one timestamp, so
+  // the id tiebreaker makes the walk strictly ordered and gap-free.
+  const cursor = body.cursor && typeof body.cursor === 'object' ? body.cursor : null;
   const since = String(body.since ?? '');
-  if (!since || Number.isNaN(Date.parse(since))) {
-    return json({ ok: false, error: 'since (ISO timestamp) required.' }, 400);
+  if (!cursor && (!since || Number.isNaN(Date.parse(since)))) {
+    return json({ ok: false, error: 'since (ISO timestamp) or cursor required.' }, 400);
   }
   const wanted: string[] = Array.isArray(body.tables) && body.tables.length > 0
     ? body.tables.filter((t: string) => TABLES.includes(t as any))
     : [...TABLES];
+  // Rows per table per page. Callers loop on has_more/next_cursor so a busy
+  // tenant's backlog is delivered in full rather than silently truncated at a
+  // hard cap (audit #12: skipped rows / no pagination).
+  const pageLimit = Math.min(Math.max(Number(body.limit) || 1000, 1), 1000);
 
   const changes: Record<string, unknown[]> = {};
+  let maxReceived = '';
+  let maxId = '';
+  let hasMore = false;
   for (const t of wanted) {
-    // received_at is server-set (DEFAULT now()) and monotonic per row write —
-    // the correct delta cursor; client timestamps can't be trusted across clocks.
-    const { data, error } = await db.from(t)
-      .select('*')
-      .eq('customer_id', auth.customerId)
-      .gt('received_at', since)
+    let q = db.from(t).select('*').eq('customer_id', auth.customerId);
+    if (cursor) {
+      const cAt = String(cursor.received_at ?? '');
+      const cId = String(cursor.id ?? '');
+      q = q.or(`received_at.gt.${cAt},and(received_at.eq.${cAt},id.gt.${cId})`);
+    } else {
+      q = q.gt('received_at', since);
+    }
+    const { data, error } = await q
       .order('received_at', { ascending: true })
-      .limit(1000);
+      .order('id', { ascending: true })
+      .limit(pageLimit);
     if (error) throw new Error(`pull ${t}: ${error.message}`);
-    changes[t] = data ?? [];
+    const rows = data ?? [];
+    changes[t] = rows;
+    if (rows.length === pageLimit) hasMore = true;
+    const last = rows[rows.length - 1];
+    if (last && String(last.received_at) >= maxReceived) {
+      maxReceived = String(last.received_at);
+      maxId = String(last.id);
+    }
   }
-  return json({ ok: true, changes, server_time: new Date().toISOString() });
+  const nextCursor = maxReceived
+    ? { received_at: maxReceived, id: maxId }
+    : null;
+  return json({
+    ok: true, changes, server_time: new Date().toISOString(),
+    next_cursor: nextCursor, has_more: hasMore,
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:wholesale_pos_app/core/database/local_database.dart';
+import 'package:wholesale_pos_app/core/models/user.dart';
 
 void main() {
   late Directory tempDir;
@@ -534,4 +535,63 @@ void main() {
     expect(devices.single['id'], deviceId);
     await db.close();
   });
+
+  test(
+    'Upgrades a v10 database to v11, backfilling staff feature permissions',
+    () async {
+      var db = await LocalDatabase.openAt(dbPath);
+      final now = DateTime.now().toIso8601String();
+      // Rewind to the v10 users shape by dropping the permissions column.
+      await db.execute('ALTER TABLE users DROP COLUMN permissions');
+      await db.insert('users', {
+        'id': 'owner-1',
+        'username': 'owner',
+        'password_hash': 'x',
+        'salt': 'x',
+        'role': 'OWNER',
+        'is_active': 1,
+        'created_at': now,
+      });
+      await db.insert('users', {
+        'id': 'cashier-1',
+        'username': 'cashier',
+        'password_hash': 'x',
+        'salt': 'x',
+        'role': 'CASHIER',
+        'is_active': 1,
+        'created_at': now,
+      });
+      await db.execute('PRAGMA user_version = 10');
+      await db.close();
+
+      db = await LocalDatabase.openAt(dbPath);
+      final cols = await db.rawQuery('PRAGMA table_info(users)');
+      expect(
+        cols.any((column) => column['name'] == 'permissions'),
+        isTrue,
+        reason: 'v11 upgrade must re-add the permissions column',
+      );
+
+      final ownerRow = (await db.query(
+        'users',
+        where: 'id = ?',
+        whereArgs: ['owner-1'],
+      )).single;
+      final cashierRow = (await db.query(
+        'users',
+        where: 'id = ?',
+        whereArgs: ['cashier-1'],
+      )).single;
+      // Owner bypasses the tick list; existing cashiers keep the tabs they
+      // already had (today's cashier matrix).
+      expect(User.decodePermissions(ownerRow['permissions']), isEmpty);
+      expect(User.decodePermissions(cashierRow['permissions']), [
+        'pos',
+        'register',
+        'reports',
+      ]);
+
+      await db.close();
+    },
+  );
 }

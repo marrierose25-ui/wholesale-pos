@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/auth/features.dart';
 import '../../core/models/user.dart';
 import '../../core/repositories/user_repository.dart';
 import '../../core/theme/app_design.dart';
@@ -65,6 +66,20 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     if (created == true && mounted) {
       await _loadUsers();
       _showMessage('User created.');
+    }
+  }
+
+  Future<void> _showEditPermissionsDialog(User user) async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => _EditPermissionsDialog(
+        userRepository: widget.userRepository,
+        user: user,
+      ),
+    );
+    if (saved == true && mounted) {
+      await _loadUsers();
+      _showMessage('Permissions updated for ${user.username}.');
     }
   }
 
@@ -163,52 +178,61 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
             return GlassCard(
               padding: EdgeInsets.zero,
               child: ListTile(
-              leading: CircleAvatar(
-                backgroundColor: user.role == 'OWNER'
-                    ? AppDesign.blue
-                    : AppDesign.textFaint,
-                foregroundColor: Colors.white,
-                child: const Icon(Icons.person),
-              ),
-              title: Text(
-                user.username,
-                style: TextStyle(
-                  color: user.isActive ? null : AppTheme.muted,
-                  fontWeight: FontWeight.w500,
+                leading: CircleAvatar(
+                  backgroundColor: user.role == 'OWNER'
+                      ? AppDesign.blue
+                      : AppDesign.textFaint,
+                  foregroundColor: Colors.white,
+                  child: const Icon(Icons.person),
                 ),
-              ),
-              subtitle: Text(isSelf ? '${user.role} (you)' : user.role),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (!user.isActive)
-                    const Chip(
-                      label: Text('Disabled'),
-                      backgroundColor: AppTheme.danger,
-                      labelStyle: TextStyle(color: Colors.white, fontSize: 11),
-                    ),
-                  PopupMenuButton<String>(
-                    tooltip: 'User actions',
-                    onSelected: (value) {
-                      if (value == 'reset') _resetPassword(user);
-                      if (value == 'toggle') _toggleActive(user);
-                    },
-                    itemBuilder: (context) => [
-                      const PopupMenuItem(
-                        value: 'reset',
-                        child: Text('Reset Password'),
-                      ),
-                      if (!isSelf)
-                        PopupMenuItem(
-                          value: 'toggle',
-                          child: Text(
-                            user.isActive ? 'Deactivate' : 'Activate',
-                          ),
-                        ),
-                    ],
+                title: Text(
+                  user.username,
+                  style: TextStyle(
+                    color: user.isActive ? null : AppTheme.muted,
+                    fontWeight: FontWeight.w500,
                   ),
-                ],
-              ),
+                ),
+                subtitle: Text(isSelf ? '${user.role} (you)' : user.role),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (!user.isActive)
+                      const Chip(
+                        label: Text('Disabled'),
+                        backgroundColor: AppTheme.danger,
+                        labelStyle: TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                        ),
+                      ),
+                    PopupMenuButton<String>(
+                      tooltip: 'User actions',
+                      onSelected: (value) {
+                        if (value == 'reset') _resetPassword(user);
+                        if (value == 'perms') _showEditPermissionsDialog(user);
+                        if (value == 'toggle') _toggleActive(user);
+                      },
+                      itemBuilder: (context) => [
+                        const PopupMenuItem(
+                          value: 'reset',
+                          child: Text('Reset Password'),
+                        ),
+                        if (user.role != 'OWNER')
+                          const PopupMenuItem(
+                            value: 'perms',
+                            child: Text('Permissions'),
+                          ),
+                        if (!isSelf)
+                          PopupMenuItem(
+                            value: 'toggle',
+                            child: Text(
+                              user.isActive ? 'Deactivate' : 'Activate',
+                            ),
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             );
           },
@@ -236,7 +260,11 @@ class _AddUserDialogState extends State<_AddUserDialog> {
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmController = TextEditingController();
-  String _role = 'CASHIER';
+  // Owner access is an all-access override; everyone else is defined purely by
+  // the ticked feature set. Default to today's cashier matrix so a new staff
+  // account is immediately usable and the owner can narrow it from there.
+  bool _ownerAccess = false;
+  final Set<String> _selected = {...kDefaultStaffPermissions};
   bool _isSaving = false;
   String? _error;
 
@@ -251,11 +279,12 @@ class _AddUserDialogState extends State<_AddUserDialog> {
   Future<void> _submit() async {
     final username = _usernameController.text.trim();
     final password = _passwordController.text;
+    final role = _ownerAccess ? 'OWNER' : 'CASHIER';
     if (username.isEmpty) {
       setState(() => _error = 'Enter a username.');
       return;
     }
-    final min = UserRepository.minPasswordLengthFor(_role);
+    final min = UserRepository.minPasswordLengthFor(role);
     if (password.length < min) {
       setState(() => _error = 'Password must be at least $min characters.');
       return;
@@ -270,7 +299,12 @@ class _AddUserDialogState extends State<_AddUserDialog> {
       _error = null;
     });
     try {
-      await widget.userRepository.createUser(username, password, _role);
+      await widget.userRepository.createUser(
+        username,
+        password,
+        role,
+        permissions: _ownerAccess ? const [] : _selected.toList(),
+      );
       if (!mounted) return;
       Navigator.of(context).pop(true);
     } catch (e) {
@@ -287,44 +321,72 @@ class _AddUserDialogState extends State<_AddUserDialog> {
       title: const Text('Add New User'),
       content: SizedBox(
         width: 360,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: _usernameController,
-              autofocus: true,
-              decoration: const InputDecoration(labelText: 'Username'),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _passwordController,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: 'Password'),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _confirmController,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: 'Confirm Password'),
-            ),
-            const SizedBox(height: 16),
-            DropdownButtonFormField<String>(
-              initialValue: _role,
-              decoration: const InputDecoration(labelText: 'Role'),
-              items: const [
-                DropdownMenuItem(value: 'CASHIER', child: Text('Cashier')),
-                DropdownMenuItem(value: 'OWNER', child: Text('Owner / Admin')),
-              ],
-              onChanged: (value) => setState(() => _role = value ?? 'CASHIER'),
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 12),
-              Text(
-                _error!,
-                style: const TextStyle(color: AppTheme.danger, fontSize: 13),
+        height: 480,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: _usernameController,
+                autofocus: true,
+                decoration: const InputDecoration(labelText: 'Username'),
               ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _passwordController,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: 'Password (min 8, or 12 for owner)',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _confirmController,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: 'Confirm Password',
+                ),
+              ),
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                dense: true,
+                controlAffinity: ListTileControlAffinity.leading,
+                contentPadding: EdgeInsets.zero,
+                value: _ownerAccess,
+                title: const Text('Owner access (sees everything)'),
+                onChanged: (v) => setState(() => _ownerAccess = v ?? false),
+              ),
+              if (!_ownerAccess) ...[
+                const SizedBox(height: 4),
+                _FeaturePicker(
+                  selected: _selected,
+                  enabled: true,
+                  onToggle: (key, value) => setState(() {
+                    if (value) {
+                      _selected.add(key);
+                    } else {
+                      _selected.remove(key);
+                    }
+                  }),
+                ),
+              ] else
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    'Owner accounts see every tab and bypass feature ticks.',
+                    style: TextStyle(color: AppDesign.textLo, fontSize: 12),
+                  ),
+                ),
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  _error!,
+                  style: const TextStyle(color: AppTheme.danger, fontSize: 13),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
       actions: [
@@ -341,6 +403,152 @@ class _AddUserDialogState extends State<_AddUserDialog> {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               : const Text('Create User'),
+        ),
+      ],
+    );
+  }
+}
+
+/// A reusable tick list over [kFeatures]. When [enabled] is false the whole
+/// grid is greyed and inert (used when "Owner access" overrides the ticks).
+class _FeaturePicker extends StatelessWidget {
+  final Set<String> selected;
+  final bool enabled;
+  final void Function(String key, bool value) onToggle;
+
+  const _FeaturePicker({
+    required this.selected,
+    required this.enabled,
+    required this.onToggle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      ignoring: !enabled,
+      child: Opacity(
+        opacity: enabled ? 1 : 0.4,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Visible features',
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: AppDesign.textHi,
+              ),
+            ),
+            const SizedBox(height: 4),
+            for (final f in kFeatures)
+              CheckboxListTile(
+                dense: true,
+                controlAffinity: ListTileControlAffinity.leading,
+                contentPadding: EdgeInsets.zero,
+                value: selected.contains(f.key),
+                title: Row(
+                  children: [
+                    Icon(f.icon, size: 18, color: AppDesign.textLo),
+                    const SizedBox(width: 8),
+                    Text(f.label),
+                  ],
+                ),
+                onChanged: enabled ? (v) => onToggle(f.key, v ?? false) : null,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Edits an existing staff account's feature ticks. Owner rows are never shown
+/// this dialog (the row action is hidden for them).
+class _EditPermissionsDialog extends StatefulWidget {
+  final UserRepository userRepository;
+  final User user;
+
+  const _EditPermissionsDialog({
+    required this.userRepository,
+    required this.user,
+  });
+
+  @override
+  State<_EditPermissionsDialog> createState() => _EditPermissionsDialogState();
+}
+
+class _EditPermissionsDialogState extends State<_EditPermissionsDialog> {
+  late final Set<String> _selected = {...widget.user.permissions};
+  bool _isSaving = false;
+  String? _error;
+
+  Future<void> _submit() async {
+    setState(() {
+      _isSaving = true;
+      _error = null;
+    });
+    try {
+      await widget.userRepository.setUserPermissions(
+        widget.user.id,
+        _selected.toList(),
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.toString().replaceAll('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Permissions for ${widget.user.username}'),
+      content: SizedBox(
+        width: 360,
+        height: 480,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _FeaturePicker(
+                selected: _selected,
+                enabled: !_isSaving,
+                onToggle: (key, value) => setState(() {
+                  if (value) {
+                    _selected.add(key);
+                  } else {
+                    _selected.remove(key);
+                  }
+                }),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  _error!,
+                  style: const TextStyle(color: AppTheme.danger, fontSize: 13),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isSaving ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _isSaving ? null : _submit,
+          child: _isSaving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Save'),
         ),
       ],
     );

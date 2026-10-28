@@ -77,15 +77,19 @@ void main() {
         // Persistent balance + the daily "Today" counters replace open/close.
         expect(find.text('Cash Register'), findsOneWidget);
         expect(find.text('Register Balance'), findsOneWidget);
-        expect(find.text('Today Withdrawals'), findsOneWidget);
+        expect(find.text('Today Debits'), findsOneWidget);
+        // The register history ledger is embedded below the credit/debit cards.
+        expect(find.text('Register History'), findsOneWidget);
 
-        // Tapping the withdrawals card opens the movement dialog preset to it.
-        await tester.tap(find.text('Today Withdrawals'));
+        // Tapping the debits card opens the movement dialog preset to it.
+        await tester.tap(find.text('Today Debits'));
         for (var i = 0; i < 6; i++) {
           await Future<void>.delayed(const Duration(milliseconds: 40));
           await tester.pump(const Duration(milliseconds: 40));
         }
         expect(find.text('Cash Movement'), findsOneWidget);
+        // The debit dialog offers an (optional) proof photo picker.
+        expect(find.text('Add photo (optional)'), findsOneWidget);
 
         // Dismiss it cleanly so no route/ticker is left live at teardown.
         await tester.tap(find.text('Cancel'));

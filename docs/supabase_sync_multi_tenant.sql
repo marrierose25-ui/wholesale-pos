@@ -98,6 +98,7 @@ CREATE TABLE cash_movements (
   reason              text,
   created_at          timestamptz NOT NULL,
   user_id             text,
+  photo               text,
   origin_device_id    text,
   received_at         timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (customer_id, id)

@@ -50,6 +50,9 @@ dependencies:
   # Reads a reinstall-surviving platform id (ANDROID_ID / identifierForVendor)
   # so the licensing device fingerprint stays stable across an app uninstall.
   device_info_plus: ^11.0.0
+  # Camera/gallery capture for the register's optional debit proof photos.
+  # Active on Android/iOS only; desktop and web pick files via file_selector.
+  image_picker: ^1.1.2
 dev_dependencies:
   flutter_test:
     sdk: flutter

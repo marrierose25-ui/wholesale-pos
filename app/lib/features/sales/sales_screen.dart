@@ -212,8 +212,12 @@ class _SaleDraft {
   });
 }
 
+/// Units offered in the New Sale dialog's Unit dropdown.
+const List<String> _saleUnits = ['Karton', 'Kuntal', 'Derzen', 'Fre'];
+
 /// A focused one-item sale dialog: Name, Unit, Quantity, Price with a live
-/// Total, and a Cash / Bank Transfer choice. Completing records the sale.
+/// Total, and a required Cash / Bank Transfer / Loan choice (nothing is
+/// pre-selected; completing the sale demands an explicit pick).
 class _SaleDialog extends StatefulWidget {
   const _SaleDialog();
 
@@ -223,17 +227,18 @@ class _SaleDialog extends StatefulWidget {
 
 class _SaleDialogState extends State<_SaleDialog> {
   final _nameController = TextEditingController();
-  final _unitController = TextEditingController(text: 'piece');
   final _quantityController = TextEditingController(text: '1');
   final _priceController = TextEditingController();
 
-  String _paymentMethod = 'CASH';
+  String _unit = _saleUnits.first;
+  // Deliberately unselected until the cashier taps one of Cash / Bank
+  // Transfer / Loan — a sale cannot be completed without a payment method.
+  String? _paymentMethod;
   String? _error;
 
   @override
   void dispose() {
     _nameController.dispose();
-    _unitController.dispose();
     _quantityController.dispose();
     _priceController.dispose();
     super.dispose();
@@ -254,9 +259,7 @@ class _SaleDialogState extends State<_SaleDialog> {
 
   String get _quantityText {
     final quantity = _quantityController.text.trim();
-    final unit = _unitController.text.trim();
-    if (unit.isEmpty) return quantity;
-    return '$quantity $unit';
+    return '$quantity $_unit';
   }
 
   void _submit() {
@@ -280,6 +283,11 @@ class _SaleDialogState extends State<_SaleDialog> {
       setState(() => _error = 'The calculated total is too large.');
       return;
     }
+    final paymentMethod = _paymentMethod;
+    if (paymentMethod == null) {
+      setState(() => _error = 'Select a payment method.');
+      return;
+    }
     Navigator.of(context).pop(
       _SaleDraft(
         name: name,
@@ -287,7 +295,7 @@ class _SaleDialogState extends State<_SaleDialog> {
         billingQuantityMilliunits: quantity,
         unitPriceMinorUnits: price,
         lineTotalMinorUnits: lineTotal,
-        paymentMethod: _paymentMethod,
+        paymentMethod: paymentMethod,
       ),
     );
   }
@@ -295,115 +303,153 @@ class _SaleDialogState extends State<_SaleDialog> {
   @override
   Widget build(BuildContext context) {
     final lineTotal = _lineTotalMinorUnits;
+    // The keyboard would otherwise push the payment row off-screen (AlertDialog
+    // scrolls itself when viewInsets are applied), so neutralise them for the
+    // dialog body and cap its height above the keyboard: the fields scroll,
+    // while Cash / Bank Transfer / Loan stays visible until the sale is posted.
+    final media = MediaQuery.of(context);
+    final keyboard = media.viewInsets.bottom;
+    final maxBodyHeight = (media.size.height - keyboard - 190).clamp(
+      200.0,
+      520.0,
+    );
     return AlertDialog(
       // Default horizontal insets (40) squeeze the content past a phone's
       // usable width; tightening them keeps the row of controls inside 390px.
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       title: const Text('New Sale'),
-      content: ConstrainedBox(
-        // Cap the dialog at 420 on wide screens but let it shrink to the
-        // viewport on a phone, so the fixed 420 never overflows a narrow width.
-        constraints: const BoxConstraints(maxWidth: 420),
-        child: SingleChildScrollView(
+      content: MediaQuery(
+        data: media.copyWith(viewInsets: EdgeInsets.zero),
+        child: ConstrainedBox(
+          // Cap the dialog at 420 on wide screens but let it shrink to the
+          // viewport on a phone, so the fixed 420 never overflows a narrow width.
+          constraints: BoxConstraints(maxWidth: 420, maxHeight: maxBodyHeight),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              TextField(
-                controller: _nameController,
-                autofocus: true,
-                textCapitalization: TextCapitalization.sentences,
-                decoration: const InputDecoration(
-                  labelText: 'Name',
-                  hintText: 'What was sold',
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      TextField(
+                        controller: _nameController,
+                        autofocus: true,
+                        textCapitalization: TextCapitalization.sentences,
+                        decoration: const InputDecoration(
+                          labelText: 'Name',
+                          hintText: 'What was sold',
+                        ),
+                        onChanged: (_) => setState(() => _error = null),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _quantityController,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                  ),
+                              decoration: const InputDecoration(
+                                labelText: 'Quantity',
+                                hintText: 'e.g. 2',
+                              ),
+                              onChanged: (_) => setState(() => _error = null),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: DropdownButtonFormField<String>(
+                              initialValue: _unit,
+                              isDense: true,
+                              decoration: const InputDecoration(
+                                labelText: 'Unit',
+                              ),
+                              items: [
+                                for (final unit in _saleUnits)
+                                  DropdownMenuItem(
+                                    value: unit,
+                                    child: Text(unit),
+                                  ),
+                              ],
+                              onChanged: (value) => setState(
+                                () => _unit = value ?? _saleUnits.first,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _priceController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        decoration: const InputDecoration(
+                          labelText: 'Price (Br)',
+                          hintText: 'e.g. 500',
+                        ),
+                        onChanged: (_) => setState(() => _error = null),
+                      ),
+                      const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).scaffoldBackgroundColor,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: AppTheme.border),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              'Total',
+                              style: TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                            Text(
+                              lineTotal == null
+                                  ? '—'
+                                  : MoneyUtils.formatBr(lineTotal),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                onChanged: (_) => setState(() => _error = null),
               ),
-              const SizedBox(height: 12),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              // Pinned below the scroller so the choice stays visible even while
+              // the keyboard is up. ChoiceChips (not a SegmentedButton, which
+              // forbids an empty single selection) so nothing is preselected and
+              // the sale is blocked until one is tapped.
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
                 children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _quantityController,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: 'Quantity',
-                        hintText: 'e.g. 2',
-                      ),
-                      onChanged: (_) => setState(() => _error = null),
+                  for (final option in const <(String, String)>[
+                    ('CASH', 'Cash'),
+                    ('BANK', 'Bank Transfer'),
+                    ('LOAN', 'Loan'),
+                  ])
+                    ChoiceChip(
+                      label: Text(option.$2),
+                      selected: _paymentMethod == option.$1,
+                      onSelected: (_) => setState(() {
+                        _paymentMethod = option.$1;
+                        _error = null;
+                      }),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextField(
-                      controller: _unitController,
-                      textCapitalization: TextCapitalization.sentences,
-                      decoration: const InputDecoration(
-                        labelText: 'Unit',
-                        hintText: 'box / kg / piece',
-                      ),
-                    ),
-                  ),
                 ],
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _priceController,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                decoration: const InputDecoration(
-                  labelText: 'Price (Br)',
-                  hintText: 'e.g. 500',
-                ),
-                onChanged: (_) => setState(() => _error = null),
-              ),
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).scaffoldBackgroundColor,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: AppTheme.border),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      'Total',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    Text(
-                      lineTotal == null ? '—' : MoneyUtils.formatBr(lineTotal),
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              SegmentedButton<String>(
-                showSelectedIcon: false,
-                segments: const [
-                  ButtonSegment(
-                    value: 'CASH',
-                    label: Text('Cash'),
-                    icon: Icon(Icons.payments_outlined),
-                  ),
-                  ButtonSegment(
-                    value: 'BANK',
-                    label: Text('Bank Transfer'),
-                    icon: Icon(Icons.account_balance_rounded),
-                  ),
-                ],
-                selected: {_paymentMethod},
-                onSelectionChanged: (selection) =>
-                    setState(() => _paymentMethod = selection.first),
               ),
               if (_error != null) ...[
                 const SizedBox(height: 12),

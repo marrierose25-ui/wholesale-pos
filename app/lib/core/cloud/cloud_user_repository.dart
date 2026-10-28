@@ -53,11 +53,28 @@ class CloudUserRepository implements UserRepository {
   }
 
   @override
-  Future<void> createUser(String username, String password, String role) async {
+  Future<void> createUser(
+    String username,
+    String password,
+    String role, {
+    List<String> permissions = const [],
+  }) async {
     await _api.call('create_user', {
       'username': username,
       'password': password,
       'role': role,
+      'permissions': permissions,
+    });
+  }
+
+  @override
+  Future<void> setUserPermissions(
+    String userId,
+    List<String> permissions,
+  ) async {
+    await _api.call('set_user_permissions', {
+      'target_user_id': userId,
+      'permissions': permissions,
     });
   }
 
@@ -128,6 +145,7 @@ class CloudUserRepository implements UserRepository {
     passwordHash: '',
     salt: '',
     role: json['role'] as String,
+    permissions: User.decodePermissions(json['permissions']),
   );
 
   User _userFromRow(Map<String, dynamic> row) => User(
@@ -137,5 +155,6 @@ class CloudUserRepository implements UserRepository {
     salt: '',
     role: row['role'] as String,
     isActive: row['active'] == true,
+    permissions: User.decodePermissions(row['permissions']),
   );
 }

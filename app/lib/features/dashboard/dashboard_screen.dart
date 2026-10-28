@@ -2,15 +2,22 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/models/user.dart';
 import '../../core/repositories/sale_repository.dart';
 import '../../core/theme/app_design.dart';
 import '../../core/utils/date_range.dart';
 import '../../core/utils/money_utils.dart';
+import 'sales_by_day_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   final SaleRepository saleRepository;
+  final User currentUser;
 
-  const DashboardScreen({super.key, required this.saleRepository});
+  const DashboardScreen({
+    super.key,
+    required this.saleRepository,
+    required this.currentUser,
+  });
 
   @override
   State<DashboardScreen> createState() => DashboardScreenState();
@@ -98,6 +105,20 @@ class DashboardScreenState extends State<DashboardScreen> {
         _error = e.toString().replaceAll('Exception: ', '');
       });
     }
+  }
+
+  /// Opens the unified Sales History (the "Completed Sales" drill-down): every
+  /// day's sales, searchable, each day opening its individual receipts.
+  void _openCompletedSalesByDay() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => SalesByDayScreen(
+          saleRepository: widget.saleRepository,
+          currentUser: widget.currentUser,
+          onSaleVoided: () => loadDashboard(silent: true),
+        ),
+      ),
+    );
   }
 
   @override
@@ -227,6 +248,7 @@ class DashboardScreenState extends State<DashboardScreen> {
         '${_stats['sales_count'] ?? 0}',
         Icons.check_circle_rounded,
         AppDesign.success,
+        onTap: _openCompletedSalesByDay,
       ),
       _Metric(
         'Cash Collected',
@@ -269,10 +291,22 @@ class DashboardScreenState extends State<DashboardScreen> {
     return GlassCard(
       padding: const EdgeInsets.all(14),
       radius: AppDesign.radiusCardSm,
+      onTap: metric.onTap,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          IconChip(icon: metric.icon, size: 30, color: metric.color),
+          Row(
+            children: [
+              IconChip(icon: metric.icon, size: 30, color: metric.color),
+              const Spacer(),
+              if (metric.onTap != null)
+                Icon(
+                  Icons.open_in_new_rounded,
+                  size: 15,
+                  color: AppDesign.textFaint,
+                ),
+            ],
+          ),
           const SizedBox(height: 10),
           Text(
             metric.title,
@@ -304,11 +338,13 @@ class DashboardScreenState extends State<DashboardScreen> {
   }
 }
 
-/// One headline figure shown in the dashboard metric grid.
+/// One headline figure shown in the dashboard metric grid. Cards with an
+/// [onTap] drill into a detail view and render a small affordance icon.
 class _Metric {
   final String title;
   final String value;
   final IconData icon;
   final Color color;
-  const _Metric(this.title, this.value, this.icon, this.color);
+  final VoidCallback? onTap;
+  const _Metric(this.title, this.value, this.icon, this.color, {this.onTap});
 }

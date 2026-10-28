@@ -9,11 +9,15 @@ import '../../core/utils/date_range.dart';
 import '../../core/utils/money_utils.dart';
 import '../sales/shift.dart';
 import '../sales/void_request.dart';
+import '../../core/utils/proof_photo.dart';
+import 'register_history_screen.dart';
 
 /// The register ("Money in the drawer"). The redesign drops the open/close
 /// shift ritual in favour of a persistent balance: the hero card shows the
 /// all-time cash in the drawer, while a "Today" row of counters resets each
-/// calendar day. Deposits and withdrawals are added by tapping their cards.
+/// calendar day. Credits (deposits) and debits (withdrawals) are added by
+/// tapping their cards. The full ledger lives behind a single "Register
+/// History" button that opens [RegisterHistoryScreen].
 class RegisterScreen extends StatefulWidget {
   final User currentUser;
   final ShiftRepository shiftRepository;
@@ -105,6 +109,7 @@ class RegisterScreenState extends State<RegisterScreen> {
         result['amount'] as int,
         result['reason'] as String,
         userId: widget.currentUser.id,
+        photo: result['photo'] as String?,
       );
       widget.onShiftUpdated();
       await loadData();
@@ -236,16 +241,16 @@ class RegisterScreenState extends State<RegisterScreen> {
                 AppDesign.blueBright,
               ),
               _RegStat(
-                'Today Deposits',
+                'Today Credits',
                 deposits,
-                Icons.north_east_rounded,
+                Icons.south_west_rounded,
                 AppDesign.blue,
                 onTap: () => _showCashMovement('DEPOSIT'),
               ),
               _RegStat(
-                'Today Withdrawals',
+                'Today Debits',
                 withdrawals,
-                Icons.south_west_rounded,
+                Icons.north_east_rounded,
                 AppDesign.warning,
                 onTap: () => _showCashMovement('WITHDRAWAL'),
               ),
@@ -260,11 +265,57 @@ class RegisterScreenState extends State<RegisterScreen> {
             );
           },
         ),
+        const SizedBox(height: 24),
+        // The register_history tick gates this button (owners always pass);
+        // the full ledger lives behind it on RegisterHistoryScreen.
+        if (widget.currentUser.can('register_history'))
+          _buildRegisterHistoryButton(),
         if (_pendingRequests.isNotEmpty) ...[
           const SizedBox(height: 24),
           _buildPendingRequestsCard(),
         ],
       ],
+    );
+  }
+
+  Widget _buildRegisterHistoryButton() {
+    return GlassCard(
+      radius: AppDesign.radiusCardSm,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => RegisterHistoryScreen(
+            shiftRepository: widget.shiftRepository,
+            saleRepository: widget.saleRepository,
+            currentUser: widget.currentUser,
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          const IconChip(
+            icon: Icons.history_rounded,
+            size: 30,
+            color: AppDesign.blue,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'Register History',
+              style: TextStyle(
+                color: AppDesign.textHi,
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          Icon(
+            Icons.chevron_right_rounded,
+            color: AppDesign.textFaint,
+            size: 20,
+          ),
+        ],
+      ),
     );
   }
 
@@ -498,11 +549,35 @@ class _CashMovementDialogState extends State<_CashMovementDialog> {
   late String _type = widget.initialType;
   String? _error;
 
+  /// Optional proof photo (base64) — usually attached on a debit as evidence
+  /// the cash actually left the drawer. Stays null until the user picks one.
+  String? _photo;
+  bool _picking = false;
+
   @override
   void dispose() {
     _amountController.dispose();
     _reasonController.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickPhoto() async {
+    if (_picking) return;
+    setState(() => _picking = true);
+    String? picked;
+    try {
+      picked = await pickProofPhoto(context);
+    } catch (_) {
+      // A denied camera permission or a plugin failure must never block the
+      // movement itself — the photo is optional by design.
+      if (mounted) setState(() => _picking = false);
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _picking = false;
+      if (picked != null) _photo = picked;
+    });
   }
 
   void _submit() {
@@ -516,8 +591,9 @@ class _CashMovementDialogState extends State<_CashMovementDialog> {
       setState(() => _error = 'A reason or reference is required.');
       return;
     }
-    Navigator.of(context)
-        .pop({'type': _type, 'amount': amount, 'reason': reason});
+    Navigator.of(
+      context,
+    ).pop({'type': _type, 'amount': amount, 'reason': reason, 'photo': _photo});
   }
 
   @override
@@ -531,12 +607,12 @@ class _CashMovementDialogState extends State<_CashMovementDialog> {
             segments: const [
               ButtonSegment(
                 value: 'WITHDRAWAL',
-                label: Text('Withdrawal'),
+                label: Text('Debit'),
                 icon: Icon(Icons.arrow_upward),
               ),
               ButtonSegment(
                 value: 'DEPOSIT',
-                label: Text('Deposit'),
+                label: Text('Credit'),
                 icon: Icon(Icons.arrow_downward),
               ),
             ],
@@ -556,6 +632,50 @@ class _CashMovementDialogState extends State<_CashMovementDialog> {
             controller: _reasonController,
             decoration: const InputDecoration(labelText: 'Reason / Reference'),
             onSubmitted: (_) => _submit(),
+          ),
+          const SizedBox(height: 4),
+          // Optional proof photo. Shown for both directions, but aimed at
+          // debits: "upload proof the cash left the drawer". The label is
+          // Expanded + ellipsized so it can never overflow a phone-width
+          // dialog.
+          Row(
+            children: [
+              IconButton(
+                onPressed: _picking ? null : _pickPhoto,
+                icon: Icon(
+                  _photo == null
+                      ? Icons.add_a_photo_outlined
+                      : Icons.photo_camera_outlined,
+                ),
+                tooltip: 'Add photo (optional)',
+              ),
+              Expanded(
+                child: _photo == null
+                    ? const Text(
+                        'Add photo (optional)',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      )
+                    : Row(
+                        children: [
+                          // Tap to remove the attached proof.
+                          IconButton(
+                            onPressed: () => setState(() => _photo = null),
+                            icon: const Icon(Icons.close),
+                            iconSize: 16,
+                            tooltip: 'Remove photo',
+                          ),
+                          const Expanded(
+                            child: Text(
+                              'Photo attached',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+              ),
+            ],
           ),
           if (_error != null) ...[
             const SizedBox(height: 12),

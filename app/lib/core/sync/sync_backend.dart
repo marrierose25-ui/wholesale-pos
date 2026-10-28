@@ -11,9 +11,16 @@ abstract class SyncBackend {
   /// True when a remote target is configured and reachable enough to try.
   bool get isConfigured;
 
-  /// Pushes a batch of queued changes. Throw on any failure; the caller leaves
-  /// the rows in the outbox and retries later.
-  Future<void> push(List<SyncOutboxEntry> entries);
+  /// Pushes a batch of queued changes. Throw on any wholesale failure; the
+  /// caller leaves every row in the outbox and retries later.
+  ///
+  /// On partial success (some entries applied, some rejected/transient) return
+  /// the set of OUTBOX row ids ([SyncOutboxEntry.id]) the server confirmed —
+  /// either applied or permanently rejected — so exactly those are marked
+  /// synced and only the genuinely retryable ones stay queued (audit #20).
+  /// Back-ends that cannot report per-entry outcomes return every id (the
+  /// pre-existing "ack the whole batch" behaviour).
+  Future<Set<String>> push(List<SyncOutboxEntry> entries);
 }
 
 /// Default backend used while the app is still purely offline (and in tests).
@@ -26,7 +33,8 @@ class NoopSyncBackend implements SyncBackend {
   bool get isConfigured => false;
 
   @override
-  Future<void> push(List<SyncOutboxEntry> entries) async {
+  Future<Set<String>> push(List<SyncOutboxEntry> entries) async {
     // Intentionally does nothing. The outbox retains every row.
+    return const {};
   }
 }

@@ -8,7 +8,7 @@ import 'package:uuid/uuid.dart';
 
 class LocalDatabase {
   static const String databaseName = 'wholesale_pos.db';
-  static const int schemaVersion = 10;
+  static const int schemaVersion = 12;
   static const String deviceIdFileName = 'device_id.txt';
   static const String themeSettingKey = 'theme_mode';
 
@@ -295,6 +295,35 @@ class LocalDatabase {
       }
       await _createIndexesAndTriggers(db);
     }
+    if (oldVersion < 11) {
+      // Per-account feature permissions replace the fixed Owner/Cashier nav
+      // split. Additive column, guarded so a re-run is a no-op, then backfill
+      // existing CASHIER rows with the tabs they already saw (today's cashier
+      // matrix) so an upgrade never strips a cashier's access. OWNER rows stay
+      // '[]' — they bypass the tick list.
+      final userCols = await db.rawQuery('PRAGMA table_info(users)');
+      if (!userCols.any((column) => column['name'] == 'permissions')) {
+        await db.execute(
+          "ALTER TABLE users ADD COLUMN permissions TEXT NOT NULL DEFAULT '[]'",
+        );
+      }
+      await db.execute(
+        "UPDATE users SET permissions = '[\"pos\",\"register\",\"reports\"]' "
+        "WHERE role = 'CASHIER' AND permissions = '[]'",
+      );
+    }
+    if (oldVersion < 12) {
+      // Optional proof photo on register movements (mainly debits): a
+      // compressed JPEG stored as base64 TEXT so it rides the row everywhere
+      // the movement goes — ledger, outbox payload, backups. Additive column,
+      // guarded so a re-run is a no-op.
+      final movementCols = await db.rawQuery(
+        'PRAGMA table_info(cash_movements)',
+      );
+      if (!movementCols.any((column) => column['name'] == 'photo')) {
+        await db.execute('ALTER TABLE cash_movements ADD COLUMN photo TEXT');
+      }
+    }
   }
 
   /// Schema 6 stored quantities as plain integers. Schema 7 keeps the exact
@@ -446,6 +475,7 @@ class LocalDatabase {
         salt TEXT NOT NULL,
         role TEXT NOT NULL,
         is_active INTEGER NOT NULL DEFAULT 1,
+        permissions TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL
       )
     ''');
@@ -496,6 +526,7 @@ class LocalDatabase {
         reason TEXT,
         created_at TEXT NOT NULL,
         user_id TEXT,
+        photo TEXT,
         FOREIGN KEY(shift_id) REFERENCES shifts(id),
         FOREIGN KEY(user_id) REFERENCES users(id)
       )

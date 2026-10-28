@@ -31,9 +31,20 @@ class CloudApiClient {
   /// `setup_owner`. Attached as a bearer header to every authenticated call.
   String? token;
 
-  CloudApiClient({String? url, http.Client? client, this.activationCode = ''})
-    : url = url ?? _defaultUrl,
-      _client = client ?? http.Client();
+  /// Stable per-browser/device id, auto-stamped onto every request body as
+  /// `device_id`. The server carves shift/receipt operations from it (audit
+  /// D1) so a shared tenant's open drawer and receipt stream are scoped to the
+  /// device that owns them. Empty until the backend resolves it (tests, and the
+  /// unauthenticated login/setup calls, never need it).
+  String deviceId;
+
+  CloudApiClient({
+    String? url,
+    http.Client? client,
+    this.activationCode = '',
+    this.deviceId = '',
+  }) : url = url ?? _defaultUrl,
+       _client = client ?? http.Client();
 
   bool get isConfigured => url.isNotEmpty;
 
@@ -50,7 +61,11 @@ class CloudApiClient {
         '--dart-define=WHOLESALE_POS_API_URL=<url>.',
       );
     }
-    final payload = {'action': action, ...?body};
+    final payload = <String, dynamic>{'action': action, ...?body};
+    // Stamp the device id for authenticated actions unless the caller already
+    // supplied one (an explicit body device_id always wins). Harmless on the
+    // unauthenticated calls, which ignore it.
+    if (deviceId.isNotEmpty) payload['device_id'] ??= deviceId;
     final headers = <String, String>{'Content-Type': 'application/json'};
     if (token != null && token!.isNotEmpty) {
       headers['Authorization'] = 'Bearer $token';

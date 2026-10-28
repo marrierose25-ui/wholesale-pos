@@ -135,6 +135,7 @@ void main() {
               'user_id': 'u1',
               'username': 'owner',
               'role': 'OWNER',
+              'permissions': ['pos', 'history'],
             }),
             200,
           );
@@ -145,6 +146,8 @@ void main() {
         expect(user?.role, 'OWNER');
         // The hash/salt never reach the client.
         expect(user?.passwordHash, isEmpty);
+        // login carries the permission list through to the User.
+        expect(user?.permissions, ['pos', 'history']);
         expect(api.token, 'jwt-1');
         expect(rec.body!['action'], 'login');
         expect(rec.body!['activation_code'], 'MERCA-1');
@@ -180,6 +183,7 @@ void main() {
                   'username': 'sam',
                   'role': 'CASHIER',
                   'active': false,
+                  'permissions': ['pos', 'register'],
                 },
               ],
             }),
@@ -191,6 +195,7 @@ void main() {
         expect(users.first.isActive, isTrue);
         expect(users.last.isActive, isFalse);
         expect(users.last.passwordHash, isEmpty);
+        expect(users.last.permissions, ['pos', 'register']);
       },
     );
 
@@ -198,9 +203,24 @@ void main() {
       final rec = _Recorder()
         ..reply = (_) => http.Response('{"ok":true,"id":"u9"}', 200);
       final repo = CloudUserRepository(_clientWith(rec));
-      await repo.createUser('sam', 'secret1234', 'CASHIER');
+      await repo.createUser(
+        'sam',
+        'secret1234',
+        'CASHIER',
+        permissions: ['pos', 'history'],
+      );
       expect(rec.body!['action'], 'create_user');
       expect(rec.body!['role'], 'CASHIER');
+      expect(rec.body!['permissions'], ['pos', 'history']);
+    });
+
+    test('setUserPermissions sends the set_user_permissions action', () async {
+      final rec = _Recorder()..reply = (_) => http.Response('{"ok":true}', 200);
+      final repo = CloudUserRepository(_clientWith(rec));
+      await repo.setUserPermissions('u9', ['pos', 'reports']);
+      expect(rec.body!['action'], 'set_user_permissions');
+      expect(rec.body!['target_user_id'], 'u9');
+      expect(rec.body!['permissions'], ['pos', 'reports']);
     });
   });
 

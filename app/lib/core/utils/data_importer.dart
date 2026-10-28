@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
@@ -72,15 +73,11 @@ class DataImporter {
         : <dynamic>[];
 
     final requiredFields = <String, List<String>>{
-      'users': [
-        'id',
-        'username',
-        'password_hash',
-        'salt',
-        'role',
-        'is_active',
-        'created_at',
-      ],
+      // password_hash / salt are intentionally NOT required: the plaintext
+      // backup never carries them (audit #7). Missing credentials are re-seeded
+      // on restore below (owner keeps their live password; everyone else is
+      // locked until the owner resets it).
+      'users': ['id', 'username', 'role', 'is_active', 'created_at'],
       'products': [
         'id',
         'name',
@@ -201,6 +198,17 @@ class DataImporter {
       );
     }
 
+    // Capture the restoring owner's live credentials before the table replace
+    // so a hash-free backup cannot lock the owner out of their own machine.
+    final ownerCred = await db.query(
+      'users',
+      columns: ['password_hash', 'salt'],
+      where: 'id = ?',
+      whereArgs: [requestingUserId],
+      limit: 1,
+    );
+    var reseededCount = 0;
+
     // Persist a recoverable snapshot before the replacement transaction starts.
     final recoveryPath = await DataExporter.exportToJson(
       db,
@@ -225,7 +233,33 @@ class DataImporter {
 
       // Insert new data
       for (var row in (data['users'] as List)) {
-        await txn.insert('users', Map<String, dynamic>.from(row));
+        final user = Map<String, dynamic>.from(row);
+        // Backups omit password_hash / salt by design. Re-seed:
+        //  - the restoring owner keeps their live credentials (no lock-out);
+        //  - every other account gets a structurally-valid but random digest
+        //    that no password can match, so it stays unusable until the owner
+        //    resets it from the Users screen.
+        if (user['password_hash'] == null || user['salt'] == null) {
+          if (user['id'] == requestingUserId && ownerCred.isNotEmpty) {
+            user['password_hash'] = ownerCred.first['password_hash'];
+            user['salt'] = ownerCred.first['salt'];
+          } else {
+            user['password_hash'] = _unusableHash();
+            user['salt'] = _randomSalt();
+            reseededCount++;
+          }
+        }
+        // Backups taken before the permissions column default it here so a
+        // restored staff account keeps today's cashier matrix and owners stay
+        // tick-free (owners bypass the list). The column is stored as JSON text.
+        if (!user.containsKey('permissions') || user['permissions'] == null) {
+          user['permissions'] = jsonEncode(
+            user['role'] == 'OWNER'
+                ? const <String>[]
+                : const ['pos', 'register', 'reports'],
+          );
+        }
+        await txn.insert('users', user);
       }
       for (var row in (data['devices'] as List)) {
         await txn.insert('devices', Map<String, dynamic>.from(row));
@@ -273,10 +307,28 @@ class DataImporter {
         'action': 'BACKUP_RESTORED',
         'details':
             'Restored validated schema $backupVersion backup; '
-            'recovery copy saved at $recoveryPath',
+            'recovery copy saved at $recoveryPath'
+            '${reseededCount > 0 ? '; $reseededCount account(s) password '
+                      'reset required (backup carries no credentials)' : ''}',
         'created_at': DateTime.now().toIso8601String(),
       });
     });
+  }
+
+  /// 16 random bytes, base64url — matches UserRepository's salt shape.
+  static String _randomSalt() {
+    final rnd = Random.secure();
+    return base64Url.encode(List<int>.generate(16, (_) => rnd.nextInt(256)));
+  }
+
+  /// A well-formed pbkdf2 digest whose tail is random, so no password can ever
+  /// reproduce it — the account is effectively locked until a password reset.
+  static String _unusableHash() {
+    final rnd = Random.secure();
+    final derived = base64.encode(
+      List<int>.generate(32, (_) => rnd.nextInt(256)),
+    );
+    return 'pbkdf2-sha256\$v=1\$i=210000\$$derived';
   }
 
   /// Converts a backed-up sale-item row to the schema 7 shape. Schema 6 rows

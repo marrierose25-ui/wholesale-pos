@@ -270,5 +270,81 @@ void main() {
         ),
       ]);
     });
+
+    test(
+      'acks only server-confirmed entries; a failed one stays queued (#20)',
+      () async {
+        final applied = _entry(
+          entityType: SyncEntities.sale,
+          entityId: 'sale-ok',
+          payload: {
+            'sale': {'id': 'sale-ok'},
+          },
+        );
+        final rejected = _entry(
+          entityType: 'nonsense',
+          entityId: 'unknown-1',
+          payload: {},
+        );
+        final failed = _entry(
+          entityType: SyncEntities.shift,
+          entityId: 'shift-bad',
+          payload: {
+            'shift': {'id': 'shift-bad'},
+          },
+        );
+        final backend = SyncGatewayBackend(
+          fnUrl: gateway,
+          licenseProvider: licenseProviding(license),
+          client: MockClient(
+            (_) async => http.Response(
+              jsonEncode({
+                'ok': true,
+                'applied': 1,
+                'results': [
+                  {'entityId': 'sale-ok', 'status': 'applied'},
+                  {
+                    'entityId': 'unknown-1',
+                    'status': 'rejected',
+                    'error': 'unknown entity type',
+                  },
+                  {
+                    'entityId': 'shift-bad',
+                    'status': 'failed',
+                    'error': 'upsert shifts: boom',
+                  },
+                ],
+              }),
+              200,
+            ),
+          ),
+        );
+
+        final acked = await backend.push([applied, rejected, failed]);
+
+        // applied + rejected are acked (never retry a permanent rejection);
+        // the transiently-failed entry is left queued for the next drain.
+        expect(acked, {applied.id, rejected.id});
+        expect(acked.contains(failed.id), isFalse);
+      },
+    );
+
+    test('no results list falls back to acking the whole batch', () async {
+      final a = _entry(
+        entityType: SyncEntities.sale,
+        entityId: 's1',
+        payload: {
+          'sale': {'id': 's1'},
+        },
+      );
+      final backend = SyncGatewayBackend(
+        fnUrl: gateway,
+        licenseProvider: licenseProviding(license),
+        client: MockClient(
+          (_) async => http.Response('{"ok":true,"applied":1}', 200),
+        ),
+      );
+      expect(await backend.push([a]), {a.id});
+    });
   });
 }

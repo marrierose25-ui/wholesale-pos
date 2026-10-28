@@ -21,9 +21,11 @@ class RecordingBackend implements SyncBackend {
   bool get isConfigured => true;
 
   @override
-  Future<void> push(List<SyncOutboxEntry> entries) async {
+  Future<Set<String>> push(List<SyncOutboxEntry> entries) async {
     if (shouldThrow) throw Exception('network down');
     received.addAll(entries);
+    // Confirm every entry so the service marks the whole batch synced.
+    return entries.map((e) => e.id).toSet();
   }
 }
 
@@ -195,6 +197,29 @@ void main() {
     expect(result.remaining, 1);
     expect(await outbox.pendingCount(), 1);
   });
+
+  test(
+    'overlapping syncNow is single-flight; the second tick is idle (#11)',
+    () async {
+      await saleRepository.saveSale(buildSale('sale-1'));
+      final backend = RecordingBackend();
+      final service = SyncService(outbox, backend);
+
+      // Kick off the first drain but do NOT await it yet: it sets the in-flight
+      // guard synchronously before its first await, so the concurrent second
+      // call must short-circuit to idle rather than race a duplicate batch.
+      final first = service.syncNow();
+      final second = await service.syncNow();
+
+      expect(second.pushed, 0);
+      expect(second.remaining, 0); // idle, not a real drain
+
+      final firstResult = await first;
+      expect(firstResult.pushed, 1);
+      expect(backend.received, hasLength(1)); // only the first drain reached it
+      expect(await outbox.pendingCount(), 0);
+    },
+  );
 
   test('pruneSynced removes only synced rows', () async {
     final backend = RecordingBackend();

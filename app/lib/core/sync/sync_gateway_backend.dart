@@ -97,7 +97,7 @@ class SyncGatewayBackend implements SyncBackend {
   bool get isConfigured => _fnUrl.isNotEmpty;
 
   @override
-  Future<void> push(List<SyncOutboxEntry> entries) async {
+  Future<Set<String>> push(List<SyncOutboxEntry> entries) async {
     final license = await _licenseProvider();
     if (license == null || license.trim().isEmpty) {
       // Not activated yet: throw so SyncService leaves rows queued. Selling
@@ -142,5 +142,29 @@ class SyncGatewayBackend implements SyncBackend {
     if (decoded is Map && decoded['ok'] == false) {
       throw Exception('Sync gateway rejected push: ${decoded['error']}');
     }
+
+    // Per-entry ack (audit #20): only mark outbox rows the server actually
+    // processed. 'applied' and 'rejected' (a permanent unknown-type refusal,
+    // never worth retrying) are both acked; 'failed' entries stay queued for
+    // the next drain. If the server sent no results list (older function),
+    // fall back to acking the whole batch like the pre-per-entry contract.
+    final results = decoded is Map ? decoded['results'] : null;
+    if (results is! List || results.isEmpty) {
+      return entries.map((e) => e.id).toSet();
+    }
+    // One entity can back several queued rows (e.g. two edits to one sale);
+    // map its verdict onto every outbox id sharing that entityId.
+    final idsByEntity = <String, List<String>>{};
+    for (final e in entries) {
+      (idsByEntity[e.entityId] ??= <String>[]).add(e.id);
+    }
+    final acked = <String>{};
+    for (final r in results.whereType<Map>()) {
+      final status = r['status'];
+      if (status == 'applied' || status == 'rejected') {
+        acked.addAll(idsByEntity['${r['entityId']}'] ?? const <String>[]);
+      }
+    }
+    return acked;
   }
 }

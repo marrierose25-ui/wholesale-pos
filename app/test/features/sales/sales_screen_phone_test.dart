@@ -55,6 +55,7 @@ void main() {
     var completed = 0;
     var saleCount = 0;
     var totalMinorUnits = 0;
+    var quantityText = '';
 
     // Pump real-time frames so async DB work + dialog animations advance
     // without pumpAndSettle (which hangs inside tester.runAsync).
@@ -96,7 +97,6 @@ void main() {
       expect(find.text('Price (Br)'), findsOneWidget);
 
       await tester.enterText(find.widgetWithText(TextField, 'Name'), 'Sugar');
-      await tester.enterText(find.widgetWithText(TextField, 'Unit'), 'box');
       await tester.enterText(find.widgetWithText(TextField, 'Quantity'), '2');
       await tester.enterText(
         find.widgetWithText(TextField, 'Price (Br)'),
@@ -104,8 +104,29 @@ void main() {
       );
       await tester.pump();
 
+      // Unit is a fixed-choice dropdown (Karton / Kuntal / Derzen / Fre);
+      // swap the default for Derzen and carry on.
+      await tester.tap(find.byType(DropdownButtonFormField<String>));
+      await pumpFrames();
+      // .last - the offstage menu-measurement copy matches find.text too.
+      await tester.tap(find.text('Derzen').last);
+      await pumpFrames();
+
       // Total = quantity x price, shown live before committing.
       expect(find.text('1,000.00 Br'), findsWidgets);
+
+      // Payment method starts unselected and is required: completing without a
+      // pick is blocked with an inline error, not a saved sale.
+      expect(find.text('Select a payment method.'), findsNothing);
+      await tester.tap(find.text('Complete Sale'));
+      await pumpFrames(3);
+      expect(find.text('Select a payment method.'), findsOneWidget);
+
+      // Three till choices: Cash, Bank Transfer, Loan. Pick Cash to proceed.
+      expect(find.widgetWithText(ChoiceChip, 'Loan'), findsOneWidget);
+      expect(find.widgetWithText(ChoiceChip, 'Bank Transfer'), findsOneWidget);
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Cash'));
+      await pumpFrames();
 
       await tester.tap(find.text('Complete Sale'));
       // The save runs as a fire-and-forget real-time future on the screen. Poll
@@ -119,6 +140,7 @@ void main() {
         if (rows.isNotEmpty) {
           saleCount = rows.length;
           totalMinorUnits = rows.single.totalMinorUnits;
+          quantityText = rows.single.items.single.quantityText;
           break;
         }
       }
@@ -128,6 +150,8 @@ void main() {
     expect(completed, 1);
     expect(saleCount, 1);
     expect(totalMinorUnits, 100000); // 2 x Br 500 in minor units
+    // The chosen unit is stored alongside the quantity on the sale line.
+    expect(quantityText, '2 Derzen');
 
     // No layout/paint exception was recorded.
     expect(tester.takeException(), isNull);

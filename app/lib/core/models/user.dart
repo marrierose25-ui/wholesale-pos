@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 class User {
   final String id;
   final String username;
@@ -6,6 +8,12 @@ class User {
   final String role;
   final bool isActive;
 
+  /// Feature-tab keys this account is allowed to open. Always empty for an
+  /// OWNER (who bypasses the tick list via [can]); the authoritative source for
+  /// every other account. Persisted as a JSON array natively and as a native
+  /// list over the cloud `pos-api`.
+  final List<String> permissions;
+
   User({
     required this.id,
     required this.username,
@@ -13,7 +21,13 @@ class User {
     required this.salt,
     required this.role,
     this.isActive = true,
+    this.permissions = const [],
   });
+
+  /// True when the account may open the feature registered under [feature].
+  /// OWNER returns true for everything; every other account is limited to the
+  /// exact set it was ticked at creation / last edit.
+  bool can(String feature) => role == 'OWNER' || permissions.contains(feature);
 
   Map<String, dynamic> toMap() {
     return {
@@ -23,6 +37,7 @@ class User {
       'salt': salt,
       'role': role,
       'is_active': isActive ? 1 : 0,
+      'permissions': jsonEncode(permissions),
       'created_at': DateTime.now().toIso8601String(),
     };
   }
@@ -35,6 +50,26 @@ class User {
       salt: map['salt'] as String,
       role: map['role'] as String,
       isActive: (map['is_active'] as int) == 1,
+      permissions: decodePermissions(map['permissions']),
     );
+  }
+
+  /// Tolerates every shape a permission list can arrive in: a decoded cloud
+  /// list, a native JSON TEXT column, or a missing value (legacy rows and
+  /// hash-free backups predating the column) which yields the empty list.
+  static List<String> decodePermissions(Object? raw) {
+    if (raw == null) return const [];
+    if (raw is List) return raw.map((e) => e.toString()).toList();
+    if (raw is String) {
+      final text = raw.trim();
+      if (text.isEmpty) return const [];
+      try {
+        final decoded = jsonDecode(text);
+        if (decoded is List) return decoded.map((e) => e.toString()).toList();
+      } catch (_) {
+        // Not valid JSON: treat as no permissions rather than guessing.
+      }
+    }
+    return const [];
   }
 }

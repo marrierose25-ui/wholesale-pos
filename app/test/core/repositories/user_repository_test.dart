@@ -285,4 +285,81 @@ void main() {
     // above); without an explicit timeout a contended suite can time this out.
     timeout: const Timeout(Duration(minutes: 3)),
   );
+
+  test(
+    'Creates a staff account with feature permissions and reads them back',
+    () async {
+      await repository.createFirstOwner('owner', 'long-strong-password');
+      await repository.createUser(
+        'staff',
+        'password123',
+        'CASHIER',
+        permissions: ['pos', 'reports'],
+      );
+
+      final users = await repository.getAllUsers();
+      final staff = users.firstWhere((u) => u.username == 'staff');
+      expect(staff.permissions, ['pos', 'reports']);
+      expect(staff.can('pos'), isTrue);
+      expect(staff.can('reports'), isTrue);
+      expect(staff.can('users'), isFalse);
+
+      // Owner bypasses the tick list: stores nothing, can open everything.
+      final owner = users.firstWhere((u) => u.role == 'OWNER');
+      expect(owner.permissions, isEmpty);
+      expect(owner.can('users'), isTrue);
+      expect(owner.can('audit'), isTrue);
+    },
+  );
+
+  test(
+    'setUserPermissions adds and removes features and rejects owners',
+    () async {
+      final owner = await repository.createFirstOwner(
+        'owner',
+        'long-strong-password',
+      );
+      await repository.createUser(
+        'staff',
+        'password123',
+        'CASHIER',
+        permissions: ['pos'],
+      );
+      final staff = (await repository.getAllUsers()).firstWhere(
+        (user) => user.username == 'staff',
+      );
+
+      await repository.setUserPermissions(staff.id, [
+        'pos',
+        'register',
+        'reports',
+      ]);
+      var after = await repository.getById(staff.id);
+      expect(after!.permissions, ['pos', 'register', 'reports']);
+
+      await repository.setUserPermissions(staff.id, ['pos']);
+      after = await repository.getById(staff.id);
+      expect(after!.permissions, ['pos']);
+
+      // Owner rows bypass ticks — editing their permissions is rejected.
+      await expectLater(
+        repository.setUserPermissions(owner.id, ['pos']),
+        throwsException,
+      );
+    },
+  );
+
+  test('createUser drops unknown feature keys', () async {
+    await repository.createFirstOwner('owner', 'long-strong-password');
+    await repository.createUser(
+      'staff',
+      'password123',
+      'CASHIER',
+      permissions: ['pos', 'not_a_feature'],
+    );
+    final staff = (await repository.getAllUsers()).firstWhere(
+      (user) => user.username == 'staff',
+    );
+    expect(staff.permissions, ['pos']);
+  });
 }

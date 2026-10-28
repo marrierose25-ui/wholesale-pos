@@ -98,6 +98,53 @@ void main() {
     expect(stats['average_sale'], 4000);
   });
 
+  test(
+    'A loan sale is recorded but excluded from every revenue figure',
+    () async {
+      await seedSale(
+        id: 'sale-cash',
+        totalMinorUnits: 5000,
+        createdAt: DateTime.now(),
+      );
+      await seedSale(
+        id: 'sale-loan',
+        totalMinorUnits: 4000,
+        createdAt: DateTime.now(),
+        paymentMethod: 'LOAN',
+        product: 'Flour',
+      );
+
+      // The loan is a real, retrievable sale.
+      final sales = await repository.getSales();
+      expect(sales.map((s) => s.id), contains('sale-loan'));
+
+      final stats = await repository.getDashboardStats();
+      // Only the cash sale counts toward money; the loan contributes nothing.
+      expect(stats['revenue'], 5000);
+      expect(stats['cash_revenue'], 5000);
+      expect(stats['bank_revenue'], 0);
+      // It is not even counted as a completed sale on the dashboard.
+      expect(stats['sales_count'], 1);
+
+      // The trend and the product mix both drop the loan line too.
+      final trend = await repository.getRevenueTrend(DateRange.today());
+      final dayTotal = trend.fold<int>(0, (a, r) => a + (r['total'] as int));
+      expect(dayTotal, 5000);
+      final products = await repository.getProductSalesSummary(
+        period: DateRange.today(),
+      );
+      final productRevenue = products.fold<int>(
+        0,
+        (a, r) => a + (r['total_revenue'] as int),
+      );
+      expect(productRevenue, 5000);
+      expect(
+        products.map((r) => r['product_name_snapshot']),
+        isNot(contains('Flour')),
+      );
+    },
+  );
+
   test('Dashboard periods exclude older sales by date filtering', () async {
     // Two days ago is outside today, yesterday, and (when today is Monday)
     // this week — but inside all time.

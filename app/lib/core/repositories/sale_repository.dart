@@ -93,7 +93,7 @@ class SqfliteSaleRepository implements SaleRepository {
           sale.discountMinorUnits < 0 ||
           sale.totalMinorUnits !=
               sale.subtotalMinorUnits - sale.discountMinorUnits ||
-          !{'CASH', 'BANK'}.contains(sale.paymentMethod)) {
+          !{'CASH', 'BANK', 'LOAN'}.contains(sale.paymentMethod)) {
         throw Exception('Sale contains invalid totals or payment method.');
       }
       var itemSubtotal = 0;
@@ -106,7 +106,9 @@ class SqfliteSaleRepository implements SaleRepository {
               (sale.amountPaidMinorUnits < sale.totalMinorUnits ||
                   sale.changeMinorUnits !=
                       sale.amountPaidMinorUnits - sale.totalMinorUnits)) ||
-          (sale.paymentMethod == 'BANK' &&
+          // BANK and LOAN both settle for exactly the total: no cash was
+          // tendered at the till (a loan is money owed, not money collected).
+          (sale.paymentMethod != 'CASH' &&
               (sale.amountPaidMinorUnits != sale.totalMinorUnits ||
                   sale.changeMinorUnits != 0))) {
         throw Exception('Sale totals do not match the line items or payment.');
@@ -626,7 +628,8 @@ class SqfliteSaleRepository implements SaleRepository {
   }
 
   /// Completed revenue and sale count per calendar day across [period],
-  /// ordered oldest to newest, for the dashboard trend chart.
+  /// ordered oldest to newest, for the dashboard trend chart. Loan sales are
+  /// money owed rather than collected, so they are left out of the trend.
   @override
   Future<List<Map<String, dynamic>>> getRevenueTrend(DateRange period) async {
     return _db.rawQuery(
@@ -635,7 +638,9 @@ class SqfliteSaleRepository implements SaleRepository {
         COUNT(*) AS count,
         COALESCE(SUM(total_minor_units), 0) AS total
       FROM sales
-      WHERE status = 'COMPLETED' AND created_at >= ? AND created_at < ?
+      WHERE status = 'COMPLETED'
+        AND payment_method IN ('CASH', 'BANK')
+        AND created_at >= ? AND created_at < ?
       GROUP BY day
       ORDER BY day ASC
     ''',
@@ -743,8 +748,9 @@ class SqfliteSaleRepository implements SaleRepository {
   }
 
   /// Revenue figures for the dashboard. Voided sales are always excluded.
-  /// Defaults to today so the dashboard resets at local midnight purely by
-  /// date filtering — records are never deleted.
+  /// Loan sales are recorded but collected no money, so they never count
+  /// toward the revenue figures. Defaults to today so the dashboard resets at
+  /// local midnight purely by date filtering — records are never deleted.
   @override
   Future<Map<String, int>> getDashboardStats({DateRange? period}) async {
     final range = period ?? DateRange.today();
@@ -757,7 +763,8 @@ class SqfliteSaleRepository implements SaleRepository {
 
     final revenueRow = await _db.rawQuery('''
       SELECT COUNT(*) AS count, COALESCE(SUM(total_minor_units), 0) AS total
-      FROM sales WHERE $completed
+      FROM sales
+      WHERE $completed AND payment_method IN ('CASH', 'BANK')
     ''', rangeArgs);
 
     final cashRow = await _db.rawQuery('''
@@ -836,7 +843,8 @@ class SqfliteSaleRepository implements SaleRepository {
 
   /// Revenue by entered product name for the reports screen. Quantities are
   /// summed in milliunits; lines with manual totals contribute revenue but no
-  /// numeric quantity.
+  /// numeric quantity. Loan sales are excluded — their money was never
+  /// collected.
   @override
   Future<List<Map<String, dynamic>>> getProductSalesSummary({
     DateRange? period,
@@ -854,7 +862,8 @@ class SqfliteSaleRepository implements SaleRepository {
         SUM(si.line_total_minor_units) AS total_revenue
       FROM sale_items si
       JOIN sales ON si.sale_id = sales.id
-      WHERE sales.status = 'COMPLETED'$rangeClause
+      WHERE sales.status = 'COMPLETED'
+        AND sales.payment_method IN ('CASH', 'BANK')$rangeClause
       GROUP BY si.product_name_snapshot
       ORDER BY total_revenue DESC
     ''', rangeArgs);
@@ -874,7 +883,8 @@ class SqfliteSaleRepository implements SaleRepository {
       SELECT users.username, COUNT(sales.id) AS total_sales, COALESCE(SUM(sales.total_minor_units), 0) AS total_revenue
       FROM sales
       JOIN users ON sales.cashier_id = users.id
-      WHERE sales.status = 'COMPLETED'$rangeClause
+      WHERE sales.status = 'COMPLETED'
+        AND sales.payment_method IN ('CASH', 'BANK')$rangeClause
       GROUP BY users.id, users.username
       ORDER BY total_revenue DESC
     ''', rangeArgs);

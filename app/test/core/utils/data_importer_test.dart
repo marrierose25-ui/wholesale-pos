@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:wholesale_pos_app/core/database/local_database.dart';
+import 'package:wholesale_pos_app/core/utils/data_exporter.dart';
 import 'package:wholesale_pos_app/core/utils/data_importer.dart';
 
 /// Backups written by schema 6 stored sale-item quantities as plain
@@ -285,4 +286,183 @@ void main() {
     // Original data untouched.
     expect(await db.query('sales'), isEmpty);
   });
+
+  // Audit #7: a plaintext backup must never carry replayable credentials or
+  // licensing / session / device-identity secrets.
+  test('export strips password_hash/salt and licensing secrets (#7)', () async {
+    await db.insert('users', {
+      'id': 'cashier-1',
+      'username': 'sak',
+      'password_hash': 'SECRET_HASH_SENTINEL',
+      'salt': 'SECRET_SALT_SENTINEL',
+      'role': 'CASHIER',
+      'is_active': 1,
+      'created_at': DateTime.now().toIso8601String(),
+    });
+    for (final kv in const {
+      'auth_session': 'SESSION_SENTINEL',
+      'license_code': 'LICENSE_SENTINEL',
+      'activation_code': 'ACTIVATION_SENTINEL',
+      'device_hw_uuid': 'HWUUID_SENTINEL',
+      'device_install_uuid': 'INSTALLUUID_SENTINEL',
+      'theme_mode': 'light',
+    }.entries) {
+      await db.insert('settings', {'key': kv.key, 'value': kv.value});
+    }
+
+    final path = await DataExporter.exportToJson(
+      db,
+      requestingUserId: 'owner-1',
+    );
+    final raw = await File(path).readAsString();
+    final data = jsonDecode(raw) as Map<String, dynamic>;
+
+    // No user row carries a credential column, and no sentinel value leaks.
+    for (final row in data['users'] as List) {
+      expect((row as Map).containsKey('password_hash'), isFalse);
+      expect(row.containsKey('salt'), isFalse);
+    }
+    // Only the safe setting survives; every secret key is dropped.
+    final settingKeys = (data['settings'] as List)
+        .map((r) => (r as Map)['key'])
+        .toSet();
+    expect(settingKeys, contains('theme_mode'));
+    for (final secret in const [
+      'auth_session',
+      'license_code',
+      'activation_code',
+      'device_hw_uuid',
+      'device_install_uuid',
+    ]) {
+      expect(settingKeys.contains(secret), isFalse);
+    }
+    for (final sentinel in const [
+      'SECRET_HASH_SENTINEL',
+      'SECRET_SALT_SENTINEL',
+      'SESSION_SENTINEL',
+      'LICENSE_SENTINEL',
+      'ACTIVATION_SENTINEL',
+      'HWUUID_SENTINEL',
+      'INSTALLUUID_SENTINEL',
+    ]) {
+      expect(raw.contains(sentinel), isFalse, reason: 'leaked $sentinel');
+    }
+  });
+
+  // A hash-free (safe) backup still restores: the owner keeps their live
+  // password, every other account is re-seeded to an unusable hash.
+  test(
+    'restore re-seeds a hash-free backup; owner kept, others locked',
+    () async {
+      final now = DateTime.now().toIso8601String();
+      final data = buildBackup(version: 8)
+        ..['users'] = [
+          {
+            'id': 'owner-1',
+            'username': 'owner',
+            'role': 'OWNER',
+            'is_active': 1,
+            'created_at': now,
+          },
+          {
+            'id': 'cashier-1',
+            'username': 'sak',
+            'role': 'CASHIER',
+            'is_active': 1,
+            'created_at': now,
+          },
+        ];
+      final path = await writeBackup(data);
+
+      await DataImporter.importFromJson(db, path, requestingUserId: 'owner-1');
+
+      final users = await db.query('users');
+      final owner = users.firstWhere((u) => u['id'] == 'owner-1');
+      final cashier = users.firstWhere((u) => u['id'] == 'cashier-1');
+      // Owner keeps the live credential seeded in setUp ('x'/'x').
+      expect(owner['password_hash'], 'x');
+      expect(owner['salt'], 'x');
+      // Cashier gets a well-formed but random digest that no password matches.
+      expect(cashier['password_hash'], isNotNull);
+      expect(cashier['password_hash'], startsWith('pbkdf2-sha256\$'));
+      expect(cashier['password_hash'], isNot('x'));
+      expect(cashier['salt'], isNotNull);
+    },
+  );
+
+  // Feature permissions are non-secret and must survive export → import so a
+  // restored staff account keeps exactly the tabs the owner ticked.
+  test('permissions round-trip through export/import', () async {
+    final now = DateTime.now().toIso8601String();
+    await db.insert('users', {
+      'id': 'cashier-1',
+      'username': 'sak',
+      'password_hash': 'x',
+      'salt': 'x',
+      'role': 'CASHIER',
+      'is_active': 1,
+      'permissions': jsonEncode(['pos', 'finance']),
+      'created_at': now,
+    });
+
+    final path = await DataExporter.exportToJson(
+      db,
+      requestingUserId: 'owner-1',
+    );
+    final data =
+        jsonDecode(await File(path).readAsString()) as Map<String, dynamic>;
+    final exported = (data['users'] as List).firstWhere(
+      (u) => (u as Map)['id'] == 'cashier-1',
+    ) as Map<String, dynamic>;
+    expect(exported['permissions'], jsonEncode(['pos', 'finance']));
+
+    await DataImporter.importFromJson(db, path, requestingUserId: 'owner-1');
+
+    final cashier = (await db.query(
+      'users',
+      where: 'id = ?',
+      whereArgs: ['cashier-1'],
+    )).single;
+    expect(cashier['permissions'], jsonEncode(['pos', 'finance']));
+  });
+
+  test(
+    'backups predating the permissions column restore with defaults',
+    () async {
+      // buildBackup users carry no permissions key at all (schema ≤10 exports).
+      final now = DateTime.now().toIso8601String();
+      final data = buildBackup(version: 10)
+        ..['users'] = [
+          ...buildBackup(version: 10)['users'] as List,
+          {
+            'id': 'cashier-1',
+            'username': 'sak',
+            'role': 'CASHIER',
+            'is_active': 1,
+            'created_at': now,
+          },
+        ];
+      final path = await writeBackup(data);
+
+      await DataImporter.importFromJson(db, path, requestingUserId: 'owner-1');
+
+      final owner = (await db.query(
+        'users',
+        where: 'id = ?',
+        whereArgs: ['owner-1'],
+      )).single;
+      final cashier = (await db.query(
+        'users',
+        where: 'id = ?',
+        whereArgs: ['cashier-1'],
+      )).single;
+      // Owners bypass the tick list; staff get today's cashier matrix.
+      expect(jsonDecode(owner['permissions'] as String), isEmpty);
+      expect(jsonDecode(cashier['permissions'] as String), [
+        'pos',
+        'register',
+        'reports',
+      ]);
+    },
+  );
 }

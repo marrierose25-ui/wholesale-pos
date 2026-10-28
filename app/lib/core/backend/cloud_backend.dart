@@ -46,7 +46,12 @@ class CloudBackend extends AppBackend {
   late final String _deviceId = _resolveDeviceId();
 
   CloudBackend()
-    : _api = CloudApiClient(activationCode: webRead(_activationKey) ?? '');
+    : _api = CloudApiClient(activationCode: webRead(_activationKey) ?? '') {
+    // Every authenticated pos-api call now carries this device id (auto-stamped
+    // in CloudApiClient) so the server scopes the open drawer + receipt stream
+    // per device under a shared, live-synced tenant (audit D1).
+    _api.deviceId = _deviceId;
+  }
 
   String _resolveDeviceId() {
     final existing = webRead(_deviceKey);

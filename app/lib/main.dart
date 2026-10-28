@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:sqflite/sqflite.dart';
 
 import 'core/database/local_database.dart';
+import 'core/auth/features.dart';
 import 'core/auth/session_store.dart';
 import 'core/licensing/activation_client.dart';
 import 'core/licensing/device_fingerprint.dart';
@@ -27,7 +28,6 @@ import 'features/finance/finance_overview_screen.dart';
 import 'features/licensing/activation_screen.dart';
 import 'features/register/register_screen.dart';
 import 'features/reports/reports_screen.dart';
-import 'features/sales/sales_history_screen.dart';
 import 'features/sales/sales_screen.dart';
 import 'features/settings/settings_screen.dart';
 import 'features/users/user_management_screen.dart';
@@ -537,6 +537,12 @@ class MainLayout extends StatefulWidget {
 
 class _MainLayoutState extends State<MainLayout> {
   int _selectedIndex = 0;
+
+  /// Feature key at each nav position, rebuilt every frame from the account's
+  /// ticks so tab-change / sale-complete handlers resolve the current screen
+  /// without hard-coded indexes (the visible set differs per account).
+  List<String> _navFeatureKeys = const [];
+
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final GlobalKey<RegisterScreenState> _registerKey =
       GlobalKey<RegisterScreenState>();
@@ -545,24 +551,32 @@ class _MainLayoutState extends State<MainLayout> {
   final GlobalKey<ReportsScreenState> _reportsKey =
       GlobalKey<ReportsScreenState>();
   final GlobalKey<SalesScreenState> _salesKey = GlobalKey<SalesScreenState>();
+  final GlobalKey<FinanceOverviewScreenState> _financeKey =
+      GlobalKey<FinanceOverviewScreenState>();
 
+  /// Silent background refreshes so every data screen shows the latest
+  /// figures. Each loader is guarded by its GlobalKey, so a screen the account
+  /// can't open (null currentState) is simply skipped.
   void _refreshDataScreens() {
-    _registerKey.currentState?.loadData();
-    _dashboardKey.currentState?.loadDashboard();
+    _registerKey.currentState?.loadData(silent: true);
+    _dashboardKey.currentState?.loadDashboard(silent: true);
     _reportsKey.currentState?.loadReports();
     _salesKey.currentState?.loadShift();
+    _financeKey.currentState?.load(silent: true);
   }
 
   @override
   Widget build(BuildContext context) {
-    final isOwner = widget.currentUser.role == 'OWNER';
-    final registerIndex = isOwner ? 2 : 1;
+    final user = widget.currentUser;
 
     // Completing a sale refreshes every data screen and lands the shell on the
-    // Register tab, so the drawer balance is the next thing the cashier sees.
+    // Register tab when this account has it. The index is resolved through the
+    // live feature mapping at call time, so it stays correct however the
+    // visible tabs are ticked out for the signed-in account.
     void onSaleCompleted() {
       _refreshDataScreens();
-      setState(() => _selectedIndex = registerIndex);
+      final registerIndex = _navFeatureKeys.indexOf('register');
+      if (registerIndex >= 0) setState(() => _selectedIndex = registerIndex);
     }
 
     final salesScreen = SalesScreen(
@@ -570,23 +584,18 @@ class _MainLayoutState extends State<MainLayout> {
       saleRepository: widget.saleRepository,
       shiftRepository: widget.shiftRepository,
       deviceId: widget.deviceId,
-      currentUser: widget.currentUser,
+      currentUser: user,
       onSaleCompleted: onSaleCompleted,
-    );
-    final historyScreen = SalesHistoryScreen(
-      saleRepository: widget.saleRepository,
-      currentUser: widget.currentUser,
-      onSaleVoided: _refreshDataScreens,
     );
     final registerScreen = RegisterScreen(
       key: _registerKey,
       onShiftUpdated: _refreshDataScreens,
-      currentUser: widget.currentUser,
+      currentUser: user,
       shiftRepository: widget.shiftRepository,
       saleRepository: widget.saleRepository,
     );
     final settingsScreen = SettingsScreen(
-      currentUser: widget.currentUser,
+      currentUser: user,
       db: widget.db,
       userRepository: widget.userRepository,
       onLogout: widget.onLogout,
@@ -594,62 +603,63 @@ class _MainLayoutState extends State<MainLayout> {
       onToggleTheme: widget.onToggleTheme,
     );
 
-    // Role-specific ordering. Owner: Dashboard / POS / Register / Money
-    // Tracking lead the pill and History / Reports / Users / Audit / Settings
-    // live in the drawer. Cashier: POS / Register lead, History / Settings in
-    // the drawer.
-    final screens = <Widget>[
-      if (isOwner) ...[
-        DashboardScreen(
-          key: _dashboardKey,
-          saleRepository: widget.saleRepository,
-        ),
-        salesScreen,
-        registerScreen,
-        FinanceOverviewScreen(
-          financeRepository: widget.financeRepository,
-          currentUser: widget.currentUser,
-        ),
-        historyScreen,
-        ReportsScreen(key: _reportsKey, saleRepository: widget.saleRepository),
-        UserManagementScreen(
-          userRepository: widget.userRepository,
-          currentUser: widget.currentUser,
-        ),
-        AuditLogScreen(saleRepository: widget.saleRepository),
-        settingsScreen,
-      ] else ...[
-        salesScreen,
-        registerScreen,
-        historyScreen,
-        settingsScreen,
-      ],
-    ];
+    // One destination per feature the account is ticked for, in registry order.
+    // Owner bypasses the ticks (User.can returns true for everything). Settings
+    // is always appended last so every account can log out / change theme.
+    final entries = <_ShellDestination>[];
+    void add(String key, Widget screen) {
+      if (!user.can(key)) return;
+      final def = kFeatures.firstWhere((f) => f.key == key);
+      entries.add(_ShellDestination(key, def.label, def.icon, screen));
+    }
 
+    add(
+      'dashboard',
+      DashboardScreen(
+        key: _dashboardKey,
+        saleRepository: widget.saleRepository,
+        currentUser: user,
+      ),
+    );
+    add('pos', salesScreen);
+    add('register', registerScreen);
+    add(
+      'finance',
+      FinanceOverviewScreen(
+        key: _financeKey,
+        financeRepository: widget.financeRepository,
+        currentUser: user,
+      ),
+    );
+    add(
+      'reports',
+      ReportsScreen(key: _reportsKey, saleRepository: widget.saleRepository),
+    );
+    add(
+      'users',
+      UserManagementScreen(
+        userRepository: widget.userRepository,
+        currentUser: user,
+      ),
+    );
+    add('audit', AuditLogScreen(saleRepository: widget.saleRepository));
+    // Settings is always visible regardless of ticks (logout / theme).
+    entries.add(
+      _ShellDestination('settings', 'Settings', Icons.settings, settingsScreen),
+    );
+
+    _navFeatureKeys = [for (final e in entries) e.key];
+    final screens = [for (final e in entries) e.screen];
     if (_selectedIndex >= screens.length) _selectedIndex = 0;
     final settingsIndex = screens.length - 1;
 
-    final allNavItems = <_NavItem>[
-      if (isOwner) ...[
-        const _NavItem(0, Icons.dashboard, 'Dashboard'),
-        const _NavItem(1, Icons.shopping_cart, 'POS'),
-        const _NavItem(2, Icons.point_of_sale, 'Register'),
-        const _NavItem(3, Icons.account_balance_wallet, 'Money Tracking'),
-        const _NavItem(4, Icons.history, 'History'),
-        const _NavItem(5, Icons.bar_chart, 'Reports'),
-        const _NavItem(6, Icons.people, 'Users'),
-        const _NavItem(7, Icons.security, 'Audit Logs'),
-        const _NavItem(8, Icons.settings, 'Settings'),
-      ] else ...[
-        const _NavItem(0, Icons.shopping_cart, 'POS'),
-        const _NavItem(1, Icons.point_of_sale, 'Register'),
-        const _NavItem(2, Icons.history, 'History'),
-        const _NavItem(3, Icons.settings, 'Settings'),
-      ],
+    final allNavItems = [
+      for (var i = 0; i < entries.length; i++)
+        _NavItem(i, entries[i].icon, entries[i].label),
     ];
-    // The first [pillCount] destinations lead the bottom pill (owner 4, cashier
-    // 2); the rest live in the hamburger drawer.
-    final pillCount = isOwner ? 4 : 2;
+    // The first [pillCount] destinations lead the bottom pill; the rest live in
+    // the hamburger drawer. At most 4, but never more than the visible count.
+    final pillCount = entries.length < 4 ? entries.length : 4;
     final pillItems = allNavItems.take(pillCount).toList();
     final drawerItems = allNavItems.skip(pillCount).toList();
 
@@ -1011,4 +1021,16 @@ class _NavItem {
   final String label;
 
   const _NavItem(this.index, this.icon, this.label);
+}
+
+/// A feature-tab destination built per-account in [MainLayout.build]: the
+/// feature key (for sale-complete register-landing resolution), its nav label /
+/// icon, and the already-constructed screen widget for the IndexedStack.
+class _ShellDestination {
+  final String key;
+  final String label;
+  final IconData icon;
+  final Widget screen;
+
+  const _ShellDestination(this.key, this.label, this.icon, this.screen);
 }

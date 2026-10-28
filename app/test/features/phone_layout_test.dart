@@ -10,7 +10,7 @@ import 'package:wholesale_pos_app/features/audit/audit_log_screen.dart';
 import 'package:wholesale_pos_app/features/dashboard/dashboard_screen.dart';
 import 'package:wholesale_pos_app/features/finance/finance_overview_screen.dart';
 import 'package:wholesale_pos_app/features/reports/reports_screen.dart';
-import 'package:wholesale_pos_app/features/sales/sales_history_screen.dart';
+import 'package:wholesale_pos_app/features/dashboard/sales_by_day_screen.dart';
 import 'package:wholesale_pos_app/features/settings/settings_screen.dart';
 import 'package:wholesale_pos_app/features/users/user_management_screen.dart';
 import 'package:wholesale_pos_app/features/sales/sale.dart';
@@ -150,7 +150,7 @@ void main() {
   testWidgets('Sales history lays out at phone width', (tester) async {
     await pumpAtPhone(
       tester,
-      SalesHistoryScreen(
+      SalesByDayScreen(
         saleRepository: SaleRepository(db),
         currentUser: owner,
         onSaleVoided: () {},
@@ -161,7 +161,7 @@ void main() {
   testWidgets('Dashboard lays out at phone width', (tester) async {
     await pumpAtPhone(
       tester,
-      DashboardScreen(saleRepository: SaleRepository(db)),
+      DashboardScreen(saleRepository: SaleRepository(db), currentUser: owner),
     );
   });
 
