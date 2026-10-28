@@ -14,6 +14,11 @@ class User {
   /// list over the cloud `pos-api`.
   final List<String> permissions;
 
+  /// True for the permanent training account that is seeded on every install
+  /// and cloud tenant. It behaves like a normal CASHIER (its [permissions]
+  /// apply) except that it can never be deactivated.
+  final bool isDemo;
+
   User({
     required this.id,
     required this.username,
@@ -22,6 +27,7 @@ class User {
     required this.role,
     this.isActive = true,
     this.permissions = const [],
+    this.isDemo = false,
   });
 
   /// True when the account may open the feature registered under [feature].
@@ -38,6 +44,7 @@ class User {
       'role': role,
       'is_active': isActive ? 1 : 0,
       'permissions': jsonEncode(permissions),
+      'is_demo': isDemo ? 1 : 0,
       'created_at': DateTime.now().toIso8601String(),
     };
   }
@@ -51,6 +58,7 @@ class User {
       role: map['role'] as String,
       isActive: (map['is_active'] as int) == 1,
       permissions: decodePermissions(map['permissions']),
+      isDemo: ((map['is_demo'] as int?) ?? 0) == 1,
     );
   }
 

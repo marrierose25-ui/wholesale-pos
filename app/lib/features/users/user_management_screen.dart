@@ -196,6 +196,15 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    if (user.isDemo)
+                      const Chip(
+                        label: Text('Demo'),
+                        backgroundColor: AppDesign.blue,
+                        labelStyle: TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                        ),
+                      ),
                     if (!user.isActive)
                       const Chip(
                         label: Text('Disabled'),
@@ -222,7 +231,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                             value: 'perms',
                             child: Text('Permissions'),
                           ),
-                        if (!isSelf)
+                        if (!isSelf && !user.isDemo)
                           PopupMenuItem(
                             value: 'toggle',
                             child: Text(

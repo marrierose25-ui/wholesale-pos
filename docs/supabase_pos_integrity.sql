@@ -47,6 +47,13 @@ ALTER TABLE pos_users ADD COLUMN IF NOT EXISTS permissions jsonb NOT NULL DEFAUL
 UPDATE pos_users SET permissions = '["pos", "register", "history"]'::jsonb
   WHERE role = 'CASHIER' AND permissions = '[]'::jsonb;
 
+-- Demo/training account: exactly one perpetually-active CASHIER per tenant that
+-- cannot be deactivated, whose feature permissions the owner edits like any
+-- staff account. pos-api seeds it lazily on login/setup_owner; native schema v13
+-- mirrors this as an INTEGER 0/1 column. Default false so existing rows are
+-- unaffected.
+ALTER TABLE pos_users ADD COLUMN IF NOT EXISTS is_demo boolean NOT NULL DEFAULT false;
+
 -- Register proof photos: optional base64 image attached to a cash movement
 -- (mainly debits — withdrawal evidence). Native schema v12 mirrors this as a
 -- TEXT column, so the outbox row payload carries it through sync unchanged.

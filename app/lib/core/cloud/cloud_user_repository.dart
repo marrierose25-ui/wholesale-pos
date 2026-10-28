@@ -68,6 +68,13 @@ class CloudUserRepository implements UserRepository {
   }
 
   @override
+  Future<void> ensureDemoUser() async {
+    // The cloud demo account is seeded server-side by `pos-api` inside the
+    // login / setup_owner handlers, so it already exists for any tenant whose
+    // owner has signed in. Nothing to do from the browser.
+  }
+
+  @override
   Future<void> setUserPermissions(
     String userId,
     List<String> permissions,
@@ -156,5 +163,6 @@ class CloudUserRepository implements UserRepository {
     role: row['role'] as String,
     isActive: row['active'] == true,
     permissions: User.decodePermissions(row['permissions']),
+    isDemo: row['is_demo'] == true,
   );
 }

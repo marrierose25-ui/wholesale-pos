@@ -71,6 +71,16 @@ class SalesScreenState extends State<SalesScreen> {
       builder: (context) => const _SaleDialog(),
     );
     if (draft == null) return;
+    if (!mounted) return;
+
+    // Second step: choose how the sale is settled. Back/cancel returns null and
+    // abandons the sale without saving anything.
+    final paymentMethod = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => _PaymentDialog(draft: draft),
+    );
+    if (paymentMethod == null) return;
 
     setState(() => _isProcessing = true);
     try {
@@ -101,7 +111,7 @@ class SalesScreenState extends State<SalesScreen> {
         cashierId: widget.currentUser.id,
         deviceId: widget.deviceId,
         shiftId: shift.id,
-        paymentMethod: draft.paymentMethod,
+        paymentMethod: paymentMethod,
         subtotalMinorUnits: lineTotal,
         discountMinorUnits: 0,
         totalMinorUnits: lineTotal,
@@ -200,7 +210,6 @@ class _SaleDraft {
   final int? billingQuantityMilliunits;
   final int unitPriceMinorUnits;
   final int lineTotalMinorUnits;
-  final String paymentMethod;
 
   const _SaleDraft({
     required this.name,
@@ -208,7 +217,6 @@ class _SaleDraft {
     required this.billingQuantityMilliunits,
     required this.unitPriceMinorUnits,
     required this.lineTotalMinorUnits,
-    required this.paymentMethod,
   });
 }
 
@@ -216,8 +224,8 @@ class _SaleDraft {
 const List<String> _saleUnits = ['Karton', 'Kuntal', 'Derzen', 'Fre'];
 
 /// A focused one-item sale dialog: Name, Unit, Quantity, Price with a live
-/// Total, and a required Cash / Bank Transfer / Loan choice (nothing is
-/// pre-selected; completing the sale demands an explicit pick).
+/// Total. The payment method is chosen on the following screen, so this dialog
+/// stays short enough to remain fully visible above the on-screen keyboard.
 class _SaleDialog extends StatefulWidget {
   const _SaleDialog();
 
@@ -231,9 +239,6 @@ class _SaleDialogState extends State<_SaleDialog> {
   final _priceController = TextEditingController();
 
   String _unit = _saleUnits.first;
-  // Deliberately unselected until the cashier taps one of Cash / Bank
-  // Transfer / Loan — a sale cannot be completed without a payment method.
-  String? _paymentMethod;
   String? _error;
 
   @override
@@ -283,11 +288,8 @@ class _SaleDialogState extends State<_SaleDialog> {
       setState(() => _error = 'The calculated total is too large.');
       return;
     }
-    final paymentMethod = _paymentMethod;
-    if (paymentMethod == null) {
-      setState(() => _error = 'Select a payment method.');
-      return;
-    }
+    // Payment method is chosen on the next screen, so the fields here stay
+    // fully visible even while the on-screen keyboard is up.
     Navigator.of(context).pop(
       _SaleDraft(
         name: name,
@@ -295,7 +297,6 @@ class _SaleDialogState extends State<_SaleDialog> {
         billingQuantityMilliunits: quantity,
         unitPriceMinorUnits: price,
         lineTotalMinorUnits: lineTotal,
-        paymentMethod: paymentMethod,
       ),
     );
   }
@@ -303,10 +304,10 @@ class _SaleDialogState extends State<_SaleDialog> {
   @override
   Widget build(BuildContext context) {
     final lineTotal = _lineTotalMinorUnits;
-    // The keyboard would otherwise push the payment row off-screen (AlertDialog
-    // scrolls itself when viewInsets are applied), so neutralise them for the
-    // dialog body and cap its height above the keyboard: the fields scroll,
-    // while Cash / Bank Transfer / Loan stays visible until the sale is posted.
+    // The keyboard would otherwise push the dialog's lower fields off-screen
+    // (AlertDialog scrolls itself when viewInsets are applied), so neutralise
+    // them for the dialog body and cap its height above the keyboard: the
+    // fields scroll and the Next button always stays visible.
     final media = MediaQuery.of(context);
     final keyboard = media.viewInsets.bottom;
     final maxBodyHeight = (media.size.height - keyboard - 190).clamp(
@@ -427,30 +428,6 @@ class _SaleDialogState extends State<_SaleDialog> {
                   ),
                 ),
               ),
-              // Pinned below the scroller so the choice stays visible even while
-              // the keyboard is up. ChoiceChips (not a SegmentedButton, which
-              // forbids an empty single selection) so nothing is preselected and
-              // the sale is blocked until one is tapped.
-              const SizedBox(height: 4),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final option in const <(String, String)>[
-                    ('CASH', 'Cash'),
-                    ('BANK', 'Bank Transfer'),
-                    ('LOAN', 'Loan'),
-                  ])
-                    ChoiceChip(
-                      label: Text(option.$2),
-                      selected: _paymentMethod == option.$1,
-                      onSelected: (_) => setState(() {
-                        _paymentMethod = option.$1;
-                        _error = null;
-                      }),
-                    ),
-                ],
-              ),
               if (_error != null) ...[
                 const SizedBox(height: 12),
                 Text(
@@ -467,7 +444,125 @@ class _SaleDialogState extends State<_SaleDialog> {
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Cancel'),
         ),
-        FilledButton(onPressed: _submit, child: const Text('Complete Sale')),
+        FilledButton(onPressed: _submit, child: const Text('Next')),
+      ],
+    );
+  }
+}
+
+/// The second step of the sale: shows the line just entered and asks for the
+/// payment method. Nothing is pre-selected, so the cashier must make an
+/// explicit Cash / Bank Transfer / Loan choice before the sale is posted. It
+/// carries no text fields, so the keyboard never covers it.
+class _PaymentDialog extends StatefulWidget {
+  final _SaleDraft draft;
+
+  const _PaymentDialog({required this.draft});
+
+  @override
+  State<_PaymentDialog> createState() => _PaymentDialogState();
+}
+
+class _PaymentDialogState extends State<_PaymentDialog> {
+  String? _paymentMethod;
+  String? _error;
+
+  void _complete() {
+    final method = _paymentMethod;
+    if (method == null) {
+      setState(() => _error = 'Select a payment method.');
+      return;
+    }
+    Navigator.of(context).pop(method);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      title: const Text('Payment Method'),
+      content: ConstrainedBox(
+        // Cap at 360 on wide screens but never exceed the dialog's own content
+        // box, so the summary row can't overflow a narrow phone.
+        constraints: const BoxConstraints(maxWidth: 360),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Theme.of(context).scaffoldBackgroundColor,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppTheme.border),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.draft.name,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          widget.draft.quantityText,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: AppTheme.muted),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        MoneyUtils.formatBr(widget.draft.lineTotalMinorUnits),
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final option in const <(String, String)>[
+                  ('CASH', 'Cash'),
+                  ('BANK', 'Bank Transfer'),
+                  ('LOAN', 'Loan'),
+                ])
+                  ChoiceChip(
+                    label: Text(option.$2),
+                    selected: _paymentMethod == option.$1,
+                    onSelected: (_) => setState(() {
+                      _paymentMethod = option.$1;
+                      _error = null;
+                    }),
+                  ),
+              ],
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                _error!,
+                style: const TextStyle(color: AppTheme.danger, fontSize: 13),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Back'),
+        ),
+        FilledButton(onPressed: _complete, child: const Text('Complete')),
       ],
     );
   }

@@ -61,6 +61,11 @@ abstract class UserRepository {
     List<String> permissions = const [],
   });
 
+  /// Seeds (once) the permanent training account. Idempotent: a no-op when a
+  /// row already carries the demo flag. Called at startup and right after owner
+  /// setup so every install/tenant has a non-deactivatable `demo` login.
+  Future<void> ensureDemoUser();
+
   /// Replaces a staff account's feature ticks. Immediate on the server side
   /// (rows are read live per request) and on the next app open (session
   /// restore reloads the user). Owner rows are rejected — they bypass ticks.
@@ -102,6 +107,10 @@ class SqfliteUserRepository implements UserRepository {
   static const int _legacyIterations = 10000;
   static const int _minimumIterations = 1000;
   static const int _maximumIterations = 2000000;
+
+  /// Fixed password for the auto-created training account. The owner can reset
+  /// it from the Users screen; trainees just need something stable to type.
+  static const String _demoPassword = 'demo1234';
 
   String _generateSalt() {
     final random = Random.secure();
@@ -358,6 +367,9 @@ class SqfliteUserRepository implements UserRepository {
     if (name.isEmpty) {
       throw Exception('Username cannot be empty.');
     }
+    if (name.toLowerCase() == 'demo') {
+      throw Exception('That username is reserved for the demo account.');
+    }
     if (!UserRepository.roles.contains(role)) {
       throw Exception('Invalid role.');
     }
@@ -399,6 +411,52 @@ class SqfliteUserRepository implements UserRepository {
       details:
           'User "$name" created with role $role'
           '${role == 'OWNER' ? '' : ' (${perms.isEmpty ? 'no features' : perms.join(', ')})'}',
+    );
+  }
+
+  @override
+  Future<void> ensureDemoUser() async {
+    final flagged = await _db.query(
+      'users',
+      columns: ['id'],
+      where: 'is_demo = 1',
+      limit: 1,
+    );
+    if (flagged.isNotEmpty) return;
+    // Adopt a pre-existing 'demo' username (e.g. one created before the flag
+    // existed) so the UNIQUE index can't reject the seed, else insert fresh.
+    final byName = await _db.query(
+      'users',
+      columns: ['id'],
+      where: 'LOWER(username) = ?',
+      whereArgs: ['demo'],
+      limit: 1,
+    );
+    if (byName.isNotEmpty) {
+      await _db.update(
+        'users',
+        {'is_demo': 1},
+        where: 'id = ?',
+        whereArgs: [byName.first['id']],
+      );
+      return;
+    }
+    final salt = _generateSalt();
+    final hash = await _hashPassword(_demoPassword, salt);
+    final user = User(
+      id: const Uuid().v4(),
+      username: 'demo',
+      passwordHash: hash,
+      salt: salt,
+      role: 'CASHIER',
+      permissions: kDefaultStaffPermissions,
+      isDemo: true,
+    );
+    await _db.insert('users', user.toMap());
+    await _audit(
+      userId: user.id,
+      action: 'DEMO_USER_SEEDED',
+      details: 'Training demo account created.',
     );
   }
 
@@ -518,13 +576,16 @@ class SqfliteUserRepository implements UserRepository {
     }
     final targets = await _db.query(
       'users',
-      columns: ['username', 'role', 'is_active'],
+      columns: ['username', 'role', 'is_active', 'is_demo'],
       where: 'id = ?',
       whereArgs: [targetUserId],
       limit: 1,
     );
     if (targets.isEmpty) throw Exception('User not found.');
     final target = targets.first;
+    if (!active && ((target['is_demo'] as int?) ?? 0) == 1) {
+      throw Exception('The demo account cannot be deactivated.');
+    }
 
     await _db.transaction((txn) async {
       if (!active && target['role'] == 'OWNER') {

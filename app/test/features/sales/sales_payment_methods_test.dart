@@ -8,12 +8,10 @@ import 'package:wholesale_pos_app/core/repositories/shift_repository.dart';
 import 'package:wholesale_pos_app/features/sales/sale.dart';
 import 'package:wholesale_pos_app/features/sales/sales_screen.dart';
 
-// Walkthrough coverage for the three-payment-method sale dialog:
-//  * the Cash / Bank Transfer / Loan chips must stay above the on-screen
-//    keyboard (the reported "options disappear" complaint),
-//  * completing without a pick must be blocked,
-//  * a Loan sale must persist as payment_method LOAN with no change, and
-//    collect nothing toward the register's cash (verified via the repo).
+// Walkthrough coverage for the two-step sale flow: step 1 (Name/Unit/Quantity/
+// Price -> Next) must stay above the on-screen keyboard, and step 2 (a small
+// payment-method window -> Complete) must block without a pick then persist the
+// chosen method. A Loan sale collects nothing toward the register's cash.
 void main() {
   late Database db;
 
@@ -75,7 +73,7 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets('payment chips stay visible above the on-screen keyboard', (
+  testWidgets('sale fields and Next button stay above the on-screen keyboard', (
     tester,
   ) async {
     // A tall phone with a 320px soft keyboard.
@@ -91,20 +89,29 @@ void main() {
 
       // Top edge of the keyboard.
       final keyboardTop = 844.0 - 320.0;
-      for (final label in ['Cash', 'Bank Transfer', 'Loan']) {
-        final rect = tester.getRect(find.widgetWithText(ChoiceChip, label));
-        // The whole chip must sit above the keyboard so it is never hidden.
+
+      // With the payment row removed, the fields and the Next action must all
+      // sit above the keyboard so nothing is hidden while typing.
+      for (final label in ['Name', 'Quantity', 'Price (Br)']) {
+        final rect = tester.getRect(find.widgetWithText(TextField, label));
         expect(
           rect.bottom,
           lessThanOrEqualTo(keyboardTop),
           reason:
-              '$label chip is behind the keyboard (bottom ${rect.bottom} > $keyboardTop)',
+              '$label field is behind the keyboard (bottom ${rect.bottom} > $keyboardTop)',
         );
       }
 
-      // And the commit button must be reachable too.
-      final buttonRect = tester.getRect(find.text('Complete Sale'));
+      final buttonRect = tester.getRect(find.text('Next'));
       expect(buttonRect.bottom, lessThanOrEqualTo(keyboardTop));
+
+      // Next opens the compact payment window: all three choices are offered.
+      await tester.tap(find.text('Next'));
+      await pumpFrames(tester);
+      expect(find.text('Payment Method'), findsOneWidget);
+      for (final label in ['Cash', 'Bank Transfer', 'Loan']) {
+        expect(find.widgetWithText(ChoiceChip, label), findsOneWidget);
+      }
     });
 
     expect(tester.takeException(), isNull);
@@ -123,15 +130,20 @@ void main() {
       await pumpFrames(tester);
       await openDialogWithValues(tester);
 
-      // No selection yet -> committing is rejected with an inline error.
-      await tester.tap(find.text('Complete Sale'));
+      // Step 1 ends with Next; the payment choice lives on the next window.
+      await tester.tap(find.text('Next'));
+      await pumpFrames(tester);
+      expect(find.text('Payment Method'), findsOneWidget);
+
+      // No selection yet -> Complete is rejected with an inline error.
+      await tester.tap(find.text('Complete'));
       await pumpFrames(tester, 3);
       expect(find.text('Select a payment method.'), findsOneWidget);
 
       // Pick Loan and commit.
       await tester.tap(find.widgetWithText(ChoiceChip, 'Loan'));
       await pumpFrames(tester);
-      await tester.tap(find.text('Complete Sale'));
+      await tester.tap(find.text('Complete'));
 
       for (var i = 0; i < 50; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 20));

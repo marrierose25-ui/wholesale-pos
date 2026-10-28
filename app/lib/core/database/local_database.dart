@@ -8,7 +8,7 @@ import 'package:uuid/uuid.dart';
 
 class LocalDatabase {
   static const String databaseName = 'wholesale_pos.db';
-  static const int schemaVersion = 12;
+  static const int schemaVersion = 13;
   static const String deviceIdFileName = 'device_id.txt';
   static const String themeSettingKey = 'theme_mode';
 
@@ -324,6 +324,17 @@ class LocalDatabase {
         await db.execute('ALTER TABLE cash_movements ADD COLUMN photo TEXT');
       }
     }
+    if (oldVersion < 13) {
+      // Marks the permanent, non-deactivatable training account. Additive
+      // column, guarded so a re-run is a no-op; existing rows are all 0 and the
+      // demo row is seeded by UserRepository.ensureDemoUser().
+      final userCols = await db.rawQuery('PRAGMA table_info(users)');
+      if (!userCols.any((column) => column['name'] == 'is_demo')) {
+        await db.execute(
+          'ALTER TABLE users ADD COLUMN is_demo INTEGER NOT NULL DEFAULT 0',
+        );
+      }
+    }
   }
 
   /// Schema 6 stored quantities as plain integers. Schema 7 keeps the exact
@@ -476,6 +487,7 @@ class LocalDatabase {
         role TEXT NOT NULL,
         is_active INTEGER NOT NULL DEFAULT 1,
         permissions TEXT NOT NULL DEFAULT '[]',
+        is_demo INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL
       )
     ''');

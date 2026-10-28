@@ -115,10 +115,16 @@ void main() {
       // Total = quantity x price, shown live before committing.
       expect(find.text('1,000.00 Br'), findsWidgets);
 
+      // Step 1 ends with Next; the payment choice moved to a second, compact
+      // window so the fields stay visible above the on-screen keyboard.
+      await tester.tap(find.text('Next'));
+      await pumpFrames();
+      expect(find.text('Payment Method'), findsOneWidget);
+
       // Payment method starts unselected and is required: completing without a
       // pick is blocked with an inline error, not a saved sale.
       expect(find.text('Select a payment method.'), findsNothing);
-      await tester.tap(find.text('Complete Sale'));
+      await tester.tap(find.text('Complete'));
       await pumpFrames(3);
       expect(find.text('Select a payment method.'), findsOneWidget);
 
@@ -128,7 +134,7 @@ void main() {
       await tester.tap(find.widgetWithText(ChoiceChip, 'Cash'));
       await pumpFrames();
 
-      await tester.tap(find.text('Complete Sale'));
+      await tester.tap(find.text('Complete'));
       // The save runs as a fire-and-forget real-time future on the screen. Poll
       // for its row INSIDE runAsync: awaiting sqflite only resolves on the real
       // event loop, and it must fully land (firing the shell hand-off) before

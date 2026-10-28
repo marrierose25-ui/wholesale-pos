@@ -48,6 +48,13 @@ Future<void> main() async {
     LocalDatabase.themeSettingKey,
   );
 
+  // Guarantee the permanent training account exists on every launch once an
+  // owner is present. Guarded by hasUsers so a brand-new install still runs
+  // first-owner setup cleanly; idempotent, so it is a no-op after the seed.
+  if (await userRepository.hasUsers()) {
+    await userRepository.ensureDemoUser();
+  }
+
   // Cloud sync (Phase 18). Priority: legacy baked secret on the owner's own
   // desktop (locked back-office PC, direct PostgREST) → license-gated sync
   // gateway (every buyer build and every phone; carries only the signed

@@ -94,6 +94,9 @@ class _LoginScreenState extends State<LoginScreen> {
       final User? user;
       if (_isFirstRun) {
         user = await widget.userRepository.createFirstOwner(username, password);
+        // Seed the training demo account immediately so it is usable without a
+        // restart. For the cloud repo this is a no-op (pos-api seeds on login).
+        await widget.userRepository.ensureDemoUser();
       } else {
         user = await widget.userRepository.authenticate(username, password);
       }

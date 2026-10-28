@@ -320,6 +320,10 @@ async function login(db: any, body: any): Promise<Response> {
   if (!ok) { loginRecordFail(tkey); return json({ ok: false, error: 'Invalid credentials.' }, 401); }
   loginClear(tkey);
 
+  // Best-effort: guarantee the tenant's permanent training demo account exists
+  // the first time anyone signs in. A failure here must never block a login.
+  try { await ensureDemoUser(db, customerId); } catch { /* non-fatal */ }
+
   const token = await signJwt({ sub: user.id, cid: customerId, role: user.role, tv: Number(user.token_version ?? 0) });
   return json({
     ok: true, token,
@@ -359,6 +363,8 @@ async function setupOwner(db: any, body: any): Promise<Response> {
     throw new Error(rpc.error.message);
   }
   await audit(db, customerId, id, 'OWNER_CREATED', `Web owner "${username}" created.`);
+  // Seed the demo account alongside the first owner so it is ready immediately.
+  try { await ensureDemoUser(db, customerId); } catch { /* non-fatal */ }
   const token = await signJwt({ sub: id, cid: customerId, role: OWNER, tv: 0 });
   return json({ ok: true, token, user_id: id, username, role: OWNER, permissions: [], customer_id: customerId });
 }
@@ -855,7 +861,7 @@ async function listCashMovements(db: any, ctx: Ctx, body: any): Promise<Response
 // ===========================================================================
 async function listUsers(db: any, ctx: Ctx): Promise<Response> {
   const { data, error } = await db.from('pos_users')
-    .select('id, username, role, active, created_at, permissions').eq('customer_id', ctx.customerId)
+    .select('id, username, role, active, created_at, permissions, is_demo').eq('customer_id', ctx.customerId)
     .order('username');
   if (error) throw new Error(error.message);
   return json({ ok: true, users: strip(data) });
@@ -866,6 +872,7 @@ async function createUser(db: any, ctx: Ctx, body: any): Promise<Response> {
   const role = String(body.role ?? '');
   const password = String(body.password ?? '');
   if (!username) return json({ ok: false, error: 'Username required.' }, 400);
+  if (username.toLowerCase() === 'demo') return json({ ok: false, error: 'That username is reserved for the demo account.' }, 400);
   if (![OWNER, CASHIER].includes(role)) return json({ ok: false, error: 'Invalid role.' }, 400);
   const minLen = role === OWNER ? 12 : 8;
   if (password.length < minLen) return json({ ok: false, error: `Password must be at least ${minLen} characters.` }, 400);
@@ -885,6 +892,32 @@ async function createUser(db: any, ctx: Ctx, body: any): Promise<Response> {
   if (ins.error) throw new Error(ins.error.message);
   await audit(db, ctx.customerId, ctx.userId, 'USER_CREATED', `User "${username}" (${role}).`);
   return json({ ok: true, id });
+}
+
+// Seeds (once) the tenant's permanent training account. Idempotent: a no-op
+// when a demo row already exists. Mirrors the native ensureDemoUser(): a fixed
+// `demo` / `demo1234` CASHIER with the default staff permissions, flagged so it
+// can never be deactivated. Called best-effort from login and setup_owner.
+async function ensureDemoUser(db: any, customerId: string): Promise<void> {
+  const { data: existing } = await db.from('pos_users').select('id')
+    .eq('customer_id', customerId).eq('is_demo', true).maybeSingle();
+  if (existing) return;
+  // Adopt a pre-existing 'demo' username (created before the flag) so the
+  // unique index can't reject the seed, else insert a fresh one.
+  const { data: byName } = await db.from('pos_users').select('id')
+    .eq('customer_id', customerId).ilike('username', 'demo').maybeSingle();
+  if (byName) {
+    await db.from('pos_users').update({ is_demo: true })
+      .eq('customer_id', customerId).eq('id', byName.id);
+    return;
+  }
+  const { salt, hash } = await hashPassword('demo1234');
+  const ins = await db.from('pos_users').insert({
+    id: crypto.randomUUID(), customer_id: customerId, username: 'demo', role: CASHIER,
+    pw_salt: salt, pw_hash: hash, active: true, is_demo: true,
+    permissions: ['pos', 'register', 'reports'],
+  });
+  if (ins.error) throw new Error(ins.error.message);
 }
 
 // Replaces a staff account's feature ticks. Owner rows are rejected (they
@@ -925,7 +958,8 @@ async function setUserActive(db: any, ctx: Ctx, body: any): Promise<Response> {
   const active = body.active === true;
   if (target === ctx.userId && !active) return json({ ok: false, error: 'You cannot deactivate your own account.' }, 400);
   if (!active) {
-    const { data: t } = await db.from('pos_users').select('role').eq('customer_id', ctx.customerId).eq('id', target).maybeSingle();
+    const { data: t } = await db.from('pos_users').select('role, is_demo').eq('customer_id', ctx.customerId).eq('id', target).maybeSingle();
+    if (t?.is_demo) return json({ ok: false, error: 'The demo account cannot be deactivated.' }, 400);
     if (t?.role === OWNER) {
       const { count } = await db.from('pos_users').select('*', { count: 'exact', head: true })
         .eq('customer_id', ctx.customerId).eq('role', OWNER).eq('active', true);
