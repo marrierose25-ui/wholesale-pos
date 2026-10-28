@@ -209,11 +209,15 @@ class _LoginScreenState extends State<LoginScreen> {
                       TextField(
                         controller: _usernameController,
                         style: TextStyle(color: AppDesign.textHi),
-                        keyboardType: TextInputType.phone,
+                        // Not TextInputType.phone: that keypad cannot type the
+                        // training account's `demo` identifier at all.
+                        keyboardType: TextInputType.text,
+                        autocorrect: false,
+                        enableSuggestions: false,
                         autofillHints: const [AutofillHints.telephoneNumber],
                         decoration: const InputDecoration(
                           labelText: 'Phone Number',
-                          hintText: 'e.g. 0912345678',
+                          hintText: 'e.g. 0912345678 or demo',
                         ),
                         textInputAction: TextInputAction.next,
                       ),

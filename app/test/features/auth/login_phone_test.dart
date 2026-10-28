@@ -49,11 +49,11 @@ void main() {
         () => find.text('Create Account').evaluate().isNotEmpty,
       );
 
-      // The identifier field is labelled as a phone number and asks for the
-      // numeric keyboard, not a name.
+      // The identifier field is labelled as a phone number but must still accept
+      // letters: the training account signs in as `demo`.
       final field = tester.widget<TextField>(find.byType(TextField).first);
       expect(field.decoration?.labelText, 'Phone Number');
-      expect(field.keyboardType, TextInputType.phone);
+      expect(field.keyboardType, TextInputType.text);
 
       await tester.tap(find.text('Create Account'));
       await tester.pump();
