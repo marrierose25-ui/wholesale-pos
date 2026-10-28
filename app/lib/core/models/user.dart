@@ -2,6 +2,11 @@ import 'dart:convert';
 
 class User {
   final String id;
+
+  /// The account's login identifier: a phone number in canonical local form
+  /// (`0912345678`) for owners and staff, or the literal `demo` for the seeded
+  /// training account. Kept in the `username` column so existing installs and
+  /// the cloud schema stay compatible.
   final String username;
   final String passwordHash;
   final String salt;

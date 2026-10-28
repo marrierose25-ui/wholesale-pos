@@ -43,6 +43,10 @@ class DataExporter {
         'role',
         'is_active',
         'permissions',
+        // Deleted accounts travel with the backup (still flagged), because
+        // their sales reference them: dropping the row would break the
+        // restore's foreign keys.
+        'deleted_at',
         'created_at',
       ],
     );

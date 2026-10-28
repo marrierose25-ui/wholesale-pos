@@ -20,41 +20,46 @@ void main() {
   });
 
   test('Sets up a first owner with a secure password', () async {
-    await repository.createFirstOwner('owner', 'long-strong-password');
+    await repository.createFirstOwner('0911111111', 'long-strong-password');
 
-    final user = await repository.authenticate('owner', 'long-strong-password');
+    final user = await repository.authenticate(
+      '0911111111',
+      'long-strong-password',
+    );
 
     expect(user, isNotNull);
-    expect(user!.username, 'owner');
+    expect(user!.username, '0911111111');
     expect(user.role, 'OWNER');
   });
 
   test('Rejects a wrong owner password and repeat setup', () async {
-    await repository.createFirstOwner('owner', 'long-strong-password');
+    await repository.createFirstOwner('0911111111', 'long-strong-password');
 
-    final user = await repository.authenticate('owner', 'wrongpass');
+    final user = await repository.authenticate('0911111111', 'wrongpass');
 
     expect(user, isNull);
     await expectLater(
-      repository.createFirstOwner('another', 'long-strong-password'),
+      repository.createFirstOwner('0922222222', 'long-strong-password'),
       throwsException,
     );
   });
 
   test('Creates a new cashier and lists all users', () async {
-    await repository.createFirstOwner('owner', 'long-strong-password');
-    await repository.createUser('cashier1', 'password123', 'CASHIER');
+    await repository.createFirstOwner('0911111111', 'long-strong-password');
+    await repository.createUser('0933333333', 'password123', 'CASHIER');
 
     final users = await repository.getAllUsers();
 
     expect(users.length, 2); // Owner + Cashier
-    expect(users.any((u) => u.username == 'cashier1'), isTrue);
+    expect(users.any((u) => u.username == '0933333333'), isTrue);
 
-    final newUser = await repository.authenticate('cashier1', 'password123');
+    final newUser = await repository.authenticate('0933333333', 'password123');
     expect(newUser, isNotNull);
     expect(newUser!.role, 'CASHIER');
   });
 
+  // A pre-phone-login account keeps its text identifier: sign-in passes an
+  // unrecognised value through untouched, so `legacy` still resolves.
   test('Authenticates and upgrades a legacy password hash', () async {
     const password = 'legacy-password';
     const salt = 'old-static-salt';
@@ -85,22 +90,26 @@ void main() {
     expect(await repository.authenticate('legacy', 'wrong-password'), isNull);
   });
 
-  test('Authenticates usernames case-insensitively', () async {
-    await repository.createFirstOwner('OwnerOne', 'long-strong-password');
+  test('Accepts any phone spelling a cashier might type', () async {
+    await repository.createFirstOwner('0911111111', 'long-strong-password');
 
-    expect(
-      await repository.authenticate('ownerone', 'long-strong-password'),
-      isNotNull,
-    );
-    expect(
-      await repository.authenticate('OWNERONE', 'long-strong-password'),
-      isNotNull,
-    );
+    for (final spelling in [
+      '+251911111111',
+      '251911111111',
+      '911111111',
+      '0911 111 111',
+    ]) {
+      expect(
+        await repository.authenticate(spelling, 'long-strong-password'),
+        isNotNull,
+        reason: 'login should accept $spelling',
+      );
+    }
   });
 
   test('Changes a password and rejects the old one', () async {
     final owner = await repository.createFirstOwner(
-      'owner',
+      '0911111111',
       'long-strong-password',
     );
 
@@ -111,18 +120,18 @@ void main() {
     );
 
     expect(
-      await repository.authenticate('owner', 'long-strong-password'),
+      await repository.authenticate('0911111111', 'long-strong-password'),
       isNull,
     );
     expect(
-      await repository.authenticate('owner', 'new-strong-password'),
+      await repository.authenticate('0911111111', 'new-strong-password'),
       isNotNull,
     );
   });
 
   test('Rejects a wrong current password and invalid roles', () async {
     final owner = await repository.createFirstOwner(
-      'owner',
+      '0911111111',
       'long-strong-password',
     );
 
@@ -135,7 +144,7 @@ void main() {
       throwsException,
     );
     await expectLater(
-      repository.createUser('bad-role', 'password123', 'ADMIN'),
+      repository.createUser('0955555555', 'password123', 'ADMIN'),
       throwsException,
     );
   });
@@ -144,12 +153,12 @@ void main() {
     'Owner can reset a cashier password and deactivate the account',
     () async {
       final owner = await repository.createFirstOwner(
-        'owner',
+        '0911111111',
         'long-strong-password',
       );
-      await repository.createUser('cashier1', 'password123', 'CASHIER');
+      await repository.createUser('0933333333', 'password123', 'CASHIER');
       final cashier = (await repository.getAllUsers()).firstWhere(
-        (user) => user.username == 'cashier1',
+        (user) => user.username == '0933333333',
       );
 
       await repository.resetPassword(
@@ -158,7 +167,7 @@ void main() {
         actingUserId: owner.id,
       );
       expect(
-        await repository.authenticate('cashier1', 'brand-new-password'),
+        await repository.authenticate('0933333333', 'brand-new-password'),
         isNotNull,
       );
 
@@ -168,7 +177,7 @@ void main() {
         actingUserId: owner.id,
       );
       expect(
-        await repository.authenticate('cashier1', 'brand-new-password'),
+        await repository.authenticate('0933333333', 'brand-new-password'),
         isNull,
       );
 
@@ -186,23 +195,23 @@ void main() {
   test('Owner password needs 12 chars, cashier needs 8', () async {
     // 11 chars is too short for an owner.
     await expectLater(
-      repository.createUser('boss', 'elevenchars', 'OWNER'),
+      repository.createUser('0966666666', 'elevenchars', 'OWNER'),
       throwsException,
     );
     // 13 chars is fine for an owner.
-    await repository.createUser('boss', 'twelvechars12', 'OWNER');
+    await repository.createUser('0966666666', 'twelvechars12', 'OWNER');
     // 7 chars is too short for a cashier.
     await expectLater(
-      repository.createUser('temp', 'sevench', 'CASHIER'),
+      repository.createUser('0977777777', 'sevench', 'CASHIER'),
       throwsException,
     );
     // 10 chars is fine for a cashier.
-    await repository.createUser('temp', 'eightchars', 'CASHIER');
+    await repository.createUser('0977777777', 'eightchars', 'CASHIER');
   });
 
   test('changePassword enforces the owner minimum', () async {
     final owner = await repository.createFirstOwner(
-      'owner',
+      '0911111111',
       'long-strong-password',
     );
     await expectLater(
@@ -217,12 +226,12 @@ void main() {
 
   test('resetPassword enforces the target user role minimum', () async {
     final owner = await repository.createFirstOwner(
-      'owner',
+      '0911111111',
       'long-strong-password',
     );
-    await repository.createUser('cashier1', 'password123', 'CASHIER');
+    await repository.createUser('0933333333', 'password123', 'CASHIER');
     final cashier = (await repository.getAllUsers()).firstWhere(
-      (user) => user.username == 'cashier1',
+      (user) => user.username == '0933333333',
     );
     // Cashier target only needs 8 characters.
     await repository.resetPassword(
@@ -244,13 +253,13 @@ void main() {
   test(
     'Locks a username for the cooldown after repeated failures',
     () async {
-      await repository.createFirstOwner('owner', 'long-strong-password');
+      await repository.createFirstOwner('0911111111', 'long-strong-password');
       for (var i = 0; i < UserRepository.maxFailedAttempts; i++) {
-        expect(await repository.authenticate('owner', 'nope'), isNull);
+        expect(await repository.authenticate('0911111111', 'nope'), isNull);
       }
       // The next attempt throws even with the correct password.
       await expectLater(
-        repository.authenticate('owner', 'long-strong-password'),
+        repository.authenticate('0911111111', 'long-strong-password'),
         throwsException,
       );
     },
@@ -262,22 +271,22 @@ void main() {
   test(
     'A successful login clears the failed-attempt counter',
     () async {
-      await repository.createFirstOwner('owner', 'long-strong-password');
+      await repository.createFirstOwner('0911111111', 'long-strong-password');
       // Four failures (one short of the lockout threshold).
       for (var i = 0; i < UserRepository.maxFailedAttempts - 1; i++) {
-        await repository.authenticate('owner', 'nope');
+        await repository.authenticate('0911111111', 'nope');
       }
       // Success resets the counter...
       expect(
-        await repository.authenticate('owner', 'long-strong-password'),
+        await repository.authenticate('0911111111', 'long-strong-password'),
         isNotNull,
       );
       // ...so another four failures still do not lock the account.
       for (var i = 0; i < UserRepository.maxFailedAttempts - 1; i++) {
-        expect(await repository.authenticate('owner', 'nope'), isNull);
+        expect(await repository.authenticate('0911111111', 'nope'), isNull);
       }
       expect(
-        await repository.authenticate('owner', 'long-strong-password'),
+        await repository.authenticate('0911111111', 'long-strong-password'),
         isNotNull,
       );
     },
@@ -289,16 +298,16 @@ void main() {
   test(
     'Creates a staff account with feature permissions and reads them back',
     () async {
-      await repository.createFirstOwner('owner', 'long-strong-password');
+      await repository.createFirstOwner('0911111111', 'long-strong-password');
       await repository.createUser(
-        'staff',
+        '0988888888',
         'password123',
         'CASHIER',
         permissions: ['pos', 'reports'],
       );
 
       final users = await repository.getAllUsers();
-      final staff = users.firstWhere((u) => u.username == 'staff');
+      final staff = users.firstWhere((u) => u.username == '0988888888');
       expect(staff.permissions, ['pos', 'reports']);
       expect(staff.can('pos'), isTrue);
       expect(staff.can('reports'), isTrue);
@@ -316,17 +325,17 @@ void main() {
     'setUserPermissions adds and removes features and rejects owners',
     () async {
       final owner = await repository.createFirstOwner(
-        'owner',
+        '0911111111',
         'long-strong-password',
       );
       await repository.createUser(
-        'staff',
+        '0988888888',
         'password123',
         'CASHIER',
         permissions: ['pos'],
       );
       final staff = (await repository.getAllUsers()).firstWhere(
-        (user) => user.username == 'staff',
+        (user) => user.username == '0988888888',
       );
 
       await repository.setUserPermissions(staff.id, [
@@ -350,16 +359,224 @@ void main() {
   );
 
   test('createUser drops unknown feature keys', () async {
-    await repository.createFirstOwner('owner', 'long-strong-password');
+    await repository.createFirstOwner('0911111111', 'long-strong-password');
     await repository.createUser(
-      'staff',
+      '0988888888',
       'password123',
       'CASHIER',
       permissions: ['pos', 'not_a_feature'],
     );
     final staff = (await repository.getAllUsers()).firstWhere(
-      (user) => user.username == 'staff',
+      (user) => user.username == '0988888888',
     );
     expect(staff.permissions, ['pos']);
+  });
+
+  test('Accounts are identified by a canonical phone number', () async {
+    await repository.createFirstOwner(
+      '+251 911 111 111',
+      'long-strong-password',
+    );
+    final owner = (await repository.getAllUsers()).single;
+    expect(owner.username, '0911111111');
+    expect(
+      await repository.authenticate('0911111111', 'long-strong-password'),
+      isNotNull,
+    );
+
+    // A name is no longer a valid identifier for a new account.
+    await expectLater(
+      repository.createUser('cashier1', 'password123', 'CASHIER'),
+      throwsA(predicate((e) => e.toString().contains('valid phone number'))),
+    );
+
+    // Any accepted spelling is stored in the canonical form.
+    await repository.createUser('251922222222', 'password123', 'CASHIER');
+    final cashier = (await repository.getAllUsers()).firstWhere(
+      (user) => user.role == 'CASHIER',
+    );
+    expect(cashier.username, '0922222222');
+  });
+
+  test('setUserPhone renames the login and retires the old number', () async {
+    final owner = await repository.createFirstOwner(
+      '0911111111',
+      'long-strong-password',
+    );
+    await repository.createUser('0922222222', 'password123', 'CASHIER');
+    final cashier = (await repository.getAllUsers()).firstWhere(
+      (user) => user.username == '0922222222',
+    );
+
+    await repository.setUserPhone(
+      userId: cashier.id,
+      phone: '+251 933 333 333',
+      actingUserId: owner.id,
+    );
+
+    final renamed = await repository.getById(cashier.id);
+    expect(renamed!.username, '0933333333');
+    expect(
+      await repository.authenticate('0933333333', 'password123'),
+      isNotNull,
+    );
+    expect(await repository.authenticate('0922222222', 'password123'), isNull);
+  });
+
+  test(
+    'setUserPhone rejects duplicates, non-owners and the demo account',
+    () async {
+      final owner = await repository.createFirstOwner(
+        '0911111111',
+        'long-strong-password',
+      );
+      await repository.createUser('0922222222', 'password123', 'CASHIER');
+      await repository.createUser('0933333333', 'password123', 'CASHIER');
+      final users = await repository.getAllUsers();
+      final cashier = users.firstWhere((u) => u.username == '0922222222');
+      final other = users.firstWhere((u) => u.username == '0933333333');
+
+      // A number already used by another account cannot be reused.
+      await expectLater(
+        repository.setUserPhone(
+          userId: cashier.id,
+          phone: '0933333333',
+          actingUserId: owner.id,
+        ),
+        throwsA(predicate((e) => e.toString().contains('already in use'))),
+      );
+      // Only an active owner may rename a login.
+      await expectLater(
+        repository.setUserPhone(
+          userId: other.id,
+          phone: '0944444444',
+          actingUserId: cashier.id,
+        ),
+        throwsA(predicate((e) => e.toString().contains('active owner'))),
+      );
+      // The demo login stays `demo` / `demo1234`.
+      await repository.ensureDemoUser();
+      final demo = (await repository.getAllUsers()).firstWhere((u) => u.isDemo);
+      await expectLater(
+        repository.setUserPhone(
+          userId: demo.id,
+          phone: '0955555555',
+          actingUserId: owner.id,
+        ),
+        throwsA(predicate((e) => e.toString().contains('demo login'))),
+      );
+    },
+  );
+
+  test('Deleting a disabled account frees its phone number', () async {
+    final owner = await repository.createFirstOwner(
+      '0911111111',
+      'long-strong-password',
+    );
+    await repository.createUser('0922222222', 'password123', 'CASHIER');
+    final cashier = (await repository.getAllUsers()).firstWhere(
+      (user) => user.username == '0922222222',
+    );
+    await repository.setUserActive(
+      targetUserId: cashier.id,
+      active: false,
+      actingUserId: owner.id,
+    );
+
+    await repository.deleteUser(
+      targetUserId: cashier.id,
+      actingUserId: owner.id,
+    );
+
+    expect((await repository.getAllUsers()).length, 1);
+    expect(await repository.getById(cashier.id), isNull);
+    expect(await repository.authenticate('0922222222', 'password123'), isNull);
+    // Nothing was recorded against the account, so the row is gone and the
+    // number is free again.
+    await repository.createUser('0922222222', 'password123', 'CASHIER');
+    expect(
+      await repository.authenticate('0922222222', 'password123'),
+      isNotNull,
+    );
+  });
+
+  test('Deleting an account with history keeps its sale attribution', () async {
+    final owner = await repository.createFirstOwner(
+      '0911111111',
+      'long-strong-password',
+    );
+    await repository.createUser('0922222222', 'password123', 'CASHIER');
+    final cashier = (await repository.getAllUsers()).firstWhere(
+      (user) => user.username == '0922222222',
+    );
+    await db.insert('shifts', {
+      'id': 'shift-1',
+      'cashier_id': cashier.id,
+      'opening_cash_minor_units': 0,
+      'status': 'CLOSED',
+      'opened_at': DateTime.now().toIso8601String(),
+    });
+    await repository.setUserActive(
+      targetUserId: cashier.id,
+      active: false,
+      actingUserId: owner.id,
+    );
+
+    await repository.deleteUser(
+      targetUserId: cashier.id,
+      actingUserId: owner.id,
+    );
+
+    expect((await repository.getAllUsers()).length, 1);
+    final kept = await db.query(
+      'users',
+      columns: ['deleted_at'],
+      where: 'id = ?',
+      whereArgs: [cashier.id],
+    );
+    expect(kept.single['deleted_at'], isNotNull);
+    // Re-adding the same number reuses the row, so the shift keeps pointing at
+    // a named cashier instead of a dangling id.
+    await repository.createUser('0922222222', 'password123', 'CASHIER');
+    final rehired = (await repository.getAllUsers()).firstWhere(
+      (user) => user.username == '0922222222',
+    );
+    expect(rehired.id, cashier.id);
+    expect(
+      await repository.authenticate('0922222222', 'password123'),
+      isNotNull,
+    );
+  });
+
+  test('Deleting refuses active, demo and self accounts', () async {
+    final owner = await repository.createFirstOwner(
+      '0911111111',
+      'long-strong-password',
+    );
+    await repository.createUser('0922222222', 'password123', 'CASHIER');
+    await repository.ensureDemoUser();
+    final users = await repository.getAllUsers();
+    final cashier = users.firstWhere((u) => u.username == '0922222222');
+    final demo = users.firstWhere((u) => u.isDemo);
+
+    await expectLater(
+      repository.deleteUser(targetUserId: cashier.id, actingUserId: owner.id),
+      throwsA(predicate((e) => e.toString().contains('Deactivate'))),
+    );
+    // The demo account is refused even though it is still active, so its
+    // stable training login can never be deleted.
+    await expectLater(
+      repository.deleteUser(targetUserId: demo.id, actingUserId: owner.id),
+      throwsA(predicate((e) => e.toString().contains('demo'))),
+    );
+    await expectLater(
+      repository.deleteUser(targetUserId: owner.id, actingUserId: owner.id),
+      throwsA(predicate((e) => e.toString().contains('your own account'))),
+    );
+    // Only an active owner may delete.
+    await expectLater(
+      repository.deleteUser(targetUserId: owner.id, actingUserId: cashier.id),
+      throwsA(predicate((e) => e.toString().contains('active owner'))),
+    );
   });
 }

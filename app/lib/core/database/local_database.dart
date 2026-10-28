@@ -8,7 +8,7 @@ import 'package:uuid/uuid.dart';
 
 class LocalDatabase {
   static const String databaseName = 'wholesale_pos.db';
-  static const int schemaVersion = 13;
+  static const int schemaVersion = 14;
   static const String deviceIdFileName = 'device_id.txt';
   static const String themeSettingKey = 'theme_mode';
 
@@ -335,6 +335,17 @@ class LocalDatabase {
         );
       }
     }
+    if (oldVersion < 14) {
+      // Deleted accounts. A row that already recorded sales, shifts, cash
+      // movements, finance entries or void requests cannot be dropped without
+      // orphaning that history (and the FK would reject it), so it is flagged
+      // here instead and hidden from every user-facing query. Additive column,
+      // guarded so a re-run is a no-op.
+      final detailCols = await db.rawQuery('PRAGMA table_info(users)');
+      if (!detailCols.any((column) => column['name'] == 'deleted_at')) {
+        await db.execute('ALTER TABLE users ADD COLUMN deleted_at TEXT');
+      }
+    }
   }
 
   /// Schema 6 stored quantities as plain integers. Schema 7 keeps the exact
@@ -488,6 +499,7 @@ class LocalDatabase {
         is_active INTEGER NOT NULL DEFAULT 1,
         permissions TEXT NOT NULL DEFAULT '[]',
         is_demo INTEGER NOT NULL DEFAULT 0,
+        deleted_at TEXT,
         created_at TEXT NOT NULL
       )
     ''');

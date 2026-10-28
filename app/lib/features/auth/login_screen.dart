@@ -64,7 +64,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final password = _passwordController.text;
 
     if (username.isEmpty) {
-      setState(() => _errorMessage = 'Please enter a username.');
+      setState(() => _errorMessage = 'Please enter your phone number.');
       return;
     }
     if (password.isEmpty) {
@@ -103,7 +103,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
       if (!mounted) return;
       if (user == null) {
-        setState(() => _errorMessage = 'Invalid username or password.');
+        setState(() => _errorMessage = 'Invalid phone number or password.');
         return;
       }
       widget.onLoginSuccess(user);
@@ -184,8 +184,11 @@ class _LoginScreenState extends State<LoginScreen> {
                       TextField(
                         controller: _usernameController,
                         style: TextStyle(color: AppDesign.textHi),
+                        keyboardType: TextInputType.phone,
+                        autofillHints: const [AutofillHints.telephoneNumber],
                         decoration: const InputDecoration(
-                          labelText: 'Username',
+                          labelText: 'Phone Number',
+                          hintText: 'e.g. 0912345678',
                         ),
                         textInputAction: TextInputAction.next,
                       ),

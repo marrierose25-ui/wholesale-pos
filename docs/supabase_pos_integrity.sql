@@ -54,6 +54,13 @@ UPDATE pos_users SET permissions = '["pos", "register", "history"]'::jsonb
 -- unaffected.
 ALTER TABLE pos_users ADD COLUMN IF NOT EXISTS is_demo boolean NOT NULL DEFAULT false;
 
+-- Account deletion (native schema v14 mirrors this). Only a deactivated account
+-- can be deleted. One that never recorded a sale, shift, cash movement, finance
+-- entry or void request is removed outright — freeing its phone number; one that
+-- did keeps its row with deleted_at set, so those records still resolve a
+-- cashier name. Every list/login/lookup in pos-api filters `deleted_at IS NULL`.
+ALTER TABLE pos_users ADD COLUMN IF NOT EXISTS deleted_at timestamptz;
+
 -- Register proof photos: optional base64 image attached to a cash movement
 -- (mainly debits — withdrawal evidence). Native schema v12 mirrors this as a
 -- TEXT column, so the outbox row payload carries it through sync unchanged.
@@ -163,7 +170,10 @@ DECLARE
   sale_id    text;
   n          int := 0;
 BEGIN
-  IF p_payment NOT IN ('CASH', 'BANK') THEN
+  -- LOAN is money owed, not money collected: it settles in full with nothing
+  -- tendered at the till, and the revenue aggregates filter it out. The PWA
+  -- offers all three methods, so the server accepts all three.
+  IF p_payment NOT IN ('CASH', 'BANK', 'LOAN') THEN
     RAISE EXCEPTION 'Invalid payment method: %', p_payment;
   END IF;
   IF p_discount IS NULL OR p_discount < 0 THEN
@@ -623,7 +633,8 @@ SET search_path = ''
 AS $$
 DECLARE existing_count int;
 BEGIN
-  SELECT count(*) INTO existing_count FROM public.pos_users WHERE customer_id = p_customer;
+  SELECT count(*) INTO existing_count FROM public.pos_users
+   WHERE customer_id = p_customer AND deleted_at IS NULL;
   IF existing_count > 0 THEN
     RAISE EXCEPTION 'Owner already exists.';
   END IF;
@@ -676,7 +687,9 @@ GRANT EXECUTE ON FUNCTION pos_expected_cash TO service_role;
 -- Returns revenue / counts / cash+bank split / void count / pending void
 -- requests whose target sale falls in the window, all computed in SQL.
 -- Loan sales are recorded but collect no money, so they never count toward
--- any revenue figure (mirrors the native dashboard queries).
+-- any revenue figure and are not part of sales_count either — the average
+-- sale is revenue / sales_count, so counting them would dilute it (mirrors
+-- the native dashboard queries exactly).
 CREATE OR REPLACE FUNCTION pos_sales_totals(
   p_customer uuid, p_start timestamptz, p_end timestamptz)
 RETURNS jsonb
@@ -687,7 +700,7 @@ DECLARE res jsonb;
 BEGIN
   SELECT jsonb_build_object(
     'revenue', COALESCE(sum(CASE WHEN status = 'COMPLETED' AND payment_method IN ('CASH', 'BANK') THEN total_minor_units ELSE 0 END), 0),
-    'sales_count', COALESCE(count(*) FILTER (WHERE status = 'COMPLETED'), 0),
+    'sales_count', COALESCE(count(*) FILTER (WHERE status = 'COMPLETED' AND payment_method IN ('CASH', 'BANK')), 0),
     'cash_revenue', COALESCE(sum(CASE WHEN status = 'COMPLETED' AND payment_method = 'CASH' THEN total_minor_units ELSE 0 END), 0),
     'bank_revenue', COALESCE(sum(CASE WHEN status = 'COMPLETED' AND payment_method = 'BANK' THEN total_minor_units ELSE 0 END), 0),
     'void_count', COALESCE(count(*) FILTER (WHERE status = 'VOIDED'), 0),

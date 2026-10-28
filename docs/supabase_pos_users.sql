@@ -22,9 +22,18 @@
 --     owner-only actions server-side, not by hiding navigation.
 --   * active=false soft-deletes an account; login and every authed action
 --     reject inactive users, so a revoked cashier cannot reuse an old JWT.
+--   * deleted_at marks an account the owner deleted. Deleting is only allowed
+--     for a deactivated account: one that never recorded a sale, shift, cash
+--     movement, finance entry or void request is removed outright, while one
+--     that did keeps its row flagged so history keeps its cashier name. Every
+--     list/login/lookup filters `deleted_at IS NULL`.
 --   * (customer_id, id) is the PK so ids stay local-uuid-shaped but are
 --     namespaced per shop; the unique username index is case-insensitive per
 --     shop, matching the client's `LOWER(username)` lookups.
+--   * username is the login identifier: the account's phone number in one
+--     canonical Ethiopian mobile form (0 + 9/7 + 8 digits). pos-api normalises
+--     any spelling it accepts; the seeded training account keeps the literal
+--     'demo'.
 --
 -- Non-destructive: safe to run alongside the existing licensing + mirror
 -- schema. Run in the Supabase SQL Editor.
@@ -40,12 +49,15 @@ CREATE TABLE IF NOT EXISTS pos_users (
   pw_salt     text        NOT NULL,
   pw_hash     text        NOT NULL,
   active      boolean     NOT NULL DEFAULT true,
+  is_demo     boolean     NOT NULL DEFAULT false,
+  deleted_at  timestamptz,
   created_at  timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (customer_id, id)
 );
 
--- Case-insensitive username uniqueness, scoped to the shop. pos-api looks users
--- up with `lower(username) = lower(...)`, so the index matches the query shape.
+-- Case-insensitive username uniqueness, scoped to the shop. pos-api folds the
+-- typed phone number to its canonical form and looks it up with
+-- `lower(username) = lower(...)`, so the index matches the query shape.
 CREATE UNIQUE INDEX IF NOT EXISTS pos_users_customer_username
   ON pos_users (customer_id, LOWER(username));
 

@@ -94,15 +94,127 @@ void main() {
       expect(find.text('Reset Password'), findsOneWidget);
       expect(find.text('Permissions'), findsOneWidget);
       expect(find.text('Deactivate'), findsNothing);
+      // The demo login is pinned, so it cannot be moved to a phone number.
+      expect(find.text('Edit phone'), findsNothing);
 
-      // Close the menu and confirm an ordinary staff row still offers it.
+      // Close the menu and confirm an ordinary staff row still offers both.
       await tester.tapAt(const Offset(4, 4));
       await pumpFrames(3);
       await tester.tap(menuOf('alice'));
       await pumpFrames(3);
       expect(find.text('Deactivate'), findsOneWidget);
+      expect(find.text('Edit phone'), findsOneWidget);
+      // Deleting is only offered once the account is disabled.
+      expect(find.text('Delete Account'), findsNothing);
+
+      // Edit phone opens the rename dialog prefilled with the current value.
+      await tester.tap(find.text('Edit phone'));
+      await pumpFrames(3);
+      expect(find.text('Change Phone Number'), findsOneWidget);
+      expect(
+        find.text('This is the number the account signs in with.'),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Cancel'));
+      await pumpFrames(12);
+      expect(find.text('Change Phone Number'), findsNothing);
     });
 
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('a disabled account can be deleted from its menu', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final repo = _DeletingUsers([
+      User(
+        id: 'owner-1',
+        username: 'owner',
+        passwordHash: 'x',
+        salt: 'y',
+        role: 'OWNER',
+      ),
+      User(
+        id: 'cashier-1',
+        username: 'alice',
+        passwordHash: 'x',
+        salt: 'y',
+        role: 'CASHIER',
+      ),
+      User(
+        id: 'cashier-2',
+        username: 'bob',
+        passwordHash: 'x',
+        salt: 'y',
+        role: 'CASHIER',
+        isActive: false,
+      ),
+    ]);
+
+    Finder menuOf(String username) => find.descendant(
+      of: find.ancestor(
+        of: find.text(username),
+        matching: find.byType(ListTile),
+      ),
+      matching: find.byType(PopupMenuButton<String>),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: UserManagementScreen(
+          userRepository: repo,
+          currentUser: repo.users.first,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(menuOf('bob'));
+    await tester.pumpAndSettle();
+    expect(find.text('Activate'), findsOneWidget);
+    await tester.tap(find.text('Delete Account'));
+    await tester.pumpAndSettle();
+    expect(find.text('Delete Account?'), findsOneWidget);
+    expect(find.textContaining('can no longer sign in'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await tester.pumpAndSettle();
+
+    expect(repo.deletes, 1);
+    expect(repo.deletedId, 'cashier-2');
+    expect(find.text('bob'), findsNothing);
+    expect(find.text('alice'), findsOneWidget);
+  });
+}
+
+/// Records the delete the menu triggers. The real guards (owner-only,
+/// deactivated-only, history retention) live in the repository and are
+/// covered by user_repository_test.dart.
+class _DeletingUsers implements UserRepository {
+  _DeletingUsers(this.users);
+
+  final List<User> users;
+  int deletes = 0;
+  String? deletedId;
+
+  @override
+  Future<List<User>> getAllUsers() async => List.of(users);
+
+  @override
+  Future<void> deleteUser({
+    required String targetUserId,
+    required String actingUserId,
+  }) async {
+    deletes++;
+    deletedId = targetUserId;
+    users.removeWhere((user) => user.id == targetUserId);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('delete flow uses only getAllUsers/deleteUser');
 }

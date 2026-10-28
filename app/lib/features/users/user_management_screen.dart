@@ -5,6 +5,7 @@ import '../../core/models/user.dart';
 import '../../core/repositories/user_repository.dart';
 import '../../core/theme/app_design.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/util/phone_number.dart';
 
 class UserManagementScreen extends StatefulWidget {
   final UserRepository userRepository;
@@ -83,6 +84,21 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     }
   }
 
+  Future<void> _showEditPhoneDialog(User user) async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => _EditPhoneDialog(
+        userRepository: widget.userRepository,
+        user: user,
+        actingUserId: widget.currentUser.id,
+      ),
+    );
+    if (saved == true && mounted) {
+      await _loadUsers();
+      _showMessage('Phone number updated.');
+    }
+  }
+
   Future<void> _resetPassword(User user) async {
     final reset = await showDialog<bool>(
       context: context,
@@ -136,6 +152,46 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       if (!mounted) return;
       await _loadUsers();
       _showMessage(activating ? 'User activated.' : 'User deactivated.');
+    } catch (e) {
+      if (mounted) {
+        _showMessage(e.toString().replaceAll('Exception: ', ''));
+      }
+    }
+  }
+
+  Future<void> _deleteUser(User user) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Account?'),
+        content: Text(
+          '${user.username} will be removed from this list and can no longer '
+          'sign in. Sales, shifts and cash movements they already recorded '
+          'stay in your reports.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+
+    try {
+      await widget.userRepository.deleteUser(
+        targetUserId: user.id,
+        actingUserId: widget.currentUser.id,
+      );
+      if (!mounted) return;
+      await _loadUsers();
+      _showMessage('Account deleted.');
     } catch (e) {
       if (mounted) {
         _showMessage(e.toString().replaceAll('Exception: ', ''));
@@ -217,11 +273,18 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                     PopupMenuButton<String>(
                       tooltip: 'User actions',
                       onSelected: (value) {
+                        if (value == 'phone') _showEditPhoneDialog(user);
                         if (value == 'reset') _resetPassword(user);
                         if (value == 'perms') _showEditPermissionsDialog(user);
                         if (value == 'toggle') _toggleActive(user);
+                        if (value == 'delete') _deleteUser(user);
                       },
                       itemBuilder: (context) => [
+                        if (!user.isDemo)
+                          const PopupMenuItem(
+                            value: 'phone',
+                            child: Text('Edit phone'),
+                          ),
                         const PopupMenuItem(
                           value: 'reset',
                           child: Text('Reset Password'),
@@ -237,6 +300,14 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                             child: Text(
                               user.isActive ? 'Deactivate' : 'Activate',
                             ),
+                          ),
+                        // Only a disabled account can be removed, and only once
+                        // it has been deactivated — that two-step keeps a
+                        // mis-tap from destroying an active login.
+                        if (!isSelf && !user.isDemo && !user.isActive)
+                          PopupMenuItem(
+                            value: 'delete',
+                            child: const Text('Delete Account'),
                           ),
                       ],
                     ),
@@ -289,8 +360,8 @@ class _AddUserDialogState extends State<_AddUserDialog> {
     final username = _usernameController.text.trim();
     final password = _passwordController.text;
     final role = _ownerAccess ? 'OWNER' : 'CASHIER';
-    if (username.isEmpty) {
-      setState(() => _error = 'Enter a username.');
+    if (PhoneNumber.normalize(username) == null) {
+      setState(() => _error = PhoneNumber.invalidMessage);
       return;
     }
     final min = UserRepository.minPasswordLengthFor(role);
@@ -339,7 +410,11 @@ class _AddUserDialogState extends State<_AddUserDialog> {
               TextField(
                 controller: _usernameController,
                 autofocus: true,
-                decoration: const InputDecoration(labelText: 'Username'),
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(
+                  labelText: 'Phone Number',
+                  hintText: 'e.g. ${PhoneNumber.example}',
+                ),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -671,6 +746,122 @@ class _ResetPasswordDialogState extends State<_ResetPasswordDialog> {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               : const Text('Reset Password'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Lets the owner move an account onto a phone-number login (or change an
+/// existing one). The demo account is excluded: it always signs in as `demo`.
+class _EditPhoneDialog extends StatefulWidget {
+  final UserRepository userRepository;
+  final User user;
+  final String actingUserId;
+
+  const _EditPhoneDialog({
+    required this.userRepository,
+    required this.user,
+    required this.actingUserId,
+  });
+
+  @override
+  State<_EditPhoneDialog> createState() => _EditPhoneDialogState();
+}
+
+class _EditPhoneDialogState extends State<_EditPhoneDialog> {
+  late final TextEditingController _phoneController = TextEditingController(
+    text: widget.user.username,
+  );
+  bool _isSaving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _phoneController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final phone = PhoneNumber.normalize(_phoneController.text);
+    if (phone == null) {
+      setState(() => _error = PhoneNumber.invalidMessage);
+      return;
+    }
+    if (phone == widget.user.username) {
+      Navigator.of(context).pop(false);
+      return;
+    }
+
+    setState(() {
+      _isSaving = true;
+      _error = null;
+    });
+    try {
+      await widget.userRepository.setUserPhone(
+        userId: widget.user.id,
+        phone: phone,
+        actingUserId: widget.actingUserId,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = e.toString().replaceAll('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Change Phone Number'),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _phoneController,
+              autofocus: true,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(
+                labelText: 'Phone Number',
+                hintText: 'e.g. ${PhoneNumber.example}',
+              ),
+              onSubmitted: (_) => _submit(),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'This is the number the account signs in with.',
+              style: TextStyle(color: AppDesign.textLo, fontSize: 12),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                _error!,
+                style: const TextStyle(color: AppTheme.danger, fontSize: 13),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isSaving ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _isSaving ? null : _submit,
+          child: _isSaving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Save'),
         ),
       ],
     );

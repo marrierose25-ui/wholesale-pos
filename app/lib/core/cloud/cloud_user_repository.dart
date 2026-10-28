@@ -1,5 +1,6 @@
 import '../models/user.dart';
 import '../repositories/user_repository.dart';
+import '../util/phone_number.dart';
 import 'cloud_api_client.dart';
 
 /// Web/PWA [UserRepository] over the `pos-api` Edge Function.
@@ -25,9 +26,11 @@ class CloudUserRepository implements UserRepository {
 
   @override
   Future<User> createFirstOwner(String username, String password) async {
+    final phone = PhoneNumber.normalize(username);
+    if (phone == null) throw Exception(PhoneNumber.invalidMessage);
     final json = await _api.call('setup_owner', {
       'activation_code': _api.activationCode,
-      'username': username,
+      'username': phone,
       'password': password,
     });
     _captureToken(json);
@@ -39,7 +42,7 @@ class CloudUserRepository implements UserRepository {
     try {
       final json = await _api.call('login', {
         'activation_code': _api.activationCode,
-        'username': username,
+        'username': PhoneNumber.loginIdentifier(username),
         'password': password,
       });
       _captureToken(json);
@@ -59,11 +62,27 @@ class CloudUserRepository implements UserRepository {
     String role, {
     List<String> permissions = const [],
   }) async {
+    final phone = PhoneNumber.normalize(username);
+    if (phone == null) throw Exception(PhoneNumber.invalidMessage);
     await _api.call('create_user', {
-      'username': username,
+      'username': phone,
       'password': password,
       'role': role,
       'permissions': permissions,
+    });
+  }
+
+  @override
+  Future<void> setUserPhone({
+    required String userId,
+    required String phone,
+    required String actingUserId,
+  }) async {
+    final canonical = PhoneNumber.normalize(phone);
+    if (canonical == null) throw Exception(PhoneNumber.invalidMessage);
+    await _api.call('set_user_phone', {
+      'target_user_id': userId,
+      'phone': canonical,
     });
   }
 
@@ -121,6 +140,14 @@ class CloudUserRepository implements UserRepository {
       'target_user_id': targetUserId,
       'active': active,
     });
+  }
+
+  @override
+  Future<void> deleteUser({
+    required String targetUserId,
+    required String actingUserId,
+  }) async {
+    await _api.call('delete_user', {'target_user_id': targetUserId});
   }
 
   @override

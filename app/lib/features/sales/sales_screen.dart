@@ -122,6 +122,18 @@ class SalesScreenState extends State<SalesScreen> {
       );
 
       await widget.saleRepository.saveSale(sale);
+      // Confirm the receipt out loud: a loan sale moves no money, so without
+      // this the dashboard and the drawer would look unchanged and the cashier
+      // could think the sale was never recorded.
+      final methodLabel = switch (paymentMethod) {
+        'LOAN' => 'Loan (on credit)',
+        'BANK' => 'Bank transfer',
+        _ => 'Cash',
+      };
+      _showMessage(
+        'Sale $receiptNumber recorded · '
+        '${MoneyUtils.formatBr(lineTotal)} · $methodLabel',
+      );
       // Refresh every data screen and switch the shell to the Register tab so
       // the cashier immediately sees the drawer move.
       widget.onSaleCompleted();

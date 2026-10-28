@@ -594,4 +594,47 @@ void main() {
       await db.close();
     },
   );
+
+  test(
+    'Upgrades a v13 database to v14, adding the user recycle flag',
+    () async {
+      var db = await LocalDatabase.openAt(dbPath);
+      final now = DateTime.now().toIso8601String();
+      // Rewind to the v13 users shape: no deleted_at column.
+      await db.execute('ALTER TABLE users DROP COLUMN deleted_at');
+      await db.insert('users', {
+        'id': 'cashier-1',
+        'username': '0912345678',
+        'password_hash': 'x',
+        'salt': 'x',
+        'role': 'CASHIER',
+        'is_active': 0,
+        'created_at': now,
+      });
+      await db.execute('PRAGMA user_version = 13');
+      await db.close();
+
+      db = await LocalDatabase.openAt(dbPath);
+      final version = await db.rawQuery('PRAGMA user_version');
+      expect(version.first.values.first, LocalDatabase.schemaVersion);
+
+      final cols = await db.rawQuery('PRAGMA table_info(users)');
+      expect(
+        cols.any((column) => column['name'] == 'deleted_at'),
+        isTrue,
+        reason: 'v14 upgrade must add the deleted_at column',
+      );
+
+      // Every pre-existing account starts out as *not* deleted.
+      final row = (await db.query(
+        'users',
+        where: 'id = ?',
+        whereArgs: ['cashier-1'],
+      )).single;
+      expect(row['deleted_at'], isNull);
+      expect(row['is_active'], 0);
+
+      await db.close();
+    },
+  );
 }

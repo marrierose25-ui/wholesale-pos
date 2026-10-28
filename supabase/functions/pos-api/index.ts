@@ -74,6 +74,7 @@ const OWNER_ONLY = new Set([
   'void_sale', 'approve_void', 'reject_void',
   // Account administration + credential/status mutations.
   'reset_password', 'set_user_active', 'create_user', 'set_user_permissions',
+  'set_user_phone', 'delete_user',
   // Finance recycle-bin mutations (delete/restore/permanently-delete).
   'finance_delete_category', 'finance_restore_category',
   'finance_permanently_delete_category',
@@ -200,8 +201,10 @@ Deno.serve(async (req) => {
       case 'list_users': return await listUsers(db, ctx);
       case 'create_user': return await createUser(db, ctx, body);
       case 'set_user_permissions': return await setUserPermissions(db, ctx, body);
+      case 'set_user_phone': return await setUserPhone(db, ctx, body);
       case 'reset_password': return await resetPassword(db, ctx, body);
       case 'set_user_active': return await setUserActive(db, ctx, body);
+      case 'delete_user': return await deleteUser(db, ctx, body);
 
       // Finance
       case 'finance_categories': return await financeCategories(db, ctx);
@@ -283,18 +286,42 @@ function loginRecordFail(key: string) {
 }
 function loginClear(key: string) { loginAttempts.delete(key); }
 
+// --- Phone-number identity ---------------------------------------------------
+// An account's login identifier is an Ethiopian mobile number kept in the
+// `username` column in one canonical form: 0 + 9/7 + 8 digits. Anything a
+// cashier can reasonably type is folded to that form. `demo` is the documented
+// exception — the seeded training account keeps the literal identifier so a
+// trainee only types `demo`.
+const PHONE_RE = /^0[79]\d{8}$/;
+const PHONE_INVALID = 'Enter a valid phone number, for example 0912345678.';
+function normalizePhone(raw: string): string | null {
+  let n = raw.trim().replace(/[\s\-()]/g, '');
+  if (n.startsWith('+251')) n = '0' + n.slice(4);
+  else if (n.startsWith('251') && n.length === 12) n = '0' + n.slice(3);
+  else if (/^[79]\d{8}$/.test(n)) n = '0' + n;
+  return PHONE_RE.test(n) ? n : null;
+}
+// Sign-in identifier: a normalised phone, `demo`, or a legacy value as typed so
+// accounts created before phone-number login keep working until renamed.
+function loginIdentifier(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.toLowerCase() === 'demo') return 'demo';
+  return normalizePhone(trimmed) ?? trimmed;
+}
+
 async function hasUsers(db: any, body: any): Promise<Response> {
   const code = str(body.activation_code);
   const customerId = await tenantForActivationCode(db, code);
   if (!customerId) return json({ ok: false, error: 'Invalid activation code.' }, 403);
   const { count } = await db.from('pos_users')
-    .select('*', { count: 'exact', head: true }).eq('customer_id', customerId);
+    .select('*', { count: 'exact', head: true }).eq('customer_id', customerId)
+    .is('deleted_at', null);
   return json({ ok: true, has_users: (count ?? 0) > 0 });
 }
 
 async function login(db: any, body: any): Promise<Response> {
   const code = str(body.activation_code);
-  const username = str(body.username);
+  const username = loginIdentifier(str(body.username));
   const password = String(body.password ?? '');
   if (!code || !username || !password) return json({ ok: false, error: 'Missing fields' }, 400);
   const customerId = await tenantForActivationCode(db, code);
@@ -313,7 +340,7 @@ async function login(db: any, body: any): Promise<Response> {
   const needle = username.toLowerCase().replace(/[%_]/g, '');
   const { data: user } = await db.from('pos_users')
     .select('*').eq('customer_id', customerId).ilike('username', needle)
-    .eq('active', true).maybeSingle();
+    .eq('active', true).is('deleted_at', null).maybeSingle();
   if (!user) { loginRecordFail(tkey); return json({ ok: false, error: 'Invalid credentials.' }, 401); }
 
   const ok = await verifyPassword(password, user.pw_salt, user.pw_hash);
@@ -338,9 +365,11 @@ async function login(db: any, body: any): Promise<Response> {
 // owner's first web sign-in (armed with the activation code) seeds their login.
 async function setupOwner(db: any, body: any): Promise<Response> {
   const code = str(body.activation_code);
-  const username = str(body.username);
+  const rawName = str(body.username);
   const password = String(body.password ?? '');
-  if (!code || !username || !password) return json({ ok: false, error: 'Missing fields' }, 400);
+  if (!code || !rawName || !password) return json({ ok: false, error: 'Missing fields' }, 400);
+  const username = normalizePhone(rawName);
+  if (!username) return json({ ok: false, error: PHONE_INVALID }, 400);
   const customerId = await tenantForActivationCode(db, code);
   if (!customerId) return json({ ok: false, error: 'Invalid activation code.' }, 403);
 
@@ -862,17 +891,20 @@ async function listCashMovements(db: any, ctx: Ctx, body: any): Promise<Response
 async function listUsers(db: any, ctx: Ctx): Promise<Response> {
   const { data, error } = await db.from('pos_users')
     .select('id, username, role, active, created_at, permissions, is_demo').eq('customer_id', ctx.customerId)
+    .is('deleted_at', null)
     .order('username');
   if (error) throw new Error(error.message);
   return json({ ok: true, users: strip(data) });
 }
 
 async function createUser(db: any, ctx: Ctx, body: any): Promise<Response> {
-  const username = str(body.username);
+  const rawName = str(body.username);
   const role = String(body.role ?? '');
   const password = String(body.password ?? '');
-  if (!username) return json({ ok: false, error: 'Username required.' }, 400);
-  if (username.toLowerCase() === 'demo') return json({ ok: false, error: 'That username is reserved for the demo account.' }, 400);
+  if (!rawName) return json({ ok: false, error: 'Phone number required.' }, 400);
+  if (rawName.trim().toLowerCase() === 'demo') return json({ ok: false, error: 'That name is reserved for the demo account.' }, 400);
+  const username = normalizePhone(rawName);
+  if (!username) return json({ ok: false, error: PHONE_INVALID }, 400);
   if (![OWNER, CASHIER].includes(role)) return json({ ok: false, error: 'Invalid role.' }, 400);
   const minLen = role === OWNER ? 12 : 8;
   if (password.length < minLen) return json({ ok: false, error: `Password must be at least ${minLen} characters.` }, 400);
@@ -880,11 +912,22 @@ async function createUser(db: any, ctx: Ctx, body: any): Promise<Response> {
   // validated feature keys it was given, de-duplicated, in registry order.
   const rawPerms = Array.isArray(body.permissions) ? body.permissions.map(String) : [];
   const perms = role === OWNER ? [] : Array.from(new Set(rawPerms.filter((k) => FEATURE_KEYS.has(k))));
-  const { data: dup, error: dupErr } = await db.from('pos_users').select('id')
+  const { data: dup, error: dupErr } = await db.from('pos_users').select('id, deleted_at')
     .eq('customer_id', ctx.customerId).ilike('username', username.toLowerCase().replace(/[%_]/g, '')).maybeSingle();
   if (dupErr) throw new Error(`duplicate username check: ${dupErr.message}`);
-  if (dup) return json({ ok: false, error: 'Username is already taken.' }, 409);
+  if (dup && !dup.deleted_at) return json({ ok: false, error: 'That phone number is already in use.' }, 409);
   const { salt, hash } = await hashPassword(password);
+  // A deleted account still holds the number. Reuse its row instead of
+  // violating the unique index: the sales it recorded keep the same cashier.
+  if (dup?.deleted_at) {
+    const up = await db.from('pos_users').update({
+      username, role, pw_salt: salt, pw_hash: hash, active: true,
+      permissions: perms, is_demo: false, deleted_at: null,
+    }).eq('customer_id', ctx.customerId).eq('id', dup.id);
+    if (up.error) throw new Error(up.error.message);
+    await audit(db, ctx.customerId, ctx.userId, 'USER_CREATED', `Deleted account "${username}" reused (${role}).`);
+    return json({ ok: true, id: dup.id });
+  }
   const id = crypto.randomUUID();
   const ins = await db.from('pos_users').insert({
     id, customer_id: ctx.customerId, username, role, pw_salt: salt, pw_hash: hash, active: true, permissions: perms,
@@ -927,7 +970,7 @@ async function setUserPermissions(db: any, ctx: Ctx, body: any): Promise<Respons
   const rawPerms = Array.isArray(body.permissions) ? body.permissions.map(String) : [];
   const perms = Array.from(new Set(rawPerms.filter((k) => FEATURE_KEYS.has(k))));
   const { data: t } = await db.from('pos_users').select('role, username')
-    .eq('customer_id', ctx.customerId).eq('id', target).maybeSingle();
+    .eq('customer_id', ctx.customerId).eq('id', target).is('deleted_at', null).maybeSingle();
   if (!t) return json({ ok: false, error: 'User not found.' }, 404);
   if (t.role === OWNER) return json({ ok: false, error: 'Owner accounts bypass feature permissions.' }, 400);
   const up = await db.from('pos_users').update({ permissions: perms })
@@ -937,11 +980,33 @@ async function setUserPermissions(db: any, ctx: Ctx, body: any): Promise<Respons
   return json({ ok: true });
 }
 
+// Moves an account onto a phone-number login (or changes the existing one).
+// Owner-only, unique, canonical, and refused for the demo account so `demo` /
+// `demo1234` stays a stable training login.
+async function setUserPhone(db: any, ctx: Ctx, body: any): Promise<Response> {
+  const target = String(body.target_user_id ?? '');
+  const phone = normalizePhone(String(body.phone ?? ''));
+  if (!phone) return json({ ok: false, error: PHONE_INVALID }, 400);
+  const { data: t } = await db.from('pos_users').select('username, is_demo')
+    .eq('customer_id', ctx.customerId).eq('id', target).is('deleted_at', null).maybeSingle();
+  if (!t) return json({ ok: false, error: 'User not found.' }, 404);
+  if (t.is_demo) return json({ ok: false, error: 'The demo account keeps its demo login.' }, 400);
+  const { data: dup, error: dupErr } = await db.from('pos_users').select('id')
+    .eq('customer_id', ctx.customerId).ilike('username', phone).neq('id', target).maybeSingle();
+  if (dupErr) throw new Error(`duplicate phone check: ${dupErr.message}`);
+  if (dup) return json({ ok: false, error: 'That phone number is already in use.' }, 409);
+  const up = await db.from('pos_users').update({ username: phone })
+    .eq('customer_id', ctx.customerId).eq('id', target);
+  if (up.error) throw new Error(up.error.message);
+  await audit(db, ctx.customerId, ctx.userId, 'USER_PHONE_CHANGED', `Login phone for "${t.username}" is now "${phone}".`);
+  return json({ ok: true });
+}
+
 async function resetPassword(db: any, ctx: Ctx, body: any): Promise<Response> {
   const target = String(body.target_user_id ?? '');
   const password = String(body.new_password ?? '');
   const { data: t } = await db.from('pos_users').select('role, username, token_version')
-    .eq('customer_id', ctx.customerId).eq('id', target).maybeSingle();
+    .eq('customer_id', ctx.customerId).eq('id', target).is('deleted_at', null).maybeSingle();
   if (!t) return json({ ok: false, error: 'User not found.' }, 404);
   const minLen = t.role === OWNER ? 12 : 8;
   if (password.length < minLen) return json({ ok: false, error: `Password must be at least ${minLen} characters.` }, 400);
@@ -958,8 +1023,9 @@ async function setUserActive(db: any, ctx: Ctx, body: any): Promise<Response> {
   const active = body.active === true;
   if (target === ctx.userId && !active) return json({ ok: false, error: 'You cannot deactivate your own account.' }, 400);
   if (!active) {
-    const { data: t } = await db.from('pos_users').select('role, is_demo').eq('customer_id', ctx.customerId).eq('id', target).maybeSingle();
-    if (t?.is_demo) return json({ ok: false, error: 'The demo account cannot be deactivated.' }, 400);
+    const { data: t } = await db.from('pos_users').select('role, is_demo').eq('customer_id', ctx.customerId).eq('id', target).is('deleted_at', null).maybeSingle();
+    if (!t) return json({ ok: false, error: 'User not found.' }, 404);
+    if (t.is_demo) return json({ ok: false, error: 'The demo account cannot be deactivated.' }, 400);
     if (t?.role === OWNER) {
       const { count } = await db.from('pos_users').select('*', { count: 'exact', head: true })
         .eq('customer_id', ctx.customerId).eq('role', OWNER).eq('active', true);
@@ -969,17 +1035,61 @@ async function setUserActive(db: any, ctx: Ctx, body: any): Promise<Response> {
   // Deactivating an account must also invalidate its live sessions, and
   // resetting the version on activation is harmless (there is no valid token),
   // so bump unconditionally — any previously issued JWT is now stale (audit #6).
-  const { data: cur } = await db.from('pos_users').select('token_version')
+  const { data: cur } = await db.from('pos_users').select('token_version, username')
     .eq('customer_id', ctx.customerId).eq('id', target).maybeSingle();
   const up = await db.from('pos_users').update({ active, token_version: (cur?.token_version ?? 0) + 1 }).eq('customer_id', ctx.customerId).eq('id', target);
   if (up.error) throw new Error(up.error.message);
-  await audit(db, ctx.customerId, ctx.userId, active ? 'USER_ACTIVATED' : 'USER_DEACTIVATED', `Account ${target}.`);
+  // Log the phone number, not the row id: the audit screen is read by the owner.
+  await audit(db, ctx.customerId, ctx.userId, active ? 'USER_ACTIVATED' : 'USER_DEACTIVATED', `Account "${cur?.username ?? target}" ${active ? 'activated' : 'deactivated'}.`);
   return json({ ok: true });
+}
+
+// Removes a deactivated account. An account that already recorded sales,
+// shifts, cash movements, finance entries or void requests keeps its row
+// (flagged with deleted_at, hidden from every list and from login) so that
+// history keeps its cashier name; a clean account is dropped outright, which
+// frees its phone number for reuse. OWNER_ONLY at the gate above.
+async function deleteUser(db: any, ctx: Ctx, body: any): Promise<Response> {
+  const target = String(body.target_user_id ?? '');
+  if (target === ctx.userId) return json({ ok: false, error: 'You cannot delete your own account.' }, 400);
+  const { data: t } = await db.from('pos_users').select('username, active, is_demo, token_version')
+    .eq('customer_id', ctx.customerId).eq('id', target).is('deleted_at', null).maybeSingle();
+  if (!t) return json({ ok: false, error: 'User not found.' }, 404);
+  if (t.is_demo) return json({ ok: false, error: 'The demo account cannot be deleted.' }, 400);
+  if (t.active !== false) return json({ ok: false, error: 'Deactivate the account before deleting it.' }, 400);
+
+  const counted = async (table: string, column: string): Promise<number> => {
+    const { count, error } = await db.from(table).select('*', { count: 'exact', head: true })
+      .eq('customer_id', ctx.customerId).eq(column, target);
+    if (error) throw new Error(error.message);
+    return count ?? 0;
+  };
+  const records =
+    (await counted('sales', 'cashier_id')) +
+    (await counted('shifts', 'cashier_id')) +
+    (await counted('cash_movements', 'user_id')) +
+    (await counted('void_requests', 'requested_by')) +
+    (await counted('pos_finance_entries', 'created_by'));
+
+  if (records > 0) {
+    const up = await db.from('pos_users').update({
+      deleted_at: new Date().toISOString(),
+      token_version: (t.token_version ?? 0) + 1,
+    }).eq('customer_id', ctx.customerId).eq('id', target);
+    if (up.error) throw new Error(up.error.message);
+  } else {
+    const del = await db.from('pos_users').delete()
+      .eq('customer_id', ctx.customerId).eq('id', target);
+    if (del.error) throw new Error(del.error.message);
+  }
+  await audit(db, ctx.customerId, ctx.userId, 'USER_DELETED',
+    `Account "${t.username}" was deleted${records > 0 ? ' (history retained)' : ''}.`);
+  return json({ ok: true, retained: records > 0 });
 }
 
 async function loadActiveUser(db: any, customerId: string, userId: string): Promise<{ role: string; tokenVersion: number; permissions: string[] } | null> {
   const { data } = await db.from('pos_users').select('role, active, token_version, permissions')
-    .eq('customer_id', customerId).eq('id', userId).eq('active', true).maybeSingle();
+    .eq('customer_id', customerId).eq('id', userId).eq('active', true).is('deleted_at', null).maybeSingle();
   if (!data) return null;
   const permissions = Array.isArray(data.permissions) ? data.permissions.map(String) : [];
   return { role: data.role, tokenVersion: Number(data.token_version ?? 0), permissions };

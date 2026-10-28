@@ -15,12 +15,19 @@ This document describes the local SQLite database used by the desktop app. There
 
 ### `users`
 - `id` TEXT PK
-- `username` TEXT UNIQUE NOT NULL (case-insensitive login)
+- `username` TEXT UNIQUE NOT NULL — the login identifier: the account's phone
+  number in one canonical form (0 + 9/7 + 8 digits, e.g. `0912345678`), looked up
+  case-insensitively. The seeded training account stores the literal `demo`.
 - `password_hash` TEXT NOT NULL (`pbkdf2-sha256$v=1$i=<iterations>$<base64>`)
 - `salt` TEXT NOT NULL (random per user)
 - `role` TEXT NOT NULL (`OWNER` or `CASHIER`)
 - `is_active` INTEGER NOT NULL DEFAULT 1
+- `permissions` TEXT NOT NULL DEFAULT `'[]'` — feature keys a staff account may open (owners bypass it)
+- `is_demo` INTEGER NOT NULL DEFAULT 0 — the permanent training account; it can never be deactivated or deleted
+- `deleted_at` TEXT (nullable) — set when a *deactivated* account is deleted but still owns history
 - `created_at` TEXT NOT NULL
+
+Deleting an account is a two-step, owner-only action. An account that never recorded a sale, shift, cash movement, finance entry or void request is removed outright, which frees its phone number. One that did keeps its row with `deleted_at` set (the foreign keys would otherwise be violated and old sales would lose their cashier); such rows are hidden from the Users list, from login and from session restore, and re-creating the same phone number reuses the row so the history stays attributed. The demo account and the acting owner's own row are always refused.
 
 ### `products`
 - `id` TEXT PK, `name`, `code` (UNIQUE), `category`, `unit`
@@ -89,7 +96,7 @@ Finance entries are completely separate from sales: completing one never affects
 
 ### `audit_logs`
 - `id` TEXT PK, `user_id` TEXT (nullable for unknown login attempts)
-- `action` TEXT (e.g. `LOGIN_SUCCEEDED`, `LOGIN_FAILED`, `SALE_COMPLETED`, `SALE_VOIDED`, `SHIFT_OPENED`, `SHIFT_CLOSED`, `CASH_MOVEMENT_ADDED`, `PASSWORD_CHANGED`, `PASSWORD_RESET`, `USER_CREATED`, `USER_ACTIVATED`, `USER_DEACTIVATED`, `BACKUP_EXPORTED`, `BACKUP_RESTORED`, and `FINANCE_*` for money-tracking mutations)
+- `action` TEXT (e.g. `LOGIN_SUCCEEDED`, `LOGIN_FAILED`, `SALE_COMPLETED`, `SALE_VOIDED`, `SHIFT_OPENED`, `SHIFT_CLOSED`, `CASH_MOVEMENT_ADDED`, `PASSWORD_CHANGED`, `PASSWORD_RESET`, `USER_CREATED`, `USER_ACTIVATED`, `USER_DEACTIVATED`, `USER_DELETED`, `USER_PHONE_CHANGED`, `BACKUP_EXPORTED`, `BACKUP_RESTORED`, and `FINANCE_*` for money-tracking mutations)
 - `details` TEXT, `created_at` TEXT
 
 ### `counters`
@@ -117,7 +124,7 @@ Finance entries are completely separate from sales: completing one never affects
 
 ## Migrations
 
-`LocalDatabase.schemaVersion` is the single source of truth (currently `9`). Both `onCreate` and `onUpgrade` build the same final shape:
+`LocalDatabase.schemaVersion` is the single source of truth (currently `14`). Both `onCreate` and `onUpgrade` build the same final shape:
 
 - v2: shifts
 - v3: `sales.payment_method`
@@ -127,6 +134,11 @@ Finance entries are completely separate from sales: completing one never affects
 - v7: rebuilds `sale_items` to replace the integer `quantity` with `quantity_text` (the old number is preserved as text), `billing_quantity_milliunits` (old quantity x 1000), and `notes`; adds `finance_categories`/`finance_entries` and the `finance_entries_category_id` index
 - v8: adds the `void_requests` table with `void_requests_sale_id` and `void_requests_status` indexes
 - v9: adds the `sync_outbox` table and `sync_outbox_pending` index (purely additive — no existing table or column is touched)
+- v10: `finance_categories.deleted_at` (recycle bin) and `finance_entries.payment_method`
+- v11: `users.permissions`, backfilled with today's cashier matrix so an upgrade never strips access
+- v12: optional proof photo on `cash_movements`
+- v13: `users.is_demo` (the permanent training account)
+- v14: `users.deleted_at` (deleted accounts that still own history keep their row, hidden)
 
 ## Backups
 

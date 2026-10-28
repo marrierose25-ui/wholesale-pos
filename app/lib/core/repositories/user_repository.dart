@@ -10,6 +10,7 @@ import '../auth/features.dart';
 import '../models/user.dart';
 import '../util/isolate_runner.dart'
     if (dart.library.io) '../util/isolate_runner_native.dart';
+import '../util/phone_number.dart';
 
 /// Data-access contract for user accounts and authentication.
 ///
@@ -51,9 +52,11 @@ abstract class UserRepository {
 
   Future<User?> authenticate(String username, String password);
 
-  /// Creates an account. OWNER rows ignore [permissions] (they bypass the tick
-  /// list and store `[]`); a staff row is granted exactly the feature keys in
-  /// [permissions], validated against the registry.
+  /// Creates an account. The identifier is the account's phone number: any
+  /// accepted spelling is folded to the canonical 0XXXXXXXXX form. OWNER rows
+  /// ignore [permissions] (they bypass the tick list and store `[]`); a staff
+  /// row is granted exactly the feature keys in [permissions], validated
+  /// against the registry.
   Future<void> createUser(
     String username,
     String password,
@@ -71,6 +74,15 @@ abstract class UserRepository {
   /// restore reloads the user). Owner rows are rejected — they bypass ticks.
   Future<void> setUserPermissions(String userId, List<String> permissions);
 
+  /// Changes an account's login phone number (the identifier it signs in with).
+  /// Owner-only, keeps the value unique and canonical, and refuses the demo
+  /// account so `demo` / `demo1234` stays a stable training login.
+  Future<void> setUserPhone({
+    required String userId,
+    required String phone,
+    required String actingUserId,
+  });
+
   Future<void> changePassword({
     required String userId,
     required String currentPassword,
@@ -86,6 +98,19 @@ abstract class UserRepository {
   Future<void> setUserActive({
     required String targetUserId,
     required bool active,
+    required String actingUserId,
+  });
+
+  /// Removes a deactivated account from the app. An active account must be
+  /// deactivated first, and the demo account and the owner's own row are
+  /// protected.
+  ///
+  /// An account that never recorded a sale, shift, cash movement, finance entry
+  /// or void request is dropped outright, which frees its phone number. One
+  /// that did keeps its row (flagged, hidden from lists and login) so past
+  /// sales stay attributed and reports keep the cashier's name.
+  Future<void> deleteUser({
+    required String targetUserId,
     required String actingUserId,
   });
 
@@ -248,6 +273,19 @@ class SqfliteUserRepository implements UserRepository {
     }
   }
 
+  /// Folds a typed identifier to its canonical phone form, rejecting anything
+  /// that is not a usable mobile number (and the reserved demo name).
+  static String _requirePhone(String raw) {
+    if (PhoneNumber.isDemo(raw)) {
+      throw Exception('That name is reserved for the demo account.');
+    }
+    final phone = PhoneNumber.normalize(raw);
+    if (phone == null) {
+      throw Exception(PhoneNumber.invalidMessage);
+    }
+    return phone;
+  }
+
   void _recordFailedAttempt(String guardKey) {
     final guard = _loginGuards.putIfAbsent(guardKey, () => _LoginGuard());
     guard.failures += 1;
@@ -259,16 +297,15 @@ class SqfliteUserRepository implements UserRepository {
 
   @override
   Future<bool> hasUsers() async {
-    final result = await _db.rawQuery('SELECT COUNT(*) as count FROM users');
+    final result = await _db.rawQuery(
+      'SELECT COUNT(*) as count FROM users WHERE deleted_at IS NULL',
+    );
     return (result.first['count'] as int) > 0;
   }
 
   @override
   Future<User> createFirstOwner(String username, String password) async {
-    final name = username.trim();
-    if (name.isEmpty) {
-      throw Exception('Username cannot be empty.');
-    }
+    final name = _requirePhone(username);
     _validatePassword(password, 'OWNER');
 
     final salt = _generateSalt();
@@ -283,7 +320,7 @@ class SqfliteUserRepository implements UserRepository {
 
     await _db.transaction((txn) async {
       final existing = await txn.rawQuery(
-        'SELECT COUNT(*) AS count FROM users',
+        'SELECT COUNT(*) AS count FROM users WHERE deleted_at IS NULL',
       );
       if ((existing.first['count'] as int) > 0) {
         throw Exception('An owner account already exists.');
@@ -301,8 +338,11 @@ class SqfliteUserRepository implements UserRepository {
 
   @override
   Future<User?> authenticate(String username, String password) async {
-    final name = username.trim();
+    // Accept any spelling the cashier types; legacy text identifiers (created
+    // before phone-number login) still resolve because they pass through as-is.
+    final name = PhoneNumber.loginIdentifier(username);
     final guardKey = name.toLowerCase();
+    if (name.isEmpty) return null;
 
     // Cooldown check first: don't even verify while the account is locked.
     final guard = _loginGuards[guardKey];
@@ -319,7 +359,8 @@ class SqfliteUserRepository implements UserRepository {
 
     final maps = await _db.query(
       'users',
-      where: 'LOWER(username) = LOWER(?) AND is_active = 1',
+      where:
+          'LOWER(username) = LOWER(?) AND is_active = 1 AND deleted_at IS NULL',
       whereArgs: [name],
       limit: 1,
     );
@@ -363,13 +404,7 @@ class SqfliteUserRepository implements UserRepository {
     String role, {
     List<String> permissions = const [],
   }) async {
-    final name = username.trim();
-    if (name.isEmpty) {
-      throw Exception('Username cannot be empty.');
-    }
-    if (name.toLowerCase() == 'demo') {
-      throw Exception('That username is reserved for the demo account.');
-    }
+    final name = _requirePhone(username);
     if (!UserRepository.roles.contains(role)) {
       throw Exception('Invalid role.');
     }
@@ -395,12 +430,30 @@ class SqfliteUserRepository implements UserRepository {
     await _db.transaction((txn) async {
       final existing = await txn.query(
         'users',
+        columns: ['id', 'deleted_at'],
         where: 'LOWER(username) = LOWER(?)',
         whereArgs: [name],
         limit: 1,
       );
       if (existing.isNotEmpty) {
-        throw Exception('Username is already taken.');
+        final row = existing.first;
+        if (row['deleted_at'] == null) {
+          throw Exception('Username is already taken.');
+        }
+        // A deleted account still holds the number. Reuse that row instead of
+        // failing on the UNIQUE index: the sales it recorded keep pointing at
+        // the same cashier, and the rehired phone simply signs in again.
+        final revived = user.toMap()
+          ..remove('id')
+          ..remove('created_at')
+          ..['deleted_at'] = null;
+        await txn.update(
+          'users',
+          revived,
+          where: 'id = ?',
+          whereArgs: [row['id']],
+        );
+        return;
       }
       await txn.insert('users', user.toMap());
     });
@@ -419,7 +472,7 @@ class SqfliteUserRepository implements UserRepository {
     final flagged = await _db.query(
       'users',
       columns: ['id'],
-      where: 'is_demo = 1',
+      where: 'is_demo = 1 AND deleted_at IS NULL',
       limit: 1,
     );
     if (flagged.isNotEmpty) return;
@@ -428,7 +481,7 @@ class SqfliteUserRepository implements UserRepository {
     final byName = await _db.query(
       'users',
       columns: ['id'],
-      where: 'LOWER(username) = ?',
+      where: 'LOWER(username) = ? AND deleted_at IS NULL',
       whereArgs: ['demo'],
       limit: 1,
     );
@@ -468,7 +521,7 @@ class SqfliteUserRepository implements UserRepository {
     final rows = await _db.query(
       'users',
       columns: ['username', 'role'],
-      where: 'id = ?',
+      where: 'id = ? AND deleted_at IS NULL',
       whereArgs: [userId],
       limit: 1,
     );
@@ -489,6 +542,60 @@ class SqfliteUserRepository implements UserRepository {
       details:
           'Permissions for "${rows.first['username']}": '
           '${normalized.isEmpty ? '(none)' : normalized.join(', ')}',
+    );
+  }
+
+  @override
+  Future<void> setUserPhone({
+    required String userId,
+    required String phone,
+    required String actingUserId,
+  }) async {
+    final actors = await _db.query(
+      'users',
+      columns: ['role', 'is_active'],
+      where: 'id = ?',
+      whereArgs: [actingUserId],
+      limit: 1,
+    );
+    if (actors.isEmpty ||
+        actors.first['role'] != 'OWNER' ||
+        actors.first['is_active'] != 1) {
+      throw Exception('Only an active owner can change a phone number.');
+    }
+    final canonical = _requirePhone(phone);
+    final targets = await _db.query(
+      'users',
+      columns: ['username', 'is_demo'],
+      where: 'id = ? AND deleted_at IS NULL',
+      whereArgs: [userId],
+      limit: 1,
+    );
+    if (targets.isEmpty) throw Exception('User not found.');
+    if (((targets.first['is_demo'] as int?) ?? 0) == 1) {
+      throw Exception('The demo account keeps its demo login.');
+    }
+    final clash = await _db.query(
+      'users',
+      columns: ['id'],
+      where: 'LOWER(username) = LOWER(?) AND id <> ?',
+      whereArgs: [canonical, userId],
+      limit: 1,
+    );
+    if (clash.isNotEmpty) {
+      throw Exception('That phone number is already in use.');
+    }
+    await _db.update(
+      'users',
+      {'username': canonical},
+      where: 'id = ?',
+      whereArgs: [userId],
+    );
+    await _audit(
+      userId: actingUserId,
+      action: 'USER_PHONE_CHANGED',
+      details:
+          'Login phone for "${targets.first['username']}" is now "$canonical".',
     );
   }
 
@@ -538,7 +645,7 @@ class SqfliteUserRepository implements UserRepository {
     }
     final targets = await _db.query(
       'users',
-      where: 'id = ?',
+      where: 'id = ? AND deleted_at IS NULL',
       whereArgs: [targetUserId],
       limit: 1,
     );
@@ -577,7 +684,7 @@ class SqfliteUserRepository implements UserRepository {
     final targets = await _db.query(
       'users',
       columns: ['username', 'role', 'is_active', 'is_demo'],
-      where: 'id = ?',
+      where: 'id = ? AND deleted_at IS NULL',
       whereArgs: [targetUserId],
       limit: 1,
     );
@@ -615,8 +722,98 @@ class SqfliteUserRepository implements UserRepository {
   }
 
   @override
+  Future<void> deleteUser({
+    required String targetUserId,
+    required String actingUserId,
+  }) async {
+    if (targetUserId == actingUserId) {
+      throw Exception('You cannot delete your own account.');
+    }
+    final actors = await _db.query(
+      'users',
+      columns: ['role', 'is_active'],
+      where: 'id = ?',
+      whereArgs: [actingUserId],
+      limit: 1,
+    );
+    if (actors.isEmpty ||
+        actors.first['role'] != 'OWNER' ||
+        actors.first['is_active'] != 1) {
+      throw Exception('Only an active owner can delete an account.');
+    }
+    final targets = await _db.query(
+      'users',
+      columns: ['username', 'role', 'is_active', 'is_demo'],
+      where: 'id = ? AND deleted_at IS NULL',
+      whereArgs: [targetUserId],
+      limit: 1,
+    );
+    if (targets.isEmpty) throw Exception('User not found.');
+    final target = targets.first;
+    if (((target['is_demo'] as int?) ?? 0) == 1) {
+      throw Exception('The demo account cannot be deleted.');
+    }
+    if (target['is_active'] == 1) {
+      throw Exception('Deactivate the account before deleting it.');
+    }
+
+    // Anything this account touched is a financial record: the FK forbids
+    // dropping the row, and dropping it would blank the cashier on old sales.
+    // The count and the write share one transaction so a sale landing in between
+    // can never leave the delete pointing at a newly referenced row.
+    await _db.transaction((txn) async {
+      final history = await txn.rawQuery(
+        '''
+      SELECT
+        (SELECT COUNT(*) FROM sales WHERE cashier_id = ?) +
+        (SELECT COUNT(*) FROM shifts WHERE cashier_id = ?) +
+        (SELECT COUNT(*) FROM cash_movements WHERE user_id = ?) +
+        (SELECT COUNT(*) FROM finance_entries
+          WHERE created_by = ? OR completed_by = ?) +
+        (SELECT COUNT(*) FROM void_requests
+          WHERE requested_by = ? OR decided_by = ?) AS count
+      ''',
+        [
+          targetUserId,
+          targetUserId,
+          targetUserId,
+          targetUserId,
+          targetUserId,
+          targetUserId,
+          targetUserId,
+        ],
+      );
+      final kept = (history.first['count'] as int) > 0;
+
+      if (kept) {
+        await txn.update(
+          'users',
+          {'deleted_at': DateTime.now().toIso8601String()},
+          where: 'id = ?',
+          whereArgs: [targetUserId],
+        );
+      } else {
+        await txn.delete('users', where: 'id = ?', whereArgs: [targetUserId]);
+      }
+      await txn.insert('audit_logs', {
+        'id': const Uuid().v4(),
+        'user_id': actingUserId,
+        'action': 'USER_DELETED',
+        'details':
+            'Account "${target['username']}" was deleted'
+            '${kept ? ' (history retained)' : ''}.',
+        'created_at': DateTime.now().toIso8601String(),
+      });
+    });
+  }
+
+  @override
   Future<List<User>> getAllUsers() async {
-    final maps = await _db.query('users', orderBy: 'username ASC');
+    final maps = await _db.query(
+      'users',
+      where: 'deleted_at IS NULL',
+      orderBy: 'username ASC',
+    );
     return maps.map((m) => User.fromMap(m)).toList();
   }
 
@@ -627,7 +824,7 @@ class SqfliteUserRepository implements UserRepository {
   Future<User?> getById(String id) async {
     final maps = await _db.query(
       'users',
-      where: 'id = ? AND is_active = 1',
+      where: 'id = ? AND is_active = 1 AND deleted_at IS NULL',
       whereArgs: [id],
       limit: 1,
     );

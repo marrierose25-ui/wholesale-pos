@@ -141,7 +141,10 @@ void main() {
           );
         final api = _clientWith(rec);
         final repo = CloudUserRepository(api);
-        final user = await repo.authenticate('owner', 'long-strong-password');
+        final user = await repo.authenticate(
+          '+251 912 345 678',
+          'long-strong-password',
+        );
         expect(user?.id, 'u1');
         expect(user?.role, 'OWNER');
         // The hash/salt never reach the client.
@@ -151,6 +154,8 @@ void main() {
         expect(api.token, 'jwt-1');
         expect(rec.body!['action'], 'login');
         expect(rec.body!['activation_code'], 'MERCA-1');
+        // The typed spelling is folded to the canonical phone before it ships.
+        expect(rec.body!['username'], '0912345678');
       },
     );
 
@@ -204,12 +209,13 @@ void main() {
         ..reply = (_) => http.Response('{"ok":true,"id":"u9"}', 200);
       final repo = CloudUserRepository(_clientWith(rec));
       await repo.createUser(
-        'sam',
+        '+251 912 345 678',
         'secret1234',
         'CASHIER',
         permissions: ['pos', 'history'],
       );
       expect(rec.body!['action'], 'create_user');
+      expect(rec.body!['username'], '0912345678');
       expect(rec.body!['role'], 'CASHIER');
       expect(rec.body!['permissions'], ['pos', 'history']);
     });
@@ -221,6 +227,38 @@ void main() {
       expect(rec.body!['action'], 'set_user_permissions');
       expect(rec.body!['target_user_id'], 'u9');
       expect(rec.body!['permissions'], ['pos', 'reports']);
+    });
+
+    test('setUserPhone posts the canonical phone to set_user_phone', () async {
+      final rec = _Recorder()..reply = (_) => http.Response('{"ok":true}', 200);
+      final repo = CloudUserRepository(_clientWith(rec));
+      await repo.setUserPhone(
+        userId: 'u9',
+        phone: '0933-333-333',
+        actingUserId: 'u1',
+      );
+      expect(rec.body!['action'], 'set_user_phone');
+      expect(rec.body!['target_user_id'], 'u9');
+      expect(rec.body!['phone'], '0933333333');
+    });
+
+    test('createUser refuses a non-phone identifier locally', () async {
+      final rec = _Recorder();
+      final repo = CloudUserRepository(_clientWith(rec));
+      await expectLater(
+        repo.createUser('sam', 'secret1234', 'CASHIER'),
+        throwsA(predicate((e) => e.toString().contains('valid phone number'))),
+      );
+      expect(rec.body, isNull);
+    });
+
+    test('deleteUser posts the target to delete_user', () async {
+      final rec = _Recorder()
+        ..reply = (_) => http.Response('{"ok":true,"retained":false}', 200);
+      final repo = CloudUserRepository(_clientWith(rec));
+      await repo.deleteUser(targetUserId: 'u9', actingUserId: 'u1');
+      expect(rec.body!['action'], 'delete_user');
+      expect(rec.body!['target_user_id'], 'u9');
     });
   });
 
