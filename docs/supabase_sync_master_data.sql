@@ -158,6 +158,7 @@ DECLARE
   shift_id  text;
   cashier   text;
   device    text;
+  actor     text;
   mv        jsonb;
   vr        jsonb;
   us        jsonb;
@@ -198,6 +199,44 @@ BEGIN
       IF upper(rec.operation) = 'DELETE'
          AND rec.entity_type <> 'finance_category' THEN
         RAISE EXCEPTION 'A device cannot delete a cloud record.';
+      END IF;
+
+      -- A training account's money stays on the till that rang it up. Clients
+      -- enforce the same rule in `SyncOutbox`, but a till still running an older
+      -- build keeps pushing its demo sales, and once they are in the cloud they
+      -- are in every device's reports — so the gateway refuses them at the door
+      -- and marks the row APPLIED, which lets that outbox entry finally leave
+      -- the queue instead of being re-pushed on every sync. Master data is
+      -- deliberately not covered: the demo account's own row must keep syncing,
+      -- because that is how its login works on every device.
+      IF rec.entity_type IN (
+           'sale', 'shift', 'cash_movement', 'void_request', 'finance_entry') THEN
+        actor := COALESCE(
+          rec.payload->'sale'->>'cashier_id',
+          rec.payload->'shift'->>'cashier_id',
+          rec.payload->'cash_movement'->>'user_id',
+          rec.payload->'void_request'->>'requested_by',
+          rec.payload->'finance_entry'->>'created_by',
+          '');
+        -- A collection is two rows: the entry and the deposit that pays it. The
+        -- deposit is written by whoever completed it, so if that hand was the
+        -- demo account the entry has to stay too — otherwise the cloud keeps a
+        -- collection marked taken with no money behind it, the exact hole
+        -- `supabase_finance_movement_dedupe.sql` closed.
+        IF rec.entity_type = 'finance_entry'
+           AND NOT public.pos_is_demo(p_customer, actor) THEN
+          actor := COALESCE(
+            rec.payload->'finance_entry'->>'completed_by', '');
+        END IF;
+        IF public.pos_is_demo(p_customer, actor) THEN
+          skipped := skipped + 1;
+          UPDATE public.sync_mirror
+          SET apply_status = 'APPLIED', applied_at = now(),
+              apply_error = 'Training-account data stays on the till that made it.'
+          WHERE customer_id = p_customer
+            AND entity_type = rec.entity_type AND entity_id = rec.entity_id;
+          CONTINUE;
+        END IF;
       END IF;
 
       IF rec.entity_type = 'sale' THEN

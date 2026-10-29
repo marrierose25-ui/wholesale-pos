@@ -58,6 +58,24 @@ UPDATE pos_users SET permissions = '["pos", "register", "history"]'::jsonb
 -- unaffected.
 ALTER TABLE pos_users ADD COLUMN IF NOT EXISTS is_demo boolean NOT NULL DEFAULT false;
 
+-- What the flag is for, in one place: a training account's money is practice
+-- money, so every report and every drawer reconciliation leaves it out, and the
+-- sync gateway refuses it. Answers false for an unknown id — a sale whose
+-- cashier has no account row (yet) is real money and must never be hidden.
+CREATE OR REPLACE FUNCTION public.pos_is_demo(p_customer uuid, p_user text)
+RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = ''
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.pos_users u
+    WHERE u.customer_id = p_customer AND u.id = p_user AND u.is_demo
+  );
+$$;
+REVOKE ALL ON FUNCTION public.pos_is_demo(uuid, text)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.pos_is_demo(uuid, text) TO service_role;
+
 -- Account deletion (native schema v14 mirrors this). Only a deactivated account
 -- can be deleted. One that never recorded a sale, shift, cash movement, finance
 -- entry or void request is removed outright — freeing its phone number; one that
@@ -858,16 +876,19 @@ BEGIN
     'bank_sales', COALESCE(sum(CASE WHEN status = 'COMPLETED' AND payment_method = 'BANK' THEN total_minor_units ELSE 0 END), 0),
     'deposits', (SELECT COALESCE(sum(amount_minor_units), 0) FROM public.cash_movements
         WHERE customer_id = p_customer AND shift_id = p_shift_id AND type = 'DEPOSIT'
+          AND NOT public.pos_is_demo(p_customer, user_id)
           AND (p_start IS NULL OR created_at >= p_start)
           AND (p_end IS NULL OR created_at < p_end)),
     'withdrawals', (SELECT COALESCE(sum(amount_minor_units), 0) FROM public.cash_movements
         WHERE customer_id = p_customer AND shift_id = p_shift_id
           AND type IN ('WITHDRAWAL', 'EXPENSE')
+          AND NOT public.pos_is_demo(p_customer, user_id)
           AND (p_start IS NULL OR created_at >= p_start)
           AND (p_end IS NULL OR created_at < p_end))
   ) INTO res
   FROM public.sales
   WHERE customer_id = p_customer AND shift_id = p_shift_id
+    AND NOT public.pos_is_demo(p_customer, cashier_id)
     AND (p_start IS NULL OR created_at >= p_start)
     AND (p_end IS NULL OR created_at < p_end);
   RETURN COALESCE(res, '{}'::jsonb);
@@ -892,21 +913,27 @@ BEGIN
   SELECT jsonb_build_object(
     'cash_sales', (SELECT COALESCE(sum(total_minor_units), 0) FROM public.sales
         WHERE customer_id = p_customer AND shift_id = p_shift_id
-          AND status = 'COMPLETED' AND payment_method = 'CASH'),
+          AND status = 'COMPLETED' AND payment_method = 'CASH'
+          AND NOT public.pos_is_demo(p_customer, cashier_id)),
     'bank_sales', (SELECT COALESCE(sum(total_minor_units), 0) FROM public.sales
         WHERE customer_id = p_customer AND shift_id = p_shift_id
-          AND status = 'COMPLETED' AND payment_method = 'BANK'),
+          AND status = 'COMPLETED' AND payment_method = 'BANK'
+          AND NOT public.pos_is_demo(p_customer, cashier_id)),
     'voids', (SELECT COALESCE(sum(total_minor_units), 0) FROM public.sales
         WHERE customer_id = p_customer AND status = 'VOIDED'
+          AND NOT public.pos_is_demo(p_customer, cashier_id)
           AND (voided_shift_id = p_shift_id
                OR (shift_id = p_shift_id AND voided_shift_id IS NULL))),
     'deposits', (SELECT COALESCE(sum(amount_minor_units), 0) FROM public.cash_movements
-        WHERE customer_id = p_customer AND shift_id = p_shift_id AND type = 'DEPOSIT'),
+        WHERE customer_id = p_customer AND shift_id = p_shift_id AND type = 'DEPOSIT'
+          AND NOT public.pos_is_demo(p_customer, user_id)),
     'withdrawals', (SELECT COALESCE(sum(amount_minor_units), 0) FROM public.cash_movements
         WHERE customer_id = p_customer AND shift_id = p_shift_id
-          AND type IN ('WITHDRAWAL', 'EXPENSE')),
+          AND type IN ('WITHDRAWAL', 'EXPENSE')
+          AND NOT public.pos_is_demo(p_customer, user_id)),
     'cash_refunds', (SELECT COALESCE(sum(total_minor_units), 0) FROM public.sales
         WHERE customer_id = p_customer AND status = 'VOIDED' AND payment_method = 'CASH'
+          AND NOT public.pos_is_demo(p_customer, cashier_id)
           AND voided_shift_id = p_shift_id AND shift_id <> p_shift_id),
     'expected_cash', public.pos_expected_cash(p_customer, p_shift_id)
   ) INTO res;
@@ -953,15 +980,18 @@ BEGIN
 
   SELECT COALESCE(sum(total_minor_units), 0) INTO cash_total FROM public.sales
   WHERE customer_id = p_customer AND shift_id = p_shift_id
-    AND status = 'COMPLETED' AND payment_method = 'CASH';
+    AND status = 'COMPLETED' AND payment_method = 'CASH'
+    AND NOT public.pos_is_demo(p_customer, cashier_id);
 
   SELECT COALESCE(sum(CASE WHEN type = 'DEPOSIT' THEN amount_minor_units ELSE 0 END), 0),
          COALESCE(sum(CASE WHEN type IN ('WITHDRAWAL', 'EXPENSE') THEN amount_minor_units ELSE 0 END), 0)
   INTO dep, wdr FROM public.cash_movements
-  WHERE customer_id = p_customer AND shift_id = p_shift_id;
+  WHERE customer_id = p_customer AND shift_id = p_shift_id
+    AND NOT public.pos_is_demo(p_customer, user_id);
 
   SELECT COALESCE(sum(total_minor_units), 0) INTO refund FROM public.sales
   WHERE customer_id = p_customer AND status = 'VOIDED' AND payment_method = 'CASH'
+    AND NOT public.pos_is_demo(p_customer, cashier_id)
     AND voided_shift_id = p_shift_id AND shift_id <> p_shift_id;
 
   expected := shift_row.opening_cash_minor_units + cash_total + dep - wdr - refund;
@@ -1037,14 +1067,17 @@ BEGIN
     FROM public.shifts WHERE customer_id = p_customer AND id = p_shift_id;
   SELECT COALESCE(sum(total_minor_units), 0) INTO cash FROM public.sales
     WHERE customer_id = p_customer AND shift_id = p_shift_id
-      AND status = 'COMPLETED' AND payment_method = 'CASH';
+      AND status = 'COMPLETED' AND payment_method = 'CASH'
+      AND NOT public.pos_is_demo(p_customer, cashier_id);
   SELECT
     COALESCE(sum(CASE WHEN type = 'DEPOSIT' THEN amount_minor_units ELSE 0 END), 0),
     COALESCE(sum(CASE WHEN type IN ('WITHDRAWAL', 'EXPENSE') THEN amount_minor_units ELSE 0 END), 0)
   INTO dep, wdr FROM public.cash_movements
-    WHERE customer_id = p_customer AND shift_id = p_shift_id;
+    WHERE customer_id = p_customer AND shift_id = p_shift_id
+      AND NOT public.pos_is_demo(p_customer, user_id);
   SELECT COALESCE(sum(total_minor_units), 0) INTO refund FROM public.sales
     WHERE customer_id = p_customer AND status = 'VOIDED' AND payment_method = 'CASH'
+      AND NOT public.pos_is_demo(p_customer, cashier_id)
       AND voided_shift_id = p_shift_id AND shift_id <> p_shift_id;
   RETURN opening + cash + dep - wdr - refund;
 END;
@@ -1059,6 +1092,12 @@ GRANT EXECUTE ON FUNCTION pos_expected_cash TO service_role;
 -- any revenue figure and are not part of sales_count either — the average
 -- sale is revenue / sales_count, so counting them would dilute it (mirrors
 -- the native dashboard queries exactly).
+--
+-- Training-account money is left out of every figure below. A till running an
+-- older build still pushes its demo sales, and rows that arrived before the
+-- gateway learned to refuse them are still here — one shop held 1,700 demo sales
+-- against 427 real ones, so its dashboard reported three times the takings.
+-- Mirrored natively by `notDemoOperator()` in core/utils/report_filters.dart.
 CREATE OR REPLACE FUNCTION pos_sales_totals(
   p_customer uuid, p_start timestamptz, p_end timestamptz)
 RETURNS jsonb
@@ -1077,12 +1116,14 @@ BEGIN
       SELECT count(*) FROM public.void_requests vr
         JOIN public.sales s2 ON s2.customer_id = vr.customer_id AND s2.id = vr.sale_id
         WHERE vr.customer_id = p_customer AND vr.status = 'PENDING'
+          AND NOT public.pos_is_demo(p_customer, s2.cashier_id)
           AND (p_start IS NULL OR s2.created_at >= p_start)
           AND (p_end IS NULL OR s2.created_at < p_end)
     )
   ) INTO res
   FROM public.sales
   WHERE customer_id = p_customer AND status IN ('COMPLETED', 'VOIDED')
+    AND NOT public.pos_is_demo(p_customer, cashier_id)
     AND (p_start IS NULL OR created_at >= p_start)
     AND (p_end IS NULL OR created_at < p_end);
   RETURN COALESCE(res, '{}'::jsonb);
@@ -1110,6 +1151,7 @@ BEGIN
     FROM public.sales s
     WHERE s.customer_id = p_customer AND s.status = 'COMPLETED'
       AND s.payment_method IN ('CASH', 'BANK')
+      AND NOT public.pos_is_demo(p_customer, s.cashier_id)
       AND (p_start IS NULL OR s.created_at >= p_start)
       AND (p_end IS NULL OR s.created_at < p_end)
     GROUP BY 1
@@ -1139,6 +1181,7 @@ BEGIN
     JOIN public.sales s ON s.customer_id = it.customer_id AND s.id = it.sale_id
     WHERE it.customer_id = p_customer AND s.status = 'COMPLETED'
       AND s.payment_method IN ('CASH', 'BANK')
+      AND NOT public.pos_is_demo(p_customer, s.cashier_id)
       AND (p_start IS NULL OR s.created_at >= p_start)
       AND (p_end IS NULL OR s.created_at < p_end)
     GROUP BY 1
@@ -1167,6 +1210,9 @@ BEGIN
     FROM public.sales s
     WHERE s.customer_id = p_customer AND s.status = 'COMPLETED'
       AND s.payment_method IN ('CASH', 'BANK')
+      -- The training account is not an operator of the shop, so it never appears
+      -- as a row in the cashier league table either.
+      AND NOT public.pos_is_demo(p_customer, s.cashier_id)
       AND (p_start IS NULL OR s.created_at >= p_start)
       AND (p_end IS NULL OR s.created_at < p_end)
     GROUP BY 1
