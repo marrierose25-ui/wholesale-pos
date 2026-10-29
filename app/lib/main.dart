@@ -37,7 +37,16 @@ import 'features/users/user_management_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await _startup();
+  } catch (error, stackTrace) {
+    // ignore: avoid_print
+    print('STARTUP FAILURE: $error\n$stackTrace');
+    runApp(_StartupErrorApp(error, stackTrace));
+  }
+}
 
+Future<void> _startup() async {
   final db = await LocalDatabase.open();
   final productRepository = ProductRepository(db);
   final saleRepository = SaleRepository(db);
@@ -456,7 +465,17 @@ class _AuthWrapperState extends State<AuthWrapper> {
     // up a cashier who is standing at the till ready to sell.
     final runtime = widget.syncRuntime;
     if (runtime != null) {
-      unawaited(runtime.service.syncNow(forcePull: true));
+      unawaited(
+        runtime.service
+            .syncNow(forcePull: true)
+            .then<void>(
+              (_) {},
+              onError: (Object e) {
+                // ignore: avoid_print
+                print('Post-login sync failed: $e');
+              },
+            ),
+      );
     }
     final remember = await LocalDatabase.getSetting(
       widget.db,
@@ -568,7 +587,7 @@ class _MainLayoutState extends State<MainLayout> {
   /// true in the database.
   void _onSyncStatusChanged() {
     if ((_syncStatus?.value.applied ?? 0) <= 0) return;
-    _refreshDataScreens();
+    _loadScreen(_selectedIndex, silent: true);
   }
 
   /// Feature key at each nav position, rebuilt every frame from the account's
@@ -596,6 +615,22 @@ class _MainLayoutState extends State<MainLayout> {
     _reportsKey.currentState?.loadReports();
     _salesKey.currentState?.loadShift();
     _financeKey.currentState?.load(silent: true);
+  }
+
+  void _loadScreen(int index, {bool silent = false}) {
+    if (index < 0 || index >= _navFeatureKeys.length) return;
+    switch (_navFeatureKeys[index]) {
+      case 'dashboard':
+        _dashboardKey.currentState?.loadDashboard(silent: silent);
+      case 'pos':
+        _salesKey.currentState?.loadShift();
+      case 'register':
+        _registerKey.currentState?.loadData(silent: silent);
+      case 'finance':
+        _financeKey.currentState?.load(silent: silent);
+      case 'reports':
+        _reportsKey.currentState?.loadReports();
+    }
   }
 
   @override
@@ -788,8 +823,10 @@ class _MainLayoutState extends State<MainLayout> {
                     ),
                     const Divider(),
                     InkWell(
-                      onTap: () =>
-                          setState(() => _selectedIndex = settingsIndex),
+                      onTap: () {
+                        setState(() => _selectedIndex = settingsIndex);
+                        _loadScreen(settingsIndex, silent: true);
+                      },
                       child: Padding(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 20,
@@ -901,7 +938,10 @@ class _MainLayoutState extends State<MainLayout> {
   Widget _pillItem(_NavItem it) {
     final sel = _selectedIndex == it.index;
     return InkWell(
-      onTap: () => setState(() => _selectedIndex = it.index),
+      onTap: () {
+        setState(() => _selectedIndex = it.index);
+        _loadScreen(it.index, silent: true);
+      },
       borderRadius: BorderRadius.circular(AppDesign.radiusPill),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -932,7 +972,10 @@ class _MainLayoutState extends State<MainLayout> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: InkWell(
-        onTap: () => setState(() => _selectedIndex = index),
+        onTap: () {
+          setState(() => _selectedIndex = index);
+          _loadScreen(index, silent: true);
+        },
         borderRadius: BorderRadius.circular(12),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
@@ -1035,6 +1078,7 @@ class _MainLayoutState extends State<MainLayout> {
                       title: Text(item.label),
                       onTap: () {
                         setState(() => _selectedIndex = item.index);
+                        _loadScreen(item.index, silent: true);
                         Navigator.of(context).pop();
                       },
                     ),
@@ -1067,4 +1111,31 @@ class _ShellDestination {
   final Widget screen;
 
   const _ShellDestination(this.key, this.label, this.icon, this.screen);
+}
+
+/// Shown instead of a blank window if startup fails.
+class _StartupErrorApp extends StatelessWidget {
+  final Object error;
+  final StackTrace stackTrace;
+  const _StartupErrorApp(this.error, this.stackTrace);
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: Scaffold(
+        body: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Center(
+            child: SelectableText(
+              'Wholesale POS could not start.\n\n'
+              'Please screenshot this and send to support.\n'
+              'No data has been lost.\n\n'
+              '$error\n\n$stackTrace',
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

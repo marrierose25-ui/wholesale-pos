@@ -667,7 +667,9 @@ class SyncPullApplier {
         'reason': _str(row['reason']),
         'created_at': _localIso(row['created_at']) ?? _nowIso(),
         'user_id': userId,
-        'photo': _str(row['photo']),
+        'photo': ((_str(row['photo'])?.length ?? 0) <= 200 * 1024)
+            ? _str(row['photo'])
+            : null,
       });
     }
     return created;

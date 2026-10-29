@@ -39,3 +39,9 @@ app/.vercel-tmp/
 
 # Ad-hoc browser walkthrough screenshots (local verification artifacts).
 walkthrough_shots/
+/shots/
+/*.png
+
+# Agent-session leftovers: patch dumps and one-off fix scripts.
+/batch_*.txt
+/fix.ps1

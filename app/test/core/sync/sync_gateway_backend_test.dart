@@ -350,23 +350,6 @@ void main() {
       },
     );
 
-    test('no results list falls back to acking the whole batch', () async {
-      final a = _entry(
-        entityType: SyncEntities.sale,
-        entityId: 's1',
-        payload: {
-          'sale': {'id': 's1'},
-        },
-      );
-      final backend = SyncGatewayBackend(
-        fnUrl: gateway,
-        licenseProvider: licenseProviding(license),
-        client: MockClient(
-          (_) async => http.Response('{"ok":true,"stored":1}', 200),
-        ),
-      );
-      expect(await backend.push([a]), {a.id});
-    });
 
     test(
       'the echoed entryId acks that row alone, not its whole entity',

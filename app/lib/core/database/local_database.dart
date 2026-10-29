@@ -62,6 +62,27 @@ class LocalDatabase {
     );
   }
 
+  /// Ensures at most one OPEN shift. Older data may contain >1 if a
+  /// historical close bug left rows stuck; auto-close all but the newest.
+  static Future<void> _closeDuplicateOpenShifts(Database db) async {
+    final rows = await db.rawQuery(
+      "SELECT id, opened_at FROM shifts WHERE status = 'OPEN' ORDER BY opened_at ASC",
+    );
+    if (rows.length <= 1) return;
+    final now = DateTime.now().toUtc().toIso8601String();
+    for (var i = 0; i < rows.length - 1; i++) {
+      final id = rows[i]['id'] as String;
+      // ignore: avoid_print
+      print('MIGRATION: auto-closing stale duplicate open shift $id');
+      await db.update(
+        'shifts',
+        {'status': 'CLOSED', 'closed_at': now},
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    }
+  }
+
   /// Returns the stable ID of this installation. The ID is persisted next to
   /// the database so a restored backup can safely add the row back instead of
   /// attaching new sales to another machine's device record.
@@ -172,13 +193,20 @@ class LocalDatabase {
       await db.execute('ALTER TABLE sales ADD COLUMN voided_by TEXT');
       await db.execute('ALTER TABLE sales ADD COLUMN voided_shift_id TEXT');
       await db.execute('ALTER TABLE cash_movements ADD COLUMN user_id TEXT');
-      final openShifts = await db.rawQuery(
-        "SELECT COUNT(*) AS count FROM shifts WHERE status = 'OPEN'",
-      );
-      if ((openShifts.first['count'] as int) <= 1) {
+      try {
+        await _closeDuplicateOpenShifts(db);
+      } catch (e) {
+        // ignore: avoid_print
+        print('MIGRATION WARNING: could not close duplicate open shifts: $e');
+      }
+      try {
         await db.execute(
-          "CREATE UNIQUE INDEX one_open_shift ON shifts(status) WHERE status = 'OPEN'",
+          'CREATE UNIQUE INDEX IF NOT EXISTS one_open_shift '
+          "ON shifts(status) WHERE status = 'OPEN'",
         );
+      } catch (e) {
+        // ignore: avoid_print
+        print('MIGRATION WARNING: one_open_shift index failed: $e');
       }
       await db.execute('''
         CREATE TRIGGER prevent_second_open_shift_insert
@@ -440,13 +468,14 @@ class LocalDatabase {
   }
 
   static Future<void> _createIndexesAndTriggers(DatabaseExecutor db) async {
-    final openShifts = await db.rawQuery(
-      "SELECT COUNT(*) AS count FROM shifts WHERE status = 'OPEN'",
-    );
-    if ((openShifts.first['count'] as int) <= 1) {
+    try {
       await db.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS one_open_shift ON shifts(status) WHERE status = 'OPEN'",
+        'CREATE UNIQUE INDEX IF NOT EXISTS one_open_shift '
+        "ON shifts(status) WHERE status = 'OPEN'",
       );
+    } catch (e) {
+      // ignore: avoid_print
+      print('WARNING: one_open_shift index failed: $e');
     }
     await db.execute(
       'CREATE INDEX IF NOT EXISTS sales_shift_id ON sales(shift_id)',
