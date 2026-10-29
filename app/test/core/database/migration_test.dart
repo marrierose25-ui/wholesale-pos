@@ -1,9 +1,11 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:wholesale_pos_app/core/database/local_database.dart';
 import 'package:wholesale_pos_app/core/models/user.dart';
+import 'package:wholesale_pos_app/core/repositories/shift_repository.dart';
 
 void main() {
   late Directory tempDir;
@@ -633,6 +635,73 @@ void main() {
       )).single;
       expect(row['deleted_at'], isNull);
       expect(row['is_active'], 0);
+
+      await db.close();
+    },
+  );
+
+  test(
+    'Upgrades a v15 database to v16, moving proof photos into a BLOB table',
+    () async {
+      var db = await LocalDatabase.openAt(dbPath);
+      final now = DateTime.now().toIso8601String();
+      final jpeg = base64Encode(List<int>.generate(64, (i) => i));
+      await db.insert('users', {
+        'id': 'user-1',
+        'username': 'owner',
+        'password_hash': 'x',
+        'salt': 'x',
+        'role': 'OWNER',
+        'created_at': now,
+      });
+      await db.insert('shifts', {
+        'id': 'shift-1',
+        'cashier_id': 'user-1',
+        'opening_cash_minor_units': 0,
+        'status': 'OPEN',
+        'opened_at': now,
+      });
+      // v15 shape: the JPEG is base64 TEXT on the movement row.
+      await db.insert('cash_movements', {
+        'id': 'movement-1',
+        'shift_id': 'shift-1',
+        'user_id': 'user-1',
+        'type': 'WITHDRAWAL',
+        'amount_minor_units': 5000,
+        'reason': 'supplier',
+        'created_at': now,
+        'photo': jpeg,
+      });
+      await db.execute('DROP TABLE cash_movement_photos');
+      await db.execute('PRAGMA user_version = 15');
+      await db.close();
+
+      db = await LocalDatabase.openAt(dbPath);
+      final version = await db.rawQuery('PRAGMA user_version');
+      expect(version.first.values.first, LocalDatabase.schemaVersion);
+
+      final photos = await db.query('cash_movement_photos');
+      expect(photos, hasLength(1));
+      expect(photos.single['movement_id'], 'movement-1');
+      expect(photos.single['jpeg_bytes'], isA<List<int>>());
+      expect((photos.single['jpeg_bytes'] as List<int>).length, 64);
+
+      final movement = (await db.query(
+        'cash_movements',
+        where: 'id = ?',
+        whereArgs: ['movement-1'],
+      )).single;
+      expect(
+        movement['photo'],
+        isNull,
+        reason: 'v16 must clear the legacy base64 column',
+      );
+
+      // The ledger read still hands the view a base64 string to decode.
+      final ledger = await SqfliteShiftRepository(
+        db,
+      ).getCashMovements(shiftId: 'shift-1');
+      expect(ledger.single.photo, jpeg);
 
       await db.close();
     },

@@ -659,18 +659,31 @@ class SyncPullApplier {
       final shiftId = await _ensureShift(txn, row['shift_id']);
       final userId = _str(row['user_id']);
       if (userId != null) await _ensureUser(txn, userId);
+      final createdAt = _localIso(row['created_at']) ?? _nowIso();
       created += await _insert(txn, 'cash_movements', {
         'id': id,
         'shift_id': shiftId,
         'type': _str(row['type']) ?? 'CREDIT',
         'amount_minor_units': _int(row['amount_minor_units']),
         'reason': _str(row['reason']),
-        'created_at': _localIso(row['created_at']) ?? _nowIso(),
+        'created_at': createdAt,
         'user_id': userId,
-        'photo': ((_str(row['photo'])?.length ?? 0) <= 200 * 1024)
-            ? _str(row['photo'])
-            : null,
       });
+      // A push never carries the photo (it is stripped from the outbox
+      // payload), but an older cloud row may still hold the base64 copy. Keep
+      // it as a BLOB in the schema-16 table instead of the dead TEXT column.
+      final photo = _str(row['photo']);
+      if (photo != null && photo.isNotEmpty && photo.length <= 200 * 1024) {
+        try {
+          await txn.insert('cash_movement_photos', {
+            'movement_id': id,
+            'jpeg_bytes': base64Decode(photo),
+            'created_at': createdAt,
+          }, conflictAlgorithm: ConflictAlgorithm.ignore);
+        } catch (_) {
+          // A corrupt pulled photo must not fail the whole page.
+        }
+      }
     }
     return created;
   }

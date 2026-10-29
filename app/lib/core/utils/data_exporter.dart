@@ -56,6 +56,21 @@ class DataExporter {
     final voidRequests = await db.query('void_requests');
     final shifts = await db.query('shifts');
     final cashMovements = await db.query('cash_movements');
+    // Schema 16 keeps proof photos as BLOBs in their own table. Re-attach them
+    // as base64 on the exported movement rows so a backup taken now still
+    // restores its photos (the importer writes them back into the legacy
+    // column, which the ledger read falls back to).
+    final photos = await db.query('cash_movement_photos');
+    final photosByMovement = {
+      for (final row in photos)
+        row['movement_id'] as String: row['jpeg_bytes'],
+    };
+    for (final movement in cashMovements) {
+      final bytes = photosByMovement[movement['id']];
+      if (bytes is List<int> && bytes.isNotEmpty) {
+        movement['photo'] = base64Encode(bytes);
+      }
+    }
     final auditLogs = await db.query('audit_logs');
     final devices = await db.query('devices');
     final counters = await db.query('counters');

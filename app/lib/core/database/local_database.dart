@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -8,7 +9,7 @@ import 'package:uuid/uuid.dart';
 
 class LocalDatabase {
   static const String databaseName = 'wholesale_pos.db';
-  static const int schemaVersion = 15;
+  static const int schemaVersion = 16;
   static const String deviceIdFileName = 'device_id.txt';
   static const String themeSettingKey = 'theme_mode';
 
@@ -389,6 +390,52 @@ class LocalDatabase {
         await db.execute('ALTER TABLE users ADD COLUMN cloud_pw_salt TEXT');
       }
     }
+    if (oldVersion < 16) {
+      // Proof photos move out of the movement row into a BLOB table. Storing
+      // them as base64 TEXT on `cash_movements` inflated every ledger query and
+      // every backup by a third, and the row travelled with the photo attached
+      // everywhere it was read. The column is kept (nullable, no longer
+      // written) so an older build pointed at this file still opens it.
+      await _createCashMovementPhotosTable(db);
+      final pending = await db.rawQuery(
+        "SELECT id, photo FROM cash_movements "
+        "WHERE photo IS NOT NULL AND photo <> ''",
+      );
+      final now = DateTime.now().toUtc().toIso8601String();
+      for (final row in pending) {
+        try {
+          await db.insert('cash_movement_photos', {
+            'movement_id': row['id'] as String,
+            'jpeg_bytes': base64Decode(row['photo'] as String),
+            'created_at': now,
+          }, conflictAlgorithm: ConflictAlgorithm.ignore);
+        } catch (_) {
+          // A corrupt base64 payload keeps its legacy TEXT value: dropping the
+          // photo silently would be worse than leaving the row unmigrated.
+          continue;
+        }
+        await db.update(
+          'cash_movements',
+          {'photo': null},
+          where: 'id = ?',
+          whereArgs: [row['id']],
+        );
+      }
+    }
+  }
+
+  /// Proof photos are BLOBs in their own table (schema 16), one per movement.
+  /// `IF NOT EXISTS` keeps the upgrade idempotent and lets both the migration
+  /// and a fresh install share one definition.
+  static Future<void> _createCashMovementPhotosTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS cash_movement_photos (
+        movement_id TEXT PRIMARY KEY,
+        jpeg_bytes BLOB NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(movement_id) REFERENCES cash_movements(id) ON DELETE CASCADE
+      )
+    ''');
   }
 
   /// Schema 6 stored quantities as plain integers. Schema 7 keeps the exact
@@ -599,6 +646,15 @@ class LocalDatabase {
         photo TEXT,
         FOREIGN KEY(shift_id) REFERENCES shifts(id),
         FOREIGN KEY(user_id) REFERENCES users(id)
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE cash_movement_photos (
+        movement_id TEXT PRIMARY KEY,
+        jpeg_bytes BLOB NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(movement_id) REFERENCES cash_movements(id) ON DELETE CASCADE
       )
     ''');
 

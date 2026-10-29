@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
@@ -200,6 +202,7 @@ class SqfliteShiftRepository implements ShiftRepository {
         }
       }
       final movementId = const Uuid().v4();
+      final createdAt = DateTime.now().toIso8601String();
       await txn.insert('cash_movements', {
         'id': movementId,
         'shift_id': shiftId,
@@ -207,10 +210,18 @@ class SqfliteShiftRepository implements ShiftRepository {
         'type': type,
         'amount_minor_units': amount,
         'reason': reason.trim(),
-        'created_at': DateTime.now().toIso8601String(),
-        // Optional proof photo (base64 JPEG); null keeps the column empty.
-        'photo': photo,
+        'created_at': createdAt,
+        // The legacy TEXT column stays empty (schema 16): the JPEG lives as a
+        // BLOB in cash_movement_photos so ledger reads and backups stop
+        // carrying a base64 copy of every proof.
       });
+      if (photo != null && photo.isNotEmpty) {
+        await txn.insert('cash_movement_photos', {
+          'movement_id': movementId,
+          'jpeg_bytes': base64Decode(photo),
+          'created_at': createdAt,
+        });
+      }
       await txn.insert('audit_logs', {
         'id': const Uuid().v4(),
         'user_id': userId,
@@ -232,13 +243,24 @@ class SqfliteShiftRepository implements ShiftRepository {
     }
     final where = clauses.isEmpty ? '' : ' WHERE ${clauses.join(' AND ')}';
     final maps = await _db.rawQuery('''
-      SELECT cm.*, users.username AS user_name
+      SELECT cm.*, users.username AS user_name, cmp.jpeg_bytes AS photo_bytes
       FROM cash_movements cm
       LEFT JOIN users ON cm.user_id = users.id
+      LEFT JOIN cash_movement_photos cmp ON cmp.movement_id = cm.id
       $where
       ORDER BY cm.created_at DESC
     ''', args);
-    return maps.map(CashMovement.fromMap).toList();
+    return maps.map((row) {
+      final map = Map<String, dynamic>.from(row);
+      final bytes = map.remove('photo_bytes');
+      if (bytes is List<int> && bytes.isNotEmpty) {
+        // Re-encoded at the boundary so CashMovement keeps its transport shape
+        // (a base64 string the ledger view decodes for MemoryImage). A row that
+        // an older backup restored into the legacy TEXT column still reads.
+        map['photo'] = base64Encode(bytes);
+      }
+      return CashMovement.fromMap(map);
+    }).toList();
   }
 
   @override
