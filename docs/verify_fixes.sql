@@ -51,8 +51,11 @@ SELECT 'C8_setup_owner_race_guard',
             LIKE '%EXCEPTION WHEN unique_violation%' THEN 'PASS'
        ELSE 'FAIL: pos_setup_owner not updated' END
 UNION ALL
-SELECT 'C9_finance_delete_guard',
+SELECT 'C9_finance_delete_native_parity',
   CASE WHEN pg_get_functiondef('public.pos_delete_finance_category'::regproc)
-            LIKE '%completed financial entries%' THEN 'PASS'
-       ELSE 'FAIL: pos_delete_finance_category not updated' END
+            NOT LIKE '%completed financial entries%'
+       AND pg_get_functiondef('public.pos_delete_finance_category'::regproc)
+            LIKE '%Move the person to the recycle bin first%' THEN 'PASS'
+       ELSE 'FAIL: permanent delete must purge like native, guard must be gone'
+  END
 ;

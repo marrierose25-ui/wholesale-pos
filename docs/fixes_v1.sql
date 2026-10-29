@@ -331,7 +331,13 @@ END; $$;
 REVOKE ALL ON FUNCTION pos_setup_owner FROM public, anon, authenticated;
 GRANT EXECUTE ON FUNCTION pos_setup_owner TO service_role;
 
--- C9: pos_delete_finance_category — refuse if completed entries exist
+-- C9: pos_delete_finance_category — permanent delete of a binned person.
+-- REVERTED: this revision briefly added a "completed entries" block that the
+-- native SqfliteFinanceRepository.permanentlyDeleteCategory never had, so the
+-- Recycle Bin's Delete forever worked on Windows/Android but failed on the PWA.
+-- The bin confirmation dialog plus the FINANCE_CATEGORY_PERMANENTLY_DELETED
+-- audit line are the protection; the body must stay identical to
+-- docs/supabase_pos_integrity.sql 3f-2.
 CREATE OR REPLACE FUNCTION pos_delete_finance_category(
   p_customer uuid, p_id text, p_user text)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
@@ -342,13 +348,6 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'Person not found.'; END IF;
   IF cat.deleted_at IS NULL THEN
     RAISE EXCEPTION 'Move the person to the recycle bin first.'; END IF;
-
-  IF EXISTS (
-    SELECT 1 FROM public.pos_finance_entries
-    WHERE customer_id = p_customer AND category_id = p_id AND status = 'COMPLETED'
-  ) THEN
-    RAISE EXCEPTION 'Cannot delete: person has completed financial entries. Reconcile or archive them first.';
-  END IF;
 
   DELETE FROM public.pos_finance_entries
   WHERE customer_id = p_customer AND category_id = p_id;

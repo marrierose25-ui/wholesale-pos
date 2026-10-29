@@ -592,6 +592,10 @@ GRANT EXECUTE ON FUNCTION pos_complete_finance TO service_role;
 -- Entries and the person must leave together: the client used to send two
 -- separate requests, so a failure in between erased a person's ledger while
 -- the person stayed visible (audit 2 #15). Mirrors the native transaction.
+-- Deliberately NO "has completed entries" guard: native
+-- permanentlyDeleteCategory purges completed entries too, and the recycle bin
+-- is the single place a permanent delete may happen (behind its own confirm
+-- dialog) with the audit line as the record. A guard here only broke the PWA.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION pos_delete_finance_category(
   p_customer uuid,

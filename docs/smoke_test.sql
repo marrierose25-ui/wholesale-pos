@@ -148,7 +148,8 @@ BEGIN
     END IF;
   END;
 
-  -- T8: delete finance person with completed entries refused
+  -- T8: a binned person with completed entries purges in one call (native
+  -- parity: the recycle bin is the only permanent-delete path)
   BEGIN
     t_cat := gen_random_uuid()::text;
     INSERT INTO pos_finance_categories (id, customer_id, name, deleted_at, created_at)
@@ -160,13 +161,15 @@ BEGIN
       5000, 'CASH', 'COMPLETED', now()::date, now());
     BEGIN
       PERFORM pos_delete_finance_category(tc, t_cat, 'test-cashier');
-      RAISE NOTICE 'FAIL T8 deletion allowed'; failed := failed + 1;
-    EXCEPTION WHEN OTHERS THEN
-      IF SQLERRM LIKE '%completed financial entries%' THEN
-        RAISE NOTICE 'PASS T8 finance delete guard'; passed := passed + 1;
+      IF EXISTS (SELECT 1 FROM pos_finance_categories WHERE id = t_cat)
+         OR EXISTS (SELECT 1 FROM pos_finance_entries WHERE category_id = t_cat)
+      THEN
+        RAISE NOTICE 'FAIL T8 half delete'; failed := failed + 1;
       ELSE
-        RAISE NOTICE 'FAIL T8 wrong error: %', SQLERRM; failed := failed + 1;
+        RAISE NOTICE 'PASS T8 finance permanent delete'; passed := passed + 1;
       END IF;
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'FAIL T8 delete refused: %', SQLERRM; failed := failed + 1;
     END;
   EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE 'FAIL T8 setup error: %', SQLERRM; failed := failed + 1;
