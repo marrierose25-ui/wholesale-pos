@@ -350,7 +350,6 @@ void main() {
       },
     );
 
-
     test(
       'the echoed entryId acks that row alone, not its whole entity',
       () async {

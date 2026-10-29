@@ -8,6 +8,8 @@ import 'package:uuid/uuid.dart';
 
 import '../auth/features.dart';
 import '../models/user.dart';
+import '../sync/sync_outbox.dart';
+import '../sync/sync_outbox_entry.dart';
 import '../util/isolate_runner.dart'
     if (dart.library.io) '../util/isolate_runner_native.dart';
 import '../util/phone_number.dart';
@@ -346,11 +348,95 @@ class SqfliteUserRepository implements UserRepository {
   Future<void> _upgradePasswordHash(User user, String password) async {
     final salt = _generateSalt();
     final hash = await _hashPassword(password, salt);
-    await _db.update(
+    final cloud = await _cloudCredential(password, salt);
+    await _db.transaction((txn) async {
+      await txn.update(
+        'users',
+        {'password_hash': hash, 'salt': salt, ...cloud},
+        where: 'id = ?',
+        whereArgs: [user.id],
+      );
+      await _enqueueUser(txn, user.id);
+    });
+  }
+
+  /// The same password expressed in the format the web POS verifies:
+  /// `<iterations>$<base64>` derived over the DECODED salt bytes, with the salt
+  /// published as standard base64 (`pos-api` calls `atob` on it, which does not
+  /// read this app's base64url spelling).
+  ///
+  /// It is stored beside the local pair rather than instead of it. The two
+  /// derivations differ (salt text vs salt bytes), so one hash cannot serve both
+  /// surfaces, and the local pair must never be replaced by a value the login
+  /// path here cannot read. Publishing the cloud pair is what lets an account
+  /// created at the till sign in on the web.
+  ///
+  /// Returns nulls when the stored salt will not decode, which is the signal to
+  /// publish no credential at all rather than an unusable one.
+  Future<Map<String, String?>> _cloudCredential(
+    String password,
+    String salt,
+  ) async {
+    final saltBytes = _decodeSalt(salt);
+    if (saltBytes == null || saltBytes.isEmpty) {
+      return const <String, String?>{
+        'cloud_pw_hash': null,
+        'cloud_pw_salt': null,
+      };
+    }
+    final derived = await _deriveBytes(
+      password,
+      saltBytes,
+      UserRepository.defaultIterations,
+    );
+    return <String, String?>{
+      'cloud_pw_hash': '${UserRepository.defaultIterations}\$$derived',
+      'cloud_pw_salt': base64.encode(saltBytes),
+    };
+  }
+
+  /// Queues an account for the cloud, inside the caller's transaction.
+  ///
+  /// `password_hash`/`salt` are dropped: they are this app's own PBKDF2 shape,
+  /// unreadable by the web and private to the device. `cloud_pw_hash`/
+  /// `cloud_pw_salt` are published under the plain `pw_hash`/`pw_salt` names the
+  /// cloud schema signs people in with. An account with no cloud credential
+  /// rides without one and the server keeps whatever it already holds, so
+  /// deactivating a cashier here can never blank their browser password.
+  Future<void> _enqueueUser(DatabaseExecutor txn, String userId) async {
+    final rows = await txn.query(
       'users',
-      {'password_hash': hash, 'salt': salt},
       where: 'id = ?',
-      whereArgs: [user.id],
+      whereArgs: [userId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    await _enqueueUserRow(txn, userId, rows.first);
+  }
+
+  /// The body of [_enqueueUser], split out so a row about to be deleted locally
+  /// can still be published: the caller hands in the state it is writing.
+  Future<void> _enqueueUserRow(
+    DatabaseExecutor txn,
+    String userId,
+    Map<String, Object?> row,
+  ) async {
+    final out = Map<String, Object?>.from(row);
+    final cloudHash = out.remove('cloud_pw_hash');
+    final cloudSalt = out.remove('cloud_pw_salt');
+    out.remove('password_hash');
+    out.remove('salt');
+    out['pw_hash'] = cloudHash;
+    out['pw_salt'] = cloudSalt;
+    // `users` has no updated_at column. Every change that queues the row stamps
+    // it here, and the server applies newest-wins on that value — without it two
+    // surfaces editing one account would have no agreed order to resolve in.
+    out['updated_at'] = DateTime.now().toIso8601String();
+    await SyncOutbox.upsertRow(
+      txn,
+      entityType: SyncEntities.user,
+      entityId: userId,
+      row: out,
     );
   }
 
@@ -419,6 +505,7 @@ class SqfliteUserRepository implements UserRepository {
 
     final salt = _generateSalt();
     final hash = await _hashPassword(password, salt);
+    final cloud = await _cloudCredential(password, salt);
     final user = User(
       id: const Uuid().v4(),
       username: name,
@@ -434,7 +521,8 @@ class SqfliteUserRepository implements UserRepository {
       if ((existing.first['count'] as int) > 0) {
         throw Exception('An owner account already exists.');
       }
-      await txn.insert('users', user.toMap());
+      await txn.insert('users', {...user.toMap(), ...cloud});
+      await _enqueueUser(txn, user.id);
     });
 
     await _audit(
@@ -527,6 +615,7 @@ class SqfliteUserRepository implements UserRepository {
 
     final salt = _generateSalt();
     final hash = await _hashPassword(password, salt);
+    final cloud = await _cloudCredential(password, salt);
     final user = User(
       id: const Uuid().v4(),
       username: name,
@@ -555,16 +644,19 @@ class SqfliteUserRepository implements UserRepository {
         final revived = user.toMap()
           ..remove('id')
           ..remove('created_at')
-          ..['deleted_at'] = null;
+          ..['deleted_at'] = null
+          ..addAll(cloud);
         await txn.update(
           'users',
           revived,
           where: 'id = ?',
           whereArgs: [row['id']],
         );
+        await _enqueueUser(txn, row['id'] as String);
         return;
       }
-      await txn.insert('users', user.toMap());
+      await txn.insert('users', {...user.toMap(), ...cloud});
+      await _enqueueUser(txn, user.id);
     });
 
     await _audit(
@@ -753,12 +845,15 @@ class SqfliteUserRepository implements UserRepository {
       throw Exception('Owner accounts bypass feature permissions.');
     }
     final normalized = normalizeFeatureKeys(permissions);
-    await _db.update(
-      'users',
-      {'permissions': jsonEncode(normalized)},
-      where: 'id = ?',
-      whereArgs: [userId],
-    );
+    await _db.transaction((txn) async {
+      await txn.update(
+        'users',
+        {'permissions': jsonEncode(normalized)},
+        where: 'id = ?',
+        whereArgs: [userId],
+      );
+      await _enqueueUser(txn, userId);
+    });
     await _audit(
       userId: userId,
       action: 'USER_PERMISSIONS_SET',
@@ -808,12 +903,15 @@ class SqfliteUserRepository implements UserRepository {
     if (clash.isNotEmpty) {
       throw Exception('That phone number is already in use.');
     }
-    await _db.update(
-      'users',
-      {'username': canonical},
-      where: 'id = ?',
-      whereArgs: [userId],
-    );
+    await _db.transaction((txn) async {
+      await txn.update(
+        'users',
+        {'username': canonical},
+        where: 'id = ?',
+        whereArgs: [userId],
+      );
+      await _enqueueUser(txn, userId);
+    });
     await _audit(
       userId: actingUserId,
       action: 'USER_PHONE_CHANGED',
@@ -941,6 +1039,7 @@ class SqfliteUserRepository implements UserRepository {
             '${active ? 'activated' : 'deactivated'}.',
         'created_at': DateTime.now().toIso8601String(),
       });
+      await _enqueueUser(txn, targetUserId);
     });
   }
 
@@ -1015,7 +1114,16 @@ class SqfliteUserRepository implements UserRepository {
           where: 'id = ?',
           whereArgs: [targetUserId],
         );
+        await _enqueueUser(txn, targetUserId);
       } else {
+        // The row had no history here, so it is dropped outright. The cloud
+        // still gets the bin rather than a DELETE: this device can only prove
+        // the account is record-free in its own ledger, and the tenant's other
+        // registers may hold sales for it. A binned row hides from every
+        // browser list the same way a deleted one does.
+        final binned = Map<String, Object?>.from(targets.first)
+          ..['deleted_at'] = DateTime.now().toIso8601String();
+        await _enqueueUserRow(txn, targetUserId, binned);
         await txn.delete('users', where: 'id = ?', whereArgs: [targetUserId]);
       }
       await txn.insert('audit_logs', {

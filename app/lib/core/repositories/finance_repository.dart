@@ -242,6 +242,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
         throw Exception('A person named "$trimmed" already exists.');
       }
       await txn.insert('finance_categories', category.toMap());
+      await _enqueueCategory(txn, category.id);
       await _audit(
         txn,
         ownerId,
@@ -289,6 +290,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
         where: 'id = ?',
         whereArgs: [categoryId],
       );
+      await _enqueueCategory(txn, categoryId);
       await _audit(
         txn,
         ownerId,
@@ -327,6 +329,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
         where: 'id = ?',
         whereArgs: [categoryId],
       );
+      await _enqueueCategory(txn, categoryId);
       await _audit(
         txn,
         ownerId,
@@ -361,6 +364,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
         where: 'id = ?',
         whereArgs: [categoryId],
       );
+      await _enqueueCategory(txn, categoryId);
       await _audit(
         txn,
         ownerId,
@@ -401,6 +405,16 @@ class SqfliteFinanceRepository implements FinanceRepository {
         where: 'id = ?',
         whereArgs: [categoryId],
       );
+      // The purge has to reach the cloud too, or the person the till deleted
+      // keeps a home on the web. A DELETE entry is applied through
+      // `pos_delete_finance_category` — the same RPC the PWA's own permanent
+      // delete calls — so the server re-checks that the row is binned and
+      // removes its entries rather than trusting this device's word.
+      await SyncOutbox.delete(
+        txn,
+        entityType: SyncEntities.financeCategory,
+        entityId: categoryId,
+      );
       await _audit(
         txn,
         ownerId,
@@ -408,6 +422,56 @@ class SqfliteFinanceRepository implements FinanceRepository {
         'Person "$name" and their entries permanently deleted.',
       );
     });
+  }
+
+  // ------------------------------------------------------------------
+  // Outbox
+  // ------------------------------------------------------------------
+
+  /// Queues a person for the cloud, inside the caller's transaction. Read back
+  /// rather than serialised from the model so the payload carries exactly what
+  /// committed, `updated_at` included — the stamp the server compares against
+  /// when the same person was edited on two surfaces.
+  static Future<void> _enqueueCategory(
+    DatabaseExecutor txn,
+    String categoryId,
+  ) async {
+    final rows = await txn.query(
+      'finance_categories',
+      where: 'id = ?',
+      whereArgs: [categoryId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    await SyncOutbox.upsertRow(
+      txn,
+      entityType: SyncEntities.financeCategory,
+      entityId: categoryId,
+      row: rows.first,
+    );
+  }
+
+  /// Queues one collection. A mark-completed is the important case: the entry
+  /// row changes status and a cash deposit rides with it, so both halves have
+  /// to leave this device together or the web shows a completed collection with
+  /// no movement against the drawer.
+  static Future<void> _enqueueEntry(
+    DatabaseExecutor txn,
+    String entryId,
+  ) async {
+    final rows = await txn.query(
+      'finance_entries',
+      where: 'id = ?',
+      whereArgs: [entryId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    await SyncOutbox.upsertRow(
+      txn,
+      entityType: SyncEntities.financeEntry,
+      entityId: entryId,
+      row: rows.first,
+    );
   }
 
   // ------------------------------------------------------------------
@@ -495,6 +559,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
       await _requireFinanceAccess(txn, ownerId);
       final category = await _requireCategory(txn, categoryId);
       await txn.insert('finance_entries', entry.toMap());
+      await _enqueueEntry(txn, entry.id);
       await _audit(
         txn,
         ownerId,
@@ -556,6 +621,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
         where: 'id = ? AND status = ?',
         whereArgs: [entryId, FinanceEntry.statusPending],
       );
+      await _enqueueEntry(txn, entryId);
       await _audit(
         txn,
         ownerId,
@@ -603,6 +669,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
       if (updated != 1) {
         throw Exception('Entry is no longer pending.');
       }
+      await _enqueueEntry(txn, entryId);
       // A cash collection physically puts money into the drawer, so deposit it
       // onto the open (perpetual) shift. Bank/non-cash collections never touch
       // the register. If no shift is open we create one so the deposit lands.

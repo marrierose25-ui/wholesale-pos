@@ -5,6 +5,17 @@ import 'sync_outbox_repository.dart';
 import 'sync_pull_applier.dart';
 import 'sync_status.dart';
 
+/// The one place the sync engine's cadence is written down.
+///
+/// Three seconds is the interval every surface runs on: the native drain loop
+/// in `main.dart`, the pull throttle below, and the manual "sync now" the
+/// operator can press. It is short enough that a sale on one register shows on
+/// another inside a blink, and safe only because [SyncService.syncNow] refuses
+/// to overlap itself — a slow cycle is skipped, not queued behind a second one.
+abstract final class SyncIntervals {
+  static const Duration cycle = Duration(seconds: 3);
+}
+
 /// Outcome of one drain attempt.
 class SyncResult {
   final int pushed;
@@ -54,9 +65,10 @@ class SyncService {
   /// How often the download half is allowed to run.
   ///
   /// Pushing is cheap and event-driven (one call, only when the outbox holds
-  /// rows); pulling costs one request per cloud table, so it runs on a slower
-  /// cadence. Every sign-in forces it ([syncNow] with `forcePull`), which is the
-  /// moment the operator actually expects the whole shop's history.
+  /// rows); pulling costs one request per cloud table. Both now run on
+  /// [SyncIntervals.cycle] so a change made anywhere in the shop is visible
+  /// here within seconds — sign-in still forces it ([syncNow] with `forcePull`),
+  /// which is the moment the operator actually expects the whole shop's history.
   final Duration pullInterval;
 
   /// Live view of the loop, for the UI. A [ValueNotifier] so a settings screen
@@ -71,13 +83,20 @@ class SyncService {
   /// out-of-order overwrite the outbox's ASC ordering exists to prevent. While
   /// one drain is running, concurrent calls return idle — the still-queued rows
   /// are picked up by the very next trigger.
+  ///
+  /// This guard is what makes a [SyncIntervals.cycle]-short timer safe. A full
+  /// cycle is a push, a pull of every cloud table and the writes they cause,
+  /// so it can outlast three seconds on a slow connection. Without the guard,
+  /// two drains would interleave on the same SQLite file — concurrent writers
+  /// inside one `db.transaction` fail with locking errors, and the second one
+  /// would re-send rows the first had already queued but not yet acked.
   bool _inFlight = false;
 
   SyncService(
     this._outbox,
     this._backend, {
     this.puller,
-    this.pullInterval = const Duration(minutes: 2),
+    this.pullInterval = SyncIntervals.cycle,
   }) : status = ValueNotifier(SyncStatus(configured: _backend.isConfigured));
 
   Future<SyncResult> syncNow({

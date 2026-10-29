@@ -88,7 +88,12 @@ Future<void> _startup() async {
   );
   final outbox = SyncOutboxRepository(db);
   final puller = CloudSyncPuller(backend: syncBackend, db: db);
-  final syncService = SyncService(outbox, syncBackend, puller: puller);
+  final syncService = SyncService(
+    outbox,
+    syncBackend,
+    puller: puller,
+    pullInterval: SyncIntervals.cycle,
+  );
   final runtime = SyncRuntime(service: syncService, puller: puller);
   if (syncBackend.isConfigured) {
     _startSyncLoop(syncService, outbox);
@@ -113,11 +118,16 @@ Future<void> _startup() async {
 
 /// Everything the UI needs from the sync engine (see [SyncRuntime]).
 /// Drains the outbox to the cloud on a timer. The first attempt runs on
-/// startup (to catch anything queued while offline); then every 30 seconds —
-/// which pushes immediately and pulls on its own (slower) cadence, see
-/// [SyncService.pullInterval]. Any error (offline, backend down) is swallowed:
-/// rows stay queued and the next tick retries, so syncing can never crash the
-/// register.
+/// startup (to catch anything queued while offline); then every
+/// [SyncIntervals.cycle] — which pushes and pulls on the same cadence, so a
+/// sale recorded on one register is on every other screen within seconds.
+///
+/// The tick only *requests* a drain. [SyncService.syncNow] holds a
+/// single-flight guard, so a cycle still running when the next tick arrives
+/// returns idle instead of starting a second drain: two overlapping drains
+/// would interleave SQLite writes on the same transaction and re-order the
+/// outbox the queue exists to sequence. Errors are swallowed: rows stay queued
+/// and the next tick retries, so syncing can never crash the register.
 void _startSyncLoop(SyncService service, SyncOutboxRepository outbox) {
   Future<void> drain() async {
     try {
@@ -130,7 +140,7 @@ void _startSyncLoop(SyncService service, SyncOutboxRepository outbox) {
 
   drain();
   // The event loop holds the repeating timer for the life of the process.
-  Timer.periodic(const Duration(seconds: 30), (_) => drain());
+  Timer.periodic(SyncIntervals.cycle, (_) => drain());
 }
 
 class WholesalePosApp extends StatefulWidget {

@@ -9,8 +9,7 @@ import 'dart:convert';
 /// selling with no network, and nothing is ever lost if the sync fails.
 class SyncOutboxEntry {
   final String id;
-  final String
-  entityType; // 'sale' | 'shift' | 'cash_movement' | 'void_request'
+  final String entityType;
   final String entityId; // id of the affected row
   final String operation; // 'UPSERT' | 'DELETE'
   final String payloadJson; // serialized aggregate (row + children)
@@ -49,11 +48,48 @@ class SyncOutboxEntry {
 
 /// Entity types written to the outbox. Kept as constants so producers and the
 /// future backend agree on the vocabulary.
+///
+/// Two families, and the server treats them differently:
+///
+///   * **Ledger** ([sale], [shift], [cashMovement], [voidRequest]) is append-
+///     only. The gateway stages each entity once and `pos_sync_apply` replays
+///     it through the same RPCs the tills call, so a device can never restate
+///     money it has already booked.
+///   * **Master data** ([user], [product], [financeCategory], [financeEntry])
+///     is mutable: a rename, a re-ticked permission, a collection marked
+///     taken. These are re-staged on every change and applied newest-wins, so
+///     the cloud copy tracks the row instead of freezing at creation.
 abstract final class SyncEntities {
   static const String sale = 'sale';
   static const String shift = 'shift';
   static const String cashMovement = 'cash_movement';
   static const String voidRequest = 'void_request';
+  static const String user = 'user';
+  static const String product = 'product';
+  static const String financeCategory = 'finance_category';
+  static const String financeEntry = 'finance_entry';
+
+  /// Master data: the newest payload wins, so a later edit of the same id must
+  /// replace what is already staged rather than be dropped as a duplicate.
+  static const Set<String> mutable = {
+    user,
+    product,
+    financeCategory,
+    financeEntry,
+  };
+
+  /// Payload key each entity type is filed under, so the gateway and the
+  /// server-side apply agree on one shape without a per-type branch.
+  static const Map<String, String> payloadKeys = {
+    sale: 'sale',
+    shift: 'shift',
+    cashMovement: 'cash_movement',
+    voidRequest: 'void_request',
+    user: 'user',
+    product: 'product',
+    financeCategory: 'finance_category',
+    financeEntry: 'finance_entry',
+  };
 }
 
 abstract final class SyncOperations {

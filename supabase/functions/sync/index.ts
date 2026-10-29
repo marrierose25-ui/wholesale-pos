@@ -34,11 +34,15 @@
 //   { action: 'ping', license: '<licenseCode>' }
 //     -> { ok, customer_id, seats_active }  (cheap connectivity/auth probe)
 //
-// Staging, not writing (audit 2 #2): a push only ever APPENDS to
-// `sync_mirror`. `pos_sync_apply` then promotes pending entries through the
-// same RPCs the tills use (`pos_create_sale`, `pos_add_cash_movement`), so a
-// device can neither publish totals it chose nor delete a cloud row — a
-// DELETE entry is stored and rejected. See docs/supabase_sync_mirror.sql.
+// Staging, not writing (audit 2 #2): a push never writes an operational table.
+//   * A LEDGER entry only APPENDS to `sync_mirror`, and pos_sync_apply promotes
+//     it through the same RPCs the tills use (`pos_create_sale`,
+//     `pos_add_cash_movement`), so a device can neither publish totals it chose
+//     nor delete a cloud row.
+//   * MASTER data (accounts, saved names, the money tracker) is mutable, so a
+//     newer version of the same row re-stages over the stale one and pos_sync_apply
+//     resolves the race on `updated_at` — see docs/supabase_sync_mirror.sql and
+//     docs/supabase_sync_master_data.sql.
 
 import { ed25519 } from 'https://esm.sh/@noble/curves@1.4.0/ed25519';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
@@ -63,13 +67,31 @@ const PULL_TABLES: Record<string, { from: string; select: string }> = {
   users: {
     from: 'pos_users',
     select:
-      'id, username, role, active, pw_salt, pw_hash, permissions, is_demo, deleted_at, created_at, received_at',
+      'id, username, role, active, pw_salt, pw_hash, permissions, is_demo, deleted_at, created_at, updated_at, received_at',
+  },
+  // Saved names are read off the till's own screen, so the browser's edits have
+  // to reach it. `updated_at` is what the device compares to decide which of
+  // its copy and the cloud's is stale.
+  products: {
+    from: 'pos_products',
+    select:
+      'id, name, code, category, unit, selling_price_minor_units, is_active, created_at, updated_at, received_at',
   },
   shifts: { from: 'shifts', select: '*' },
   sales: { from: 'sales', select: '*' },
   sale_items: { from: 'sale_items', select: '*' },
   cash_movements: { from: 'cash_movements', select: '*' },
   void_requests: { from: 'void_requests', select: '*' },
+  finance_categories: {
+    from: 'pos_finance_categories',
+    select: 'id, name, created_at, updated_at, deleted_at, received_at',
+  },
+  finance_entries: {
+    from: 'pos_finance_entries',
+    select:
+      'id, category_id, source, amount_minor_units, description, status, entry_date, ' +
+      'created_at, created_by, completed_at, completed_by, updated_at, payment_method, received_at',
+  },
 };
 const TABLES = Object.keys(PULL_TABLES);
 
@@ -86,7 +108,29 @@ const ENTITY_ALIAS: Record<string, string> = {
   shift: 'shift',
   cash_movement: 'cash_movement',
   void_request: 'void_request',
+  users: 'user',
+  user: 'user',
+  products: 'product',
+  product: 'product',
+  finance_categories: 'finance_category',
+  finance_category: 'finance_category',
+  finance_entries: 'finance_entry',
+  finance_entry: 'finance_entry',
 };
+
+// Master data, i.e. everything a shop EDITS after creating. A ledger row is
+// staged once and never restated (`ignoreDuplicates: true` keeps that true even
+// if a device re-pushes a sale with a modified payload). A mutable row is the
+// opposite: the second edit must REPLACE the first copy in the mirror and re-enter
+// the apply pass, or the device's outbox would be acked while the cloud kept the
+// older version forever. Two surfaces editing one account/saved name resolve in
+// `pos_sync_apply` on `updated_at`, not on who staged last.
+const MUTABLE_ENTITIES = new Set([
+  'user',
+  'product',
+  'finance_category',
+  'finance_entry',
+]);
 
 // Max outbox entries accepted in one push batch (abuse guard).
 const MAX_BATCH = 500;
@@ -278,17 +322,33 @@ async function push(db: any, auth: { customerId: string; fingerprint: string }, 
       continue;
     }
 
-    // Append-only. An entity that is already staged (pending or already
-    // applied) is left untouched, so a replay cannot overwrite an applied row
-    // with a different payload.
-    const ins = await db.from('sync_mirror').upsert({
+    // Append-only for the ledger. An entity that is already staged (pending or
+    // already applied) is left untouched, so a replay cannot overwrite an applied
+    // row with a different payload.
+    //
+    // Mutable master data is the reverse: the new version replaces the old copy
+    // and is pushed back through the apply pass (`apply_status = 'PENDING'`),
+    // otherwise the device would be told 'stored' for a row the cloud had already
+    // applied and its edit would be silently dropped.
+    const mutable = MUTABLE_ENTITIES.has(entityType);
+    const staging: Record<string, unknown> = {
       customer_id: auth.customerId,
       entity_type: entityType,
       entity_id: entityId,
       operation: String(entry.operation ?? 'UPSERT').toUpperCase(),
       device_id: auth.fingerprint,
       payload: entry.payload ?? {},
-    }, { onConflict: 'customer_id,entity_type,entity_id', ignoreDuplicates: true });
+    };
+    if (mutable) {
+      staging.received_at = new Date().toISOString();
+      staging.apply_status = 'PENDING';
+      staging.apply_error = null;
+      staging.applied_at = null;
+    }
+    const ins = await db.from('sync_mirror').upsert(staging, {
+      onConflict: 'customer_id,entity_type,entity_id',
+      ignoreDuplicates: !mutable,
+    });
     if (ins.error) {
       results.push({ entryId, entityId, status: 'failed', error: ins.error.message });
       continue;

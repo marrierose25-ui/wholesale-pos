@@ -19,6 +19,13 @@ class SyncApplyReport {
   final int voidRequests;
   final int users;
   final int devices;
+
+  /// Master data the shop keeps on every device: saved names and the
+  /// owner's money tracker. Counted separately from the ledger because a
+  /// re-applied edit is a normal steady state, not a new transaction.
+  final int products;
+  final int financeCategories;
+  final int financeEntries;
   final int skipped;
 
   const SyncApplyReport({
@@ -29,6 +36,9 @@ class SyncApplyReport {
     this.voidRequests = 0,
     this.users = 0,
     this.devices = 0,
+    this.products = 0,
+    this.financeCategories = 0,
+    this.financeEntries = 0,
     this.skipped = 0,
   });
 
@@ -41,7 +51,10 @@ class SyncApplyReport {
       cashMovements +
       voidRequests +
       users +
-      devices;
+      devices +
+      products +
+      financeCategories +
+      financeEntries;
 
   SyncApplyReport operator +(SyncApplyReport other) => SyncApplyReport(
     sales: sales + other.sales,
@@ -51,6 +64,9 @@ class SyncApplyReport {
     voidRequests: voidRequests + other.voidRequests,
     users: users + other.users,
     devices: devices + other.devices,
+    products: products + other.products,
+    financeCategories: financeCategories + other.financeCategories,
+    financeEntries: financeEntries + other.financeEntries,
     skipped: skipped + other.skipped,
   );
 
@@ -60,7 +76,9 @@ class SyncApplyReport {
   String toString() =>
       'SyncApplyReport(sales: $sales, items: $saleItems, shifts: $shifts, '
       'cash: $cashMovements, voids: $voidRequests, users: $users, '
-      'devices: $devices, skipped: $skipped)';
+      'devices: $devices, products: $products, '
+      'persons: $financeCategories, entries: $financeEntries, '
+      'skipped: $skipped)';
 }
 
 /// Writes cloud rows into the local ledger so a device that signs in sees every
@@ -114,10 +132,24 @@ class SyncPullApplier {
         voids = 0,
         users = 0,
         devices = 0,
+        products = 0,
+        persons = 0,
+        entries = 0,
         skipped = 0;
 
     await db.transaction((txn) async {
       users = await _applyUsers(txn, page.changes['users'] ?? const []);
+      // Master data lands before anything that points at it: a pulled
+      // collection names a person, and a person the owner created in the
+      // browser has to exist here or the entry fails its foreign key.
+      products = await _applyProducts(
+        txn,
+        page.changes['products'] ?? const [],
+      );
+      persons = await _applyFinanceCategories(
+        txn,
+        page.changes['finance_categories'] ?? const [],
+      );
       devices = await _ensureDevices(txn, page.changes);
       shifts = await _applyShifts(txn, page.changes['shifts'] ?? const []);
       final applied = await _applySales(txn, page.changes['sales'] ?? const []);
@@ -137,6 +169,10 @@ class SyncPullApplier {
         txn,
         page.changes['void_requests'] ?? const [],
       );
+      entries = await _applyFinanceEntries(
+        txn,
+        page.changes['finance_entries'] ?? const [],
+      );
     });
 
     // Conflicts are the only thing a caller can act on; keep them visible.
@@ -150,6 +186,9 @@ class SyncPullApplier {
       voidRequests: voids,
       users: users,
       devices: devices,
+      products: products,
+      financeCategories: persons,
+      financeEntries: entries,
       skipped: skipped,
     );
   }
@@ -221,13 +260,22 @@ class SyncPullApplier {
       }
 
       var username = _str(row['username']) ?? '';
-      if (username.isEmpty) username = 'user-$id';
-      // `users.username` is UNIQUE and holds the login identifier (a phone
-      // number). The same person may already exist on this device under a
-      // different id, created here rather than in the cloud. Keep the local
-      // account's login intact and make the pulled copy unambiguous.
-      if (!await _usernameFree(txn, username)) {
-        username = '$username#${_short(id, 6)}';
+      // The login name IS the person: usernames are phone numbers and unique per
+      // shop on both surfaces. A till registered the shop and the browser
+      // registered it too, so the same human exists twice — once per surface,
+      // under two ids. Inserting the cloud copy here would show the owner two
+      // owner accounts on the Users screen and split the cashier's history.
+      // Adopt it onto the account already here instead: the id stays this
+      // device's own, and only what the cloud owns (the credential, the role,
+      // the ticks, whether it may sign in at all) is refreshed onto it.
+      if (username.isNotEmpty) {
+        final twin = await _twinForUsername(txn, username);
+        if (twin != null) {
+          await _refreshUserState(txn, twin, row, credential);
+          continue;
+        }
+      } else {
+        username = 'user-$id';
       }
 
       final permissions = row['permissions'];
@@ -256,11 +304,10 @@ class SyncPullApplier {
   /// here: the credential, the role, the feature ticks, whether it may sign in
   /// at all, and whether it was deleted.
   ///
-  /// A till never uploads `users`, so for an account that exists in both places
-  /// the browser copy is the only one an owner can edit — the one place they
-  /// revoke, retick or delete staff. Skipping these fields meant a cashier
-  /// switched off in the browser could still sign in on every till that had
-  /// already pulled them, forever.
+  /// A till now uploads the accounts it created, so this is the merge half of
+  /// that: an edit made in the browser (revoke, retick, reset password) has to
+  /// reach every register, or a cashier switched off on the web could still sign
+  /// in on a till that had already pulled them, forever.
   Future<void> _refreshUserState(
     Transaction txn,
     String id,
@@ -354,10 +401,9 @@ class SyncPullApplier {
     return id;
   }
 
-  /// The cashier a pulled row names, created on demand. `users` is never
-  /// uploaded from a till, so a cashier account created on another register
-  /// exists only there — the sale still has to land here, with a row that can
-  /// satisfy `sales.cashier_id`.
+  /// The cashier a pulled row names, created on demand. Accounts are uploaded
+  /// now, but a sale recorded before this till ever saw the cashier still has to
+  /// land here, and `sales.cashier_id` is a NOT NULL foreign key.
   ///
   /// The placeholder is inactive and soft-deleted on purpose: it resolves the
   /// foreign key and names the cashier in history, but it can never sign in and
@@ -370,7 +416,7 @@ class SyncPullApplier {
     var username = id == unknownUserId
         ? 'cashier-unknown'
         : 'cashier-${_short(id, 8)}';
-    if (!await _usernameFree(txn, username)) {
+    if (await _twinForUsername(txn, username) != null) {
       username = '$username-${DateTime.now().microsecondsSinceEpoch}';
     }
     await _insert(txn, 'users', {
@@ -748,6 +794,207 @@ class SyncPullApplier {
   }
 
   // ---------------------------------------------------------------------------
+  // Master data: mutable rows, applied newest-wins.
+  //
+  // The ledger rule ("a local row is never overwritten") exists because a sale
+  // is immutable money and a stale page must not restate it. A saved name, a
+  // person or a collection is the opposite: the shop edits them from whichever
+  // screen is nearest, so the copy that is simply older is the one that loses.
+  // `updated_at` decides, and an entity this device has not finished uploading
+  // is left alone — its own edit is the newer one.
+  // ---------------------------------------------------------------------------
+
+  Future<int> _applyProducts(
+    Transaction txn,
+    List<Map<String, dynamic>> rows,
+  ) async {
+    var count = 0;
+    for (final row in rows) {
+      final id = _str(row['id']);
+      if (id == null || id.isEmpty) continue;
+      final name = _str(row['name']);
+      if (name == null || name.isEmpty) continue;
+
+      // `products.code` is NOT NULL and UNIQUE here, while the browser leaves
+      // a saved name without a barcode. The id is a stable stand-in: unique by
+      // construction. A code that another product here already claims moves to
+      // the same stand-in, or the UNIQUE index would refuse the whole row and
+      // the name would keep its stale price.
+      var code = _str(row['code']) ?? id;
+      if (code != id && await _codeTaken(txn, code, id)) code = id;
+      final values = <String, Object?>{
+        'id': id,
+        'name': name,
+        'code': code,
+        'category': _str(row['category']),
+        'unit': _str(row['unit']) ?? '',
+        'selling_price_minor_units': _int(row['selling_price_minor_units']),
+        'is_active': row['is_active'] == 0 ? 0 : 1,
+        'created_at': _localIso(row['created_at']) ?? _nowIso(),
+        'updated_at': _localIso(row['updated_at']) ?? _nowIso(),
+      };
+
+      if (!await _exists(txn, 'products', id)) {
+        count += await _insert(txn, 'products', values);
+        continue;
+      }
+      if (await _hasPending(txn, 'product', id)) continue;
+      final local = await txn.query(
+        'products',
+        columns: const ['updated_at'],
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (local.isEmpty ||
+          !_outdated(local.first['updated_at'], values['updated_at'])) {
+        continue;
+      }
+      await _safely(txn, () async {
+        await txn.update('products', values, where: 'id = ?', whereArgs: [id]);
+      });
+      count++;
+    }
+    return count;
+  }
+
+  Future<int> _applyFinanceCategories(
+    Transaction txn,
+    List<Map<String, dynamic>> rows,
+  ) async {
+    var count = 0;
+    for (final row in rows) {
+      final id = _str(row['id']);
+      if (id == null || id.isEmpty) continue;
+      final name = _str(row['name']);
+      if (name == null || name.isEmpty) continue;
+      final values = <String, Object?>{
+        'id': id,
+        'name': name,
+        'created_at': _localIso(row['created_at']) ?? _nowIso(),
+        'updated_at': _localIso(row['updated_at']) ?? _nowIso(),
+        'deleted_at': _localIso(row['deleted_at']),
+      };
+
+      if (!await _exists(txn, 'finance_categories', id)) {
+        count += await _insert(txn, 'finance_categories', values);
+        continue;
+      }
+      if (await _hasPending(txn, 'finance_category', id)) continue;
+      final local = await txn.query(
+        'finance_categories',
+        columns: const ['updated_at'],
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (local.isEmpty ||
+          !_outdated(local.first['updated_at'], values['updated_at'])) {
+        continue;
+      }
+      await _safely(txn, () async {
+        await txn.update(
+          'finance_categories',
+          values,
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+      });
+      count++;
+    }
+    return count;
+  }
+
+  Future<int> _applyFinanceEntries(
+    Transaction txn,
+    List<Map<String, dynamic>> rows,
+  ) async {
+    var count = 0;
+    for (final row in rows) {
+      final id = _str(row['id']);
+      if (id == null || id.isEmpty) continue;
+      // The person is a NOT NULL foreign key. `finance_categories` is walked
+      // before this table and the puller stops a run at the first table that
+      // did not finish, so a parent is never left behind — if one still is, the
+      // entry is skipped rather than inventing a phantom person in the owner's
+      // money list. It arrives on a later tick, once the person has.
+      final categoryId = _str(row['category_id']);
+      if (categoryId == null ||
+          categoryId.isEmpty ||
+          !await _exists(txn, 'finance_categories', categoryId)) {
+        continue;
+      }
+      final createdBy = await _ensureUser(txn, row['created_by']);
+      final completedBy = _str(row['completed_by']);
+      if (completedBy != null) await _ensureUser(txn, completedBy);
+      final values = <String, Object?>{
+        'id': id,
+        'category_id': categoryId,
+        'source': _str(row['source']) ?? '',
+        'amount_minor_units': _int(row['amount_minor_units']),
+        'description': _str(row['description']),
+        'status': _str(row['status']) ?? 'PENDING',
+        'entry_date': _localIso(row['entry_date']) ?? _nowIso(),
+        'created_at': _localIso(row['created_at']) ?? _nowIso(),
+        'created_by': createdBy,
+        'completed_at': _localIso(row['completed_at']),
+        'completed_by': completedBy,
+        'updated_at': _localIso(row['updated_at']) ?? _nowIso(),
+        'payment_method': _str(row['payment_method']),
+      };
+
+      if (!await _exists(txn, 'finance_entries', id)) {
+        count += await _insert(txn, 'finance_entries', values);
+        continue;
+      }
+      if (await _hasPending(txn, 'finance_entry', id)) continue;
+      final local = await txn.query(
+        'finance_entries',
+        columns: const ['updated_at', 'status'],
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (local.isEmpty ||
+          !_outdated(local.first['updated_at'], values['updated_at'])) {
+        continue;
+      }
+      await _safely(txn, () async {
+        await txn.update(
+          'finance_entries',
+          values,
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+      });
+      count++;
+    }
+    return count;
+  }
+
+  /// True when the row already here was last touched at or before [incoming],
+  /// so the incoming copy is the newer one. Both sides are the local naive ISO
+  /// form ([_localIso] has already converted the cloud's `timestamptz`), which
+  /// sorts as text.
+  static bool _outdated(Object? local, Object? incoming) {
+    if (incoming == null) return false;
+    final here = '$local';
+    if (here.isEmpty) return true;
+    return here.compareTo('$incoming') <= 0;
+  }
+
+  Future<bool> _codeTaken(Transaction txn, String code, String id) async {
+    final rows = await txn.query(
+      'products',
+      columns: const ['id'],
+      where: 'code = ? AND id <> ?',
+      whereArgs: [code, id],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
+  // ---------------------------------------------------------------------------
   // Helpers.
   // ---------------------------------------------------------------------------
 
@@ -789,7 +1036,8 @@ class SyncPullApplier {
     return rows.isNotEmpty;
   }
 
-  Future<bool> _usernameFree(Transaction txn, String username) async {
+  /// The live-or-binned account already using this login, under a different id.
+  Future<String?> _twinForUsername(Transaction txn, String username) async {
     final rows = await txn.query(
       'users',
       columns: const ['id'],
@@ -797,7 +1045,7 @@ class SyncPullApplier {
       whereArgs: [username],
       limit: 1,
     );
-    return rows.isEmpty;
+    return rows.isEmpty ? null : rows.first['id'] as String;
   }
 
   /// Inserts one row, returning 1 when it landed and 0 when a unique index
@@ -869,11 +1117,14 @@ class CloudSyncPuller {
   /// that points at it, so users land first and void requests last.
   static const List<String> tableOrder = [
     'users',
+    'products',
     'shifts',
     'sales',
     'sale_items',
     'cash_movements',
     'void_requests',
+    'finance_categories',
+    'finance_entries',
   ];
 
   /// Prefix of the settings key holding one table's last committed cursor.
