@@ -81,18 +81,18 @@ A pending request leaves the sale `COMPLETED` and does not touch revenue or the 
 - `line_discount_minor_units`, `line_total_minor_units`
 - `notes` TEXT — free-text remark on the line
 
-### `finance_categories` (owner-only money tracking)
+### `finance_categories` (money tracking)
 - `id` TEXT PK, `name` TEXT NOT NULL (a person/source label)
 - `created_at`, `updated_at`
 
-### `finance_entries` (owner-only money tracking)
+### `finance_entries` (money tracking)
 - `id` TEXT PK, `category_id` TEXT FK -> finance_categories
 - `source` TEXT NOT NULL, `amount_minor_units` INTEGER NOT NULL (> 0)
 - `description` TEXT
 - `status` TEXT (`PENDING`/`COMPLETED`), `entry_date` TEXT
 - `created_at`, `created_by` FK -> users, `completed_at`, `completed_by` FK -> users, `updated_at`
 
-Finance entries are completely separate from sales: completing one never affects revenue. Owner-only access is enforced in the data layer (every read/write runs inside a transaction that re-checks the acting user is an active `OWNER`).
+Finance entries are completely separate from sales: completing one never affects revenue. Access is the `finance` ("Money Tracking") tick — an active `OWNER`, or a staff account the owner ticked — enforced in the data layer (every read/write re-checks the acting row inside its own transaction), not by hiding the tab. The cloud backend (`pos-api`) applies the same rule to every `finance_*` action.
 
 ### `audit_logs`
 - `id` TEXT PK, `user_id` TEXT (nullable for unknown login attempts)

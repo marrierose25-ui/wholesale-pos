@@ -6,11 +6,12 @@ import 'cloud_api_client.dart';
 
 /// Web/PWA [FinanceRepository] over the `pos-api` Edge Function.
 ///
-/// The owner's private money area is the most role-sensitive surface in the
-/// app: every finance action is `OWNER_ONLY` server-side, so a cashier's token
-/// is refused regardless of what the client sends. The `ownerId` arguments
-/// therefore exist only to keep the native/cloud signatures interchangeable —
-/// the actor is taken from the verified bearer token, never from the body.
+/// The money area is the most role-sensitive surface in the app: every finance
+/// action is gated server-side on the `finance` tick (the OWNER passes
+/// everything), so a token without it is refused regardless of what the client
+/// sends. The `ownerId` arguments therefore exist only to keep the
+/// native/cloud signatures interchangeable — the actor is taken from the
+/// verified bearer token, never from the body.
 class CloudFinanceRepository implements FinanceRepository {
   final CloudApiClient _api;
 

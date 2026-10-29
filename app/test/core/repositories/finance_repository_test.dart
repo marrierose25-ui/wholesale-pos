@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wholesale_pos_app/core/database/local_database.dart';
 import 'package:wholesale_pos_app/core/repositories/finance_repository.dart';
@@ -8,7 +10,12 @@ void main() {
   late Database db;
   late FinanceRepository repository;
 
-  Future<void> insertUser(String id, String role, {int isActive = 1}) async {
+  Future<void> insertUser(
+    String id,
+    String role, {
+    int isActive = 1,
+    List<String> permissions = const [],
+  }) async {
     await db.insert('users', {
       'id': id,
       'username': id,
@@ -16,6 +23,7 @@ void main() {
       'salt': 'x',
       'role': role,
       'is_active': isActive,
+      'permissions': jsonEncode(permissions),
       'created_at': DateTime.now().toIso8601String(),
     });
   }
@@ -25,6 +33,7 @@ void main() {
     repository = FinanceRepository(db);
     await insertUser('owner-1', 'OWNER');
     await insertUser('cashier-1', 'CASHIER');
+    await insertUser('trusted-1', 'CASHIER', permissions: ['pos', 'finance']);
     await insertUser('former-owner', 'OWNER', isActive: 0);
   });
 
@@ -32,7 +41,7 @@ void main() {
     await db.close();
   });
 
-  group('owner-only enforcement', () {
+  group('access is a tick, not a role', () {
     test('a cashier is rejected by every finance method', () async {
       await expectLater(repository.getCategories('cashier-1'), throwsException);
       await expectLater(
@@ -92,6 +101,43 @@ void main() {
         repository.getCategories('former-owner'),
         throwsException,
       );
+    });
+
+    test('a cashier ticked for Money Tracking keeps the whole area', () async {
+      final person = await repository.createCategory(
+        ownerId: 'trusted-1',
+        name: 'Alem',
+      );
+      await repository.addEntry(
+        ownerId: 'trusted-1',
+        categoryId: person.id,
+        source: 'Shop rent',
+        amountMinorUnits: 5000,
+      );
+
+      expect((await repository.getCategories('trusted-1')).single.name, 'Alem');
+      expect(
+        await repository.searchEntries(ownerId: 'trusted-1'),
+        hasLength(1),
+      );
+      expect(await repository.getCategorySummaries('trusted-1'), hasLength(1));
+      // The actor is the ticked account, not the owner: the audit trail must
+      // name whoever actually touched the money.
+      final logs = await db.query('audit_logs', orderBy: 'created_at');
+      expect(logs.map((r) => r['user_id']).toSet(), {'trusted-1'});
+    });
+
+    test('removing the tick closes the area again, even mid-session', () async {
+      await repository.createCategory(ownerId: 'trusted-1', name: 'Alem');
+      await db.update(
+        'users',
+        {
+          'permissions': jsonEncode(['pos']),
+        },
+        where: 'id = ?',
+        whereArgs: ['trusted-1'],
+      );
+      await expectLater(repository.getCategories('trusted-1'), throwsException);
     });
   });
 

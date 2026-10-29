@@ -74,6 +74,35 @@ void main() {
     });
   });
 
+  group('money tracking is a tick', () {
+    test('the owner can grant it, and it renders the tab for that account', () {
+      expect(isGrantableFeatureKey('finance'), isTrue);
+      expect(normalizeFeatureKeys(['finance']), ['finance']);
+      expect(buildNavLabels(_staff(['pos', 'finance'])), [
+        'POS',
+        'Money Tracking',
+        'Settings',
+      ]);
+    });
+
+    test('it is never granted by default', () {
+      expect(kDefaultStaffPermissions, isNot(contains('finance')));
+      expect(
+        buildNavLabels(_staff(kDefaultStaffPermissions)),
+        isNot(contains('Money Tracking')),
+      );
+    });
+
+    test('taking the tick away removes the tab again', () {
+      final granted = _staff(['pos', 'finance']);
+      final revoked = User.fromMap(
+        granted.toMap()..['permissions'] = jsonEncode(['pos']),
+      );
+      expect(granted.can('finance'), isTrue);
+      expect(revoked.can('finance'), isFalse);
+    });
+  });
+
   group('normalizeFeatureKeys', () {
     test('drops unknown keys, dedupes, and preserves registry order', () {
       expect(

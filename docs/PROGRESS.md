@@ -130,7 +130,7 @@
   - **Receipt collisions**: when a receipt number already belonged to a *different* sale, `pos_create_sale` returned that other sale as `duplicate: true` — the cashier was told the sale was saved while their own row and lines were never inserted. Only the same sale id is replayed now; anything else raises `Receipt … is already used by another sale.`, and `CloudSaleRepository.saveSale` refuses to report success unless the server echoes the id it sent.
   - **Double deposit**: two concurrent `pos_complete_finance` calls both read PENDING, one updated the row and both deposited the collection. The row is locked `FOR UPDATE`, the update must affect exactly one row, `cash_movements.source_finance_entry_id` plus `cash_movements_one_per_finance_entry` makes a second deposit impossible at the storage layer, and the movement now opens or reuses the shift through `pos_ensure_shift` instead of inserting a shift behind the advisory lock.
   - **Line discounts**: the RPC compared the line total against the undiscounted base, so a discount could be stored without ever being applied to the money. The discount is subtracted before the comparison and validated to 0..line total, matching the native repository.
-  - **Money Tracking is owner-only**: the server listed every `finance_*` action as available to any account holding the `finance` tick, while the desktop repository refuses a non-owner. The twelve actions moved into `OWNER_ONLY`, `finance` left `FEATURE_KEYS`, and the client registry marks it `ownerOnly` so it is absent from the tick grid and dropped from any crafted permission list.
+  - **Money Tracking is owner-only**: the server listed every `finance_*` action as available to any account holding the `finance` tick, while the desktop repository refuses a non-owner. The twelve actions moved into `OWNER_ONLY`, `finance` left `FEATURE_KEYS`, and the client registry marks it `ownerOnly` so it is absent from the tick grid and dropped from any crafted permission list. *(Superseded in Phase 28: the tick is now the whole rule on both backends — see below.)*
   - **Settings surface removed**: `get_setting` / `set_setting` accepted any key from any signed-in account, which let staff overwrite reserved server state (the demo-credential marker included). The PWA keeps its preferences in browser storage and never called them, so both are gone.
   - **Demo credential**: any first sign-in — a cashier's included — could rotate the demo password, and the new secret was only ever returned to an owner, so the trainee was silently locked out. Seeding and rotation now require an owner session, and every write in the path checks its error and row count before the version marker is set.
   - **Account activation**: `set_user_active` validated a deactivation but not an activation: an unknown id updated nothing, was audited as `USER_ACTIVATED` and answered `ok: true`. Both directions load the target, a non-boolean `active` is refused, and the update must touch exactly one row.
@@ -236,6 +236,43 @@ path, the gateway and the mirror schema against each other; all are fixed.
   `WholesalePOS_Windows_Release.zip` (18 entries, no licence, local DB or
   signing material). The PWA needed no rebuild: its writes go through
   `pos-api`, not through the local pull applier.
+
+### Money Tracking as a permission (Phase 28)
+
+- **The tab was unreachable for staff by design, not by choice.** Money
+  Tracking was hard-coded owner-only on both backends: `finance` carried
+  `ownerOnly: true` in the client registry (so the tick grid never offered it),
+  the native repository re-checked `role = 'OWNER'` inside every read and write,
+  and `pos-api` listed all thirteen `finance_*` actions in `OWNER_ONLY`. There
+  was no way for an owner to hand the area to, say, a trusted manager.
+- **It is now a normal tick, with the same enforcement.** `finance` is a
+  grantable feature (still absent from `kDefaultStaffPermissions`, so a new
+  cashier never gets it by accident); the native repository accepts an **active**
+  account that is the `OWNER` **or** holds the tick, checked inside the same
+  transaction as the work; and `pos-api` moved the thirteen actions from
+  `OWNER_ONLY` into `ACTION_FEATURES` with `['finance']`, so the server refuses
+  exactly the accounts the desktop refuses. The audit argument still names the
+  account that actually touched the money, and a CASH collection is still
+  credited to it.
+- **Revoking works mid-session.** The guard re-reads the acting row on every
+  call, and the pull already applies a permission change made in the browser to
+  the till's own user row, so unticking Money Tracking closes the area without
+  a restart or a re-login.
+- `flutter analyze`: clean. `dart format --set-exit-if-changed`: clean.
+  `flutter test`: **348 passing** (2 new in `features_test`: the tick is
+  grantable, grants the tab and is never a default; 3 new in
+  `finance_repository_test`: a ticked cashier keeps the whole area and is the
+  audit actor, removing the tick closes it again, and the unticked/deactivated
+  accounts stay refused). `pos-api` deployed at version 17.
+- **The server-side fixes now have a live regression test.** `docs/fixes_v1.sql`
+  is the audited patch set (nine changes, idempotent, one transaction);
+  `docs/preflight.sql` and `docs/postflight.sql` snapshot the invariants around
+  it, `docs/verify_fixes.sql` asserts each change by name, and
+  `docs/smoke_test.sql` exercises the real RPCs — sale, replay, bad payload,
+  duplicate line ids, void reason, double void, photo cap, finance delete guard
+  — against a throwaway tenant inside a transaction that always rolls back, so
+  it reports **8/8 passing** without leaving a row behind. All nine assertions
+  and all eight smoke tests pass on the live project.
 
 ## Next Up
 

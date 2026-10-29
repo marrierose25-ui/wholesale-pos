@@ -10,9 +10,10 @@ class FeatureDef {
   final String label;
   final IconData icon;
 
-  /// Owner-administered surface. Mirrors the server's OWNER_ONLY set, so it is
-  /// absent from the tick grid and can never be held by a staff account — the
-  /// finance tab is owner-only in the native repository and in pos-api.
+  /// Surfaces no tick may ever grant. Empty today — Money Tracking used to be
+  /// the one entry, and is now an ordinary tick — but kept so a future
+  /// genuinely owner-only surface has a home that the tick grid already
+  /// respects.
   final bool ownerOnly;
 
   const FeatureDef(this.key, this.label, this.icon, {this.ownerOnly = false});
@@ -26,12 +27,9 @@ const List<FeatureDef> kFeatures = [
   FeatureDef('dashboard', 'Dashboard', Icons.dashboard),
   FeatureDef('pos', 'POS', Icons.shopping_cart),
   FeatureDef('register', 'Register', Icons.point_of_sale),
-  FeatureDef(
-    'finance',
-    'Money Tracking',
-    Icons.account_balance_wallet,
-    ownerOnly: true,
-  ),
+  // Tickable, but deliberately absent from [kDefaultStaffPermissions]: the
+  // owner hands out this area one account at a time, never as a default.
+  FeatureDef('finance', 'Money Tracking', Icons.account_balance_wallet),
   FeatureDef('reports', 'Reports', Icons.bar_chart),
   FeatureDef('users', 'Users', Icons.people),
   FeatureDef('audit', 'Audit Logs', Icons.security),
@@ -43,8 +41,9 @@ const List<FeatureDef> kFeatures = [
 /// old History tab is gone; Reports keeps a cashier's sales visibility).
 const List<String> kDefaultStaffPermissions = ['pos', 'register', 'reports'];
 
-/// The subset of [kFeatures] the owner can hand to a staff account. Owner-only
-/// surfaces are rendered top-level for the OWNER and never offered as a tick.
+/// The subset of [kFeatures] the owner can hand to a staff account. Today that
+/// is every tab (Money Tracking included); an [FeatureDef.ownerOnly] surface
+/// would be filtered out here and stay invisible to the tick grid.
 List<FeatureDef> get kGrantableFeatures =>
     kFeatures.where((f) => !f.ownerOnly).toList();
 

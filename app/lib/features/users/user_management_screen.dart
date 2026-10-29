@@ -515,8 +515,8 @@ class _AddUserDialogState extends State<_AddUserDialog> {
 
 /// A reusable tick list over [kGrantableFeatures]. When [enabled] is false the
 /// whole grid is greyed and inert (used when "Owner access" overrides the
-/// ticks). Owner-only surfaces (Money Tracking) are not offered: they are
-/// enforced as owner-only on both backends.
+/// ticks). Money Tracking is an ordinary tick here — both backends check the
+/// tick (or the OWNER role) themselves, so ticking it is what grants the tab.
 class _FeaturePicker extends StatelessWidget {
   final Set<String> selected;
   final bool enabled;

@@ -172,15 +172,22 @@ void main() {
     await repository.ensureDemoUser();
     final demo = (await repository.getAllUsers()).firstWhere((u) => u.isDemo);
 
-    await repository.setUserPermissions(demo.id, const ['pos', 'finance']);
+    // Money Tracking is an ordinary tick now (Phase 28), so asking for it
+    // stores it; an unknown key is still dropped at the repository boundary
+    // rather than written into the tick list.
+    await repository.setUserPermissions(demo.id, const [
+      'pos',
+      'finance',
+      'bogus',
+    ]);
 
     final updated = await repository.getById(demo.id);
     expect(updated, isNotNull);
-    // Money Tracking is owner-only on both backends (audit 2 #3), so a staff
-    // tick list can never carry 'finance': the crafted key is dropped rather
-    // than stored, and the tab stays hidden.
-    expect(updated!.permissions, normalizeFeatureKeys(const ['pos']));
-    expect(updated.can('finance'), isFalse);
+    expect(
+      updated!.permissions,
+      normalizeFeatureKeys(const ['pos', 'finance']),
+    );
+    expect(updated.can('finance'), isTrue);
     expect(updated.can('pos'), isTrue);
     expect(updated.can('reports'), isFalse);
     // Editing permissions never clears the protected flag.

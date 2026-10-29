@@ -3,16 +3,23 @@ import 'package:uuid/uuid.dart';
 
 import '../models/finance_category.dart';
 import '../models/finance_entry.dart';
+import '../models/user.dart';
 import '../sync/sync_outbox.dart';
 import '../sync/sync_outbox_entry.dart';
 import '../utils/date_range.dart';
 import '../utils/money_utils.dart';
 import 'sale_repository.dart';
 
-/// Data access for the owner's private money-tracking area. Every method —
-/// reads included — verifies an active OWNER inside the query or transaction,
-/// so cashiers are blocked at the data layer, not just by hidden navigation.
+/// Data access for the money-tracking area. Every method — reads included —
+/// verifies inside the query or transaction that the acting account is active
+/// AND allowed: the OWNER always, a staff account only when it holds the
+/// `finance` tick. A hidden tab is not a permission, so navigation is never the
+/// gate; the cloud backend applies the same rule in `pos-api`.
 /// Financial entries are fully separate from sales and never affect revenue.
+///
+/// The `ownerId` argument on every method is the acting account's id (the name
+/// predates the tick): it is the audit actor and, for a CASH collection, the
+/// user credited on the register deposit.
 abstract class FinanceRepository {
   factory FinanceRepository(Database db) = SqfliteFinanceRepository;
 
@@ -105,21 +112,27 @@ class SqfliteFinanceRepository implements FinanceRepository {
   static const int _maxSourceLength = 120;
   static const int _maxDescriptionLength = 500;
 
-  Future<void> _requireActiveOwner(
+  /// Active, and either the OWNER or ticked for Money Tracking. Read from the
+  /// same executor as the work it guards, so a permission change made in the
+  /// browser (which the pull applies to this row) takes effect immediately.
+  Future<void> _requireFinanceAccess(
     DatabaseExecutor executor,
     String userId,
   ) async {
     final rows = await executor.query(
       'users',
-      columns: ['role', 'is_active'],
+      columns: ['role', 'is_active', 'permissions'],
       where: 'id = ?',
       whereArgs: [userId],
       limit: 1,
     );
-    if (rows.isEmpty ||
-        rows.first['role'] != 'OWNER' ||
-        rows.first['is_active'] != 1) {
-      throw Exception('Only an active owner can access financial records.');
+    if (rows.isEmpty || rows.first['is_active'] != 1) {
+      throw Exception('Only an active account can access financial records.');
+    }
+    if (rows.first['role'] == 'OWNER') return;
+    final held = User.decodePermissions(rows.first['permissions']);
+    if (!held.contains('finance')) {
+      throw Exception('This account does not have Money Tracking access.');
     }
   }
 
@@ -159,7 +172,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
 
   @override
   Future<List<FinanceCategory>> getCategories(String ownerId) async {
-    await _requireActiveOwner(_db, ownerId);
+    await _requireFinanceAccess(_db, ownerId);
     final maps = await _db.query(
       'finance_categories',
       where: 'deleted_at IS NULL',
@@ -171,7 +184,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
   /// People in the recycle bin (soft-deleted), newest trashed first.
   @override
   Future<List<FinanceCategory>> getDeletedCategories(String ownerId) async {
-    await _requireActiveOwner(_db, ownerId);
+    await _requireFinanceAccess(_db, ownerId);
     final maps = await _db.query(
       'finance_categories',
       where: 'deleted_at IS NOT NULL',
@@ -186,7 +199,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
   Future<List<Map<String, dynamic>>> getCategorySummaries(
     String ownerId,
   ) async {
-    await _requireActiveOwner(_db, ownerId);
+    await _requireFinanceAccess(_db, ownerId);
     return _db.rawQuery('''
       SELECT finance_categories.id,
              finance_categories.name,
@@ -217,7 +230,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
     );
 
     await _db.transaction((txn) async {
-      await _requireActiveOwner(txn, ownerId);
+      await _requireFinanceAccess(txn, ownerId);
       final existing = await txn.query(
         'finance_categories',
         columns: ['id'],
@@ -249,7 +262,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
   }) async {
     final trimmed = _validatedName(newName);
     await _db.transaction((txn) async {
-      await _requireActiveOwner(txn, ownerId);
+      await _requireFinanceAccess(txn, ownerId);
       final existing = await txn.query(
         'finance_categories',
         where: 'id = ?',
@@ -293,7 +306,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
     required String categoryId,
   }) async {
     await _db.transaction((txn) async {
-      await _requireActiveOwner(txn, ownerId);
+      await _requireFinanceAccess(txn, ownerId);
       final existing = await txn.query(
         'finance_categories',
         where: 'id = ?',
@@ -330,7 +343,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
     required String categoryId,
   }) async {
     await _db.transaction((txn) async {
-      await _requireActiveOwner(txn, ownerId);
+      await _requireFinanceAccess(txn, ownerId);
       final existing = await txn.query(
         'finance_categories',
         where: 'id = ?',
@@ -366,7 +379,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
     required String categoryId,
   }) async {
     await _db.transaction((txn) async {
-      await _requireActiveOwner(txn, ownerId);
+      await _requireFinanceAccess(txn, ownerId);
       final existing = await txn.query(
         'finance_categories',
         where: 'id = ?',
@@ -479,7 +492,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
     );
 
     await _db.transaction((txn) async {
-      await _requireActiveOwner(txn, ownerId);
+      await _requireFinanceAccess(txn, ownerId);
       final category = await _requireCategory(txn, categoryId);
       await txn.insert('finance_entries', entry.toMap());
       await _audit(
@@ -513,7 +526,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
     final trimmedDescription = description?.trim();
 
     await _db.transaction((txn) async {
-      await _requireActiveOwner(txn, ownerId);
+      await _requireFinanceAccess(txn, ownerId);
       final maps = await txn.query(
         'finance_entries',
         where: 'id = ?',
@@ -561,7 +574,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
     required String entryId,
   }) async {
     await _db.transaction((txn) async {
-      await _requireActiveOwner(txn, ownerId);
+      await _requireFinanceAccess(txn, ownerId);
       final maps = await txn.query(
         'finance_entries',
         where: 'id = ?',
@@ -665,7 +678,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
     String? status,
     DateRange? dateRange,
   }) async {
-    await _requireActiveOwner(_db, ownerId);
+    await _requireFinanceAccess(_db, ownerId);
 
     final where = <String>[];
     final args = <dynamic>[];
@@ -728,7 +741,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
     String ownerId,
     String categoryId,
   ) async {
-    await _requireActiveOwner(_db, ownerId);
+    await _requireFinanceAccess(_db, ownerId);
     final rows = await _db.rawQuery(
       '''
       SELECT

@@ -58,13 +58,11 @@ const CORS_HEADERS: Record<string, string> = {
 const OWNER = 'OWNER';
 const CASHIER = 'CASHIER';
 
-// The canonical GRANTABLE feature-tab keys, mirroring the non-owner-only part of
+// The canonical GRANTABLE feature-tab keys, mirroring
 // app/lib/core/auth/features.dart. A staff account's `permissions` column stores
-// a subset of these; the OWNER account bypasses them entirely. `finance` is
-// deliberately absent: it is owner-only on both backends, so it can never be
-// granted to a staff account.
+// a subset of these; the OWNER account bypasses them entirely.
 const FEATURE_KEYS = new Set([
-  'dashboard', 'pos', 'register', 'history', 'reports',
+  'dashboard', 'pos', 'register', 'finance', 'history', 'reports',
   'users', 'audit', 'register_history',
 ]);
 
@@ -81,16 +79,6 @@ const OWNER_ONLY = new Set([
   // Account administration + credential/status mutations.
   'reset_password', 'set_user_active', 'create_user', 'set_user_permissions',
   'set_user_phone', 'delete_user',
-  // Money Tracking, in full (audit 2 #3). The native repository verifies an
-  // ACTIVE OWNER inside every method, reads included; the cloud used to gate
-  // these on a `finance` staff tick, so a cashier could call the API directly.
-  // A hidden tab is not a permission — the server now matches the desktop rule.
-  'finance_categories', 'finance_deleted_categories', 'finance_summaries',
-  'finance_create_category', 'finance_rename_category',
-  'finance_delete_category', 'finance_restore_category',
-  'finance_permanently_delete_category', 'finance_add_entry',
-  'finance_update_entry', 'finance_mark_completed', 'finance_search_entries',
-  'finance_person_totals',
 ]);
 
 // Feature-gated actions: allowed when the actor is an OWNER or holds ANY of the
@@ -111,7 +99,19 @@ const ACTION_FEATURES: Record<string, string[]> = {
   // is always the OPEN one; shiftSummary() refuses any other shift for a
   // non-owner so this tick cannot be used to browse past sessions.
   shift_summary: ['register'],
-  // Finance is OWNER_ONLY above — no tick can unlock it.
+  // Money Tracking: one tickable feature, all of it. The native repository
+  // checks the same tick inside every method (reads included), so a staff
+  // account reaches this area only when the owner ticked it for that account —
+  // and loses it the moment the tick is removed, because the sync pull applies
+  // the permission change to the till's own user row.
+  finance_categories: ['finance'], finance_deleted_categories: ['finance'],
+  finance_summaries: ['finance'], finance_create_category: ['finance'],
+  finance_rename_category: ['finance'], finance_delete_category: ['finance'],
+  finance_restore_category: ['finance'],
+  finance_permanently_delete_category: ['finance'],
+  finance_add_entry: ['finance'], finance_update_entry: ['finance'],
+  finance_mark_completed: ['finance'], finance_search_entries: ['finance'],
+  finance_person_totals: ['finance'],
   // History. search_sales is also needed by the Register History day drill-down
   // (which sales brought cash in that day), so register_history unlocks it too.
   search_sales: ['history', 'register_history'],
