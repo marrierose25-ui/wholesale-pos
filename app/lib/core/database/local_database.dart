@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import 'dart:convert';
 import 'dart:io';
 
@@ -19,7 +21,9 @@ class LocalDatabase {
     // On desktop (and in `flutter test`, which runs on the host VM) use the
     // pure-Dart FFI engine. On Android/iOS the native sqflite plugin is already
     // the default factory, so nothing is overridden there.
-    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    if (!kIsWeb && Platform.isWindows ||
+        !kIsWeb && Platform.isLinux ||
+        !kIsWeb && Platform.isMacOS) {
       ffi.sqfliteFfiInit();
       databaseFactory = ffi.databaseFactoryFfi;
     }
@@ -125,8 +129,8 @@ class LocalDatabase {
     if (existing.isNotEmpty) return;
     await db.insert('devices', {
       'id': id,
-      'name': '${Platform.localHostname} Register',
-      'platform': Platform.operatingSystem,
+      'name': '${kIsWeb ? 'Web Browser' : Platform.localHostname} Register',
+      'platform': kIsWeb ? 'web' : Platform.operatingSystem,
     });
   }
 

@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import 'dart:convert';
 import 'dart:io' show Platform;
 
@@ -54,7 +56,7 @@ class SupabaseSyncBackend implements SyncBackend {
     const unsafeAllowEmbed = bool.fromEnvironment(
       'WHOLESALE_POS_UNSAFE_EMBED_SYNC_SECRET',
     );
-    final isMobile = Platform.isAndroid || Platform.isIOS;
+    final isMobile = !kIsWeb && Platform.isAndroid || !kIsWeb && Platform.isIOS;
     final backend = selectBackend(
       url: url,
       key: key,

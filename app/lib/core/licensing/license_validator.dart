@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import 'dart:convert';
 import 'dart:io';
 
@@ -23,7 +25,7 @@ class LicenseValidator {
   /// value into the device fingerprint) use this directly.
   static Future<String?> tryGetHardwareId() async {
     try {
-      if (Platform.isWindows) {
+      if (!kIsWeb && Platform.isWindows) {
         final result = await Process.run('powershell', [
           '-Command',
           '(Get-CimInstance Win32_ComputerSystemProduct).UUID',
@@ -40,7 +42,8 @@ class LicenseValidator {
   }
 
   static Future<String> getHardwareId() async {
-    return await tryGetHardwareId() ?? Platform.localHostname;
+    return await tryGetHardwareId() ??
+        (kIsWeb ? 'Web Browser' : Platform.localHostname);
   }
 
   static Future<Map<String, dynamic>?> validateLicense({

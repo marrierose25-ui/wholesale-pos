@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import 'dart:io' show Platform;
 
 import 'package:sqflite/sqflite.dart';
@@ -85,7 +87,8 @@ class DeviceActivation {
       final response = await activationClient.activateDevice(
         activationCode: trimmed,
         deviceFingerprint: fingerprint,
-        deviceName: deviceName ?? Platform.localHostname,
+        deviceName:
+            deviceName ?? (kIsWeb ? 'Web Browser' : Platform.localHostname),
       );
       if (!response.ok) {
         return DeviceActivationResult.failed(

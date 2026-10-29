@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import 'dart:convert';
 import 'dart:io' show Platform;
 
@@ -56,9 +58,9 @@ class DeviceFingerprint {
   }
 
   static Future<String> _rawValue(Database db) async {
-    final prefix = Platform.isAndroid
+    final prefix = !kIsWeb && Platform.isAndroid
         ? 'and'
-        : Platform.isIOS
+        : !kIsWeb && Platform.isIOS
         ? 'ios'
         : 'other';
 
@@ -74,7 +76,7 @@ class DeviceFingerprint {
     //    of bug that burned seats on Android. Only a real UUID is cached; the
     //    hostname fallback is transient and gets replaced by the cached UUID
     //    on the next successful startup.
-    if (Platform.isWindows) {
+    if (!kIsWeb && Platform.isWindows) {
       const hwCacheKey = 'device_hw_uuid';
       final cached = await LocalDatabase.getSetting(db, hwCacheKey);
       if (cached != null && cached.isNotEmpty) {
@@ -85,12 +87,12 @@ class DeviceFingerprint {
         await LocalDatabase.setSetting(db, hwCacheKey, hwid);
         return 'win|$hwid';
       }
-      return 'win|${Platform.localHostname}';
+      return 'win|${kIsWeb ? 'Web Browser' : Platform.localHostname}';
     }
 
     // 3. Fallback for mobile when the platform id is unavailable: a random
     //    UUID persisted in SQLite. Reinstall-stable only if the DB survives.
-    if (Platform.isAndroid || Platform.isIOS) {
+    if (!kIsWeb && Platform.isAndroid || !kIsWeb && Platform.isIOS) {
       var uuid = await LocalDatabase.getSetting(db, installUuidKey);
       if (uuid == null || uuid.isEmpty) {
         uuid = const Uuid().v4();
@@ -101,7 +103,7 @@ class DeviceFingerprint {
 
     // Unsupported platform (macOS / Linux / web): deterministic fallback so
     // tests can still exercise the code path. Not shipped.
-    return 'other|${Platform.localHostname}';
+    return 'other|${kIsWeb ? 'Web Browser' : Platform.localHostname}';
   }
 
   /// Reads the OS-provided identifier that persists across an app reinstall.
@@ -110,10 +112,10 @@ class DeviceFingerprint {
   static Future<String?> _stablePlatformId() async {
     try {
       final info = DeviceInfoPlugin();
-      if (Platform.isAndroid) {
+      if (!kIsWeb && Platform.isAndroid) {
         return (await info.androidInfo).id;
       }
-      if (Platform.isIOS) {
+      if (!kIsWeb && Platform.isIOS) {
         return (await info.iosInfo).identifierForVendor;
       }
     } catch (_) {

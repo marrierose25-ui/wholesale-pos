@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
 import 'core/database/local_database.dart';
@@ -81,7 +82,7 @@ Future<void> _startup() async {
     unsafeAllowEmbed: const bool.fromEnvironment(
       'WHOLESALE_POS_UNSAFE_EMBED_SYNC_SECRET',
     ),
-    isMobile: Platform.isAndroid || Platform.isIOS,
+    isMobile: !kIsWeb && Platform.isAndroid || !kIsWeb && Platform.isIOS,
     licenseProvider: () =>
         LocalDatabase.getSetting(db, SyncGatewayBackend.licenseSettingKey),
   );
@@ -317,7 +318,7 @@ class _LicenseWrapperState extends State<LicenseWrapper> {
     final result = await DeviceActivation.redeem(
       widget.db,
       input,
-      deviceName: Platform.localHostname,
+      deviceName: kIsWeb ? 'Web Browser' : Platform.localHostname,
     );
     if (!result.ok) return result.error;
 
