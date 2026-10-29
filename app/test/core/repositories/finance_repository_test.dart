@@ -229,6 +229,46 @@ void main() {
       expect(all.length, 1);
     });
 
+    test(
+      'a completed cash collection deposits once, named by its entry',
+      () async {
+        // The deposit must carry the collection it came from. Two surfaces can
+        // complete one entry, and the cloud and the till both refuse the second
+        // payment through this id — an untagged row is invisible to that guard,
+        // which is how the drawer ended up paid twice.
+        final category = await repository.createCategory(
+          ownerId: 'owner-1',
+          name: 'Alem',
+        );
+        final entry = await repository.addEntry(
+          ownerId: 'owner-1',
+          categoryId: category.id,
+          source: 'Counter',
+          amountMinorUnits: 10000,
+          paymentMethod: 'CASH',
+        );
+        await repository.markCompleted(ownerId: 'owner-1', entryId: entry.id);
+
+        final deposits = await db.query(
+          'cash_movements',
+          where: "type = 'DEPOSIT'",
+        );
+        expect(deposits, hasLength(1));
+        expect(deposits.single['amount_minor_units'], 10000);
+        expect(deposits.single['source_finance_entry_id'], entry.id);
+
+        // Completing it again is refused outright, so no second deposit exists.
+        await expectLater(
+          repository.markCompleted(ownerId: 'owner-1', entryId: entry.id),
+          throwsException,
+        );
+        expect(
+          await db.query('cash_movements', where: "type = 'DEPOSIT'"),
+          hasLength(1),
+        );
+      },
+    );
+
     test('completed entries are immutable', () async {
       final category = await repository.createCategory(
         ownerId: 'owner-1',

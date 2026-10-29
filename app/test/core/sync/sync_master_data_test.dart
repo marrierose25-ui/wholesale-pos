@@ -70,6 +70,23 @@ Map<String, dynamic> cloudEntry({
   'payment_method': 'CASH',
 };
 
+/// A deposit as the cloud serves it. `source_finance_entry_id` is what makes two
+/// rows written by two different devices recognisably the same money.
+Map<String, dynamic> cloudMovement({
+  String id = 'mv-1',
+  String? sourceEntry = 'entry-1',
+  int amount = 10000,
+}) => {
+  'id': id,
+  'shift_id': 'shift-1',
+  'user_id': 'user-1',
+  'type': 'DEPOSIT',
+  'amount_minor_units': amount,
+  'reason': 'Collected from Alemu',
+  'created_at': '2026-10-28T10:00:00+00:00',
+  'source_finance_entry_id': sourceEntry,
+};
+
 void main() {
   late Database db;
   late SyncOutboxRepository outbox;
@@ -274,6 +291,15 @@ void main() {
       // A cash collection physically enters the drawer, so the deposit is
       // queued too — that is what moves the Register Shift on every surface.
       expect(idsOf(SyncEntities.cashMovement), hasLength(1));
+      // The queued deposit has to name its collection. The cloud refuses a second
+      // deposit for one entry through `cash_movements_one_per_finance_entry`, and
+      // that index can only compare a value that is actually in the payload.
+      final deposit =
+          pending
+                  .lastWhere((e) => e.entityType == SyncEntities.cashMovement)
+                  .payload['cash_movement']
+              as Map;
+      expect(deposit['source_finance_entry_id'], entry.id);
       final completed =
           pending
                   .lastWhere((e) => e.entityType == SyncEntities.financeEntry)
@@ -532,6 +558,61 @@ void main() {
         expect(row['is_active'], 0);
       },
     );
+  });
+
+  group('a pulled deposit never pays a collection twice', () {
+    test('the cloud copy of a collection this till already paid is skipped', () async {
+      // The till wrote its DEPOSIT under its own uuid and the gateway holds the
+      // same money under a different one — the browser completed the entry, or
+      // `pos_add_cash_movement` minted a fresh id for this push. Ids differ, so
+      // the existing-id guard cannot see it; only the entry id says it is one
+      // payment. Without the guard the register showed the deposit twice while
+      // the browser showed it once.
+      await db.insert('cash_movements', {
+        'id': 'till-mv',
+        'shift_id': 'shift-1',
+        'user_id': 'user-1',
+        'type': 'DEPOSIT',
+        'amount_minor_units': 10000,
+        'reason': 'Collected from Alemu',
+        'created_at': DateTime.now().toIso8601String(),
+        'source_finance_entry_id': 'entry-1',
+      });
+
+      final report = await SyncPullApplier(db)
+          .apply(pageOf('cash_movements', [cloudMovement(id: 'cloud-mv')]));
+
+      expect(report.cashMovements, 0);
+      final rows = await db.query(
+        'cash_movements',
+        where: 'source_finance_entry_id = ?',
+        whereArgs: ['entry-1'],
+      );
+      expect(rows, hasLength(1), reason: 'one drawer payment per collection');
+      expect(
+        rows.single['id'],
+        'till-mv',
+        reason: 'the till keeps its own row',
+      );
+    });
+
+    test('a collection this till has not paid still lands, with its entry id', () async {
+      final report = await SyncPullApplier(db)
+          .apply(pageOf('cash_movements', [cloudMovement(id: 'cloud-mv')]));
+
+      expect(report.cashMovements, 1);
+      final row = (await db.query(
+        'cash_movements',
+        where: 'id = ?',
+        whereArgs: ['cloud-mv'],
+      )).single;
+      expect(
+        row['source_finance_entry_id'],
+        'entry-1',
+        reason:
+            'the tag has to survive the pull, or the next copy is a duplicate',
+      );
+    });
   });
 
   group('pull coverage', () {

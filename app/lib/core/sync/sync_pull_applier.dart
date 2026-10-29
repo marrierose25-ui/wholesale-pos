@@ -700,6 +700,22 @@ class SyncPullApplier {
       final id = _str(row['id']);
       if (id == null || id.isEmpty) continue;
       if (await _exists(txn, 'cash_movements', id)) continue;
+      // One collection, one deposit — on this device too. A till that completed
+      // the entry itself already wrote the movement under its own id, and the
+      // cloud row for the same collection would otherwise land beside it as a
+      // second line in the register. The entry id is the only key that survives
+      // the two paths choosing different uuids.
+      final sourceEntry = _str(row['source_finance_entry_id']);
+      if (sourceEntry != null && sourceEntry.isNotEmpty) {
+        final already = await txn.query(
+          'cash_movements',
+          columns: ['id'],
+          where: 'source_finance_entry_id = ?',
+          whereArgs: [sourceEntry],
+          limit: 1,
+        );
+        if (already.isNotEmpty) continue;
+      }
       // Same NOT NULL foreign keys as a sale: the drawer it belongs to and the
       // person who moved the cash.
       final shiftId = await _ensureShift(txn, row['shift_id']);
@@ -714,6 +730,7 @@ class SyncPullApplier {
         'reason': _str(row['reason']),
         'created_at': createdAt,
         'user_id': userId,
+        'source_finance_entry_id': sourceEntry,
       });
       // A push never carries the photo (it is stripped from the outbox
       // payload), but an older cloud row may still hold the base64 copy. Keep

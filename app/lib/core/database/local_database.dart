@@ -11,7 +11,7 @@ import 'package:uuid/uuid.dart';
 
 class LocalDatabase {
   static const String databaseName = 'wholesale_pos.db';
-  static const int schemaVersion = 16;
+  static const int schemaVersion = 17;
   static const String deviceIdFileName = 'device_id.txt';
   static const String themeSettingKey = 'theme_mode';
 
@@ -426,6 +426,25 @@ class LocalDatabase {
         );
       }
     }
+    if (oldVersion < 17) {
+      // Which collection put this money in the drawer. A cash collection is
+      // deposited by the till AND, if the browser completed the same entry, by
+      // `pos_complete_finance` — and the cloud refuses a second deposit per
+      // entry through `cash_movements_one_per_finance_entry` while this device
+      // had nothing to compare against. The id travels in the outbox payload
+      // now, so the two paths agree on one movement instead of writing two.
+      // Additive column, guarded so a re-run is a no-op.
+      final movementCols = await db.rawQuery(
+        'PRAGMA table_info(cash_movements)',
+      );
+      if (!movementCols.any(
+        (column) => column['name'] == 'source_finance_entry_id',
+      )) {
+        await db.execute(
+          'ALTER TABLE cash_movements ADD COLUMN source_finance_entry_id TEXT',
+        );
+      }
+    }
   }
 
   /// Proof photos are BLOBs in their own table (schema 16), one per movement.
@@ -648,6 +667,7 @@ class LocalDatabase {
         created_at TEXT NOT NULL,
         user_id TEXT,
         photo TEXT,
+        source_finance_entry_id TEXT,
         FOREIGN KEY(shift_id) REFERENCES shifts(id),
         FOREIGN KEY(user_id) REFERENCES users(id)
       )

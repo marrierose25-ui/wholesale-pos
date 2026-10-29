@@ -716,6 +716,12 @@ class SqfliteFinanceRepository implements FinanceRepository {
           'amount_minor_units': entry.amountMinorUnits,
           'reason': 'Collected from ${category.name}',
           'created_at': now.toIso8601String(),
+          // The collection this deposit came from. Without it the cloud cannot
+          // tell this row from the deposit `pos_complete_finance` writes when
+          // the browser completes the same entry — its one-deposit-per-entry
+          // index only sees NULL here — and the money lands in the drawer
+          // twice. The same map is the outbox payload, so it travels.
+          'source_finance_entry_id': entry.id,
         };
         await txn.insert('cash_movements', movement);
         await SyncOutbox.upsert(

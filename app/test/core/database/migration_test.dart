@@ -705,4 +705,66 @@ void main() {
       await db.close();
     },
   );
+
+  test(
+    'Upgrades a v16 database to v17, recording which collection paid a deposit',
+    () async {
+      var db = await LocalDatabase.openAt(dbPath);
+      final now = DateTime.now().toIso8601String();
+      await db.insert('users', {
+        'id': 'user-1',
+        'username': 'owner',
+        'password_hash': 'x',
+        'salt': 'x',
+        'role': 'OWNER',
+        'created_at': now,
+      });
+      await db.insert('shifts', {
+        'id': 'shift-1',
+        'cashier_id': 'user-1',
+        'opening_cash_minor_units': 0,
+        'status': 'OPEN',
+        'opened_at': now,
+      });
+      // v16 shape: a deposit with nothing to say about which collection it is.
+      await db.insert('cash_movements', {
+        'id': 'movement-1',
+        'shift_id': 'shift-1',
+        'user_id': 'user-1',
+        'type': 'DEPOSIT',
+        'amount_minor_units': 10000,
+        'reason': 'Collected from Alem',
+        'created_at': now,
+      });
+      await db.execute(
+        'ALTER TABLE cash_movements DROP COLUMN source_finance_entry_id',
+      );
+      await db.execute('PRAGMA user_version = 16');
+      await db.close();
+
+      db = await LocalDatabase.openAt(dbPath);
+      final version = await db.rawQuery('PRAGMA user_version');
+      expect(version.first.values.first, LocalDatabase.schemaVersion);
+
+      final columns = await db.rawQuery('PRAGMA table_info(cash_movements)');
+      expect(
+        columns.map((c) => c['name']),
+        contains('source_finance_entry_id'),
+        reason:
+            'the ledger needs a key that survives two devices choosing '
+            'different uuids for one collection',
+      );
+      // History is not rewritten: an old deposit stays unattributed rather than
+      // being guessed at, and the money it represents is untouched.
+      final movement = (await db.query(
+        'cash_movements',
+        where: 'id = ?',
+        whereArgs: ['movement-1'],
+      )).single;
+      expect(movement['source_finance_entry_id'], isNull);
+      expect(movement['amount_minor_units'], 10000);
+
+      await db.close();
+    },
+  );
 }
