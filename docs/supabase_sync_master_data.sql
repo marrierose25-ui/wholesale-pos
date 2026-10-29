@@ -236,6 +236,12 @@ BEGIN
         END IF;
         shift_id := public.pos_ensure_shift(
           p_customer, COALESCE(mv->>'user_id', ''), NULL);
+        -- Both keys are handed on: the device's own movement id, so the row the
+        -- till holds and the row it downloads are the same row (minting a new
+        -- uuid here made the register list the deposit twice), and the collection
+        -- it belongs to, so `pos_complete_finance` and this path refuse to pay
+        -- the drawer twice for one collection. A movement from an older outbox
+        -- carries neither, and behaves exactly as it did before.
         PERFORM public.pos_add_cash_movement(
           p_customer,
           COALESCE(mv->>'user_id', ''),
@@ -243,7 +249,9 @@ BEGIN
           upper(COALESCE(mv->>'type', '')),
           abs(COALESCE((mv->>'amount_minor_units')::bigint, 0)),
           mv->>'reason',
-          NULLIF(mv->>'photo', ''));
+          NULLIF(mv->>'photo', ''),
+          rec.entity_id,
+          NULLIF(mv->>'source_finance_entry_id', ''));
 
       ELSIF rec.entity_type = 'void_request' THEN
         vr := rec.payload->'void_request';

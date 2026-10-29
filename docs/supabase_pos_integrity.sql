@@ -572,11 +572,21 @@ BEGIN
     -- pos_open_shift / pos_ensure_shift (audit 2 #6).
     shift_found := public.pos_ensure_shift(p_customer, p_user, NULL);
 
-    INSERT INTO public.cash_movements (id, customer_id, shift_id, user_id,
-      type, amount_minor_units, reason, created_at, source_finance_entry_id)
-    VALUES (gen_random_uuid(), p_customer, shift_found, p_user,
-      'DEPOSIT', entry.amount_minor_units,
-      'Collected from ' || COALESCE(cat_name, 'a person'), now(), p_entry_id);
+    -- The till that completed the collection itself deposits the money in the
+    -- same push, and `pos_sync_apply` lands that movement before this entry
+    -- (cash_movement 5, finance_entry 7). Depositing unconditionally here paid
+    -- the drawer twice — the pushed row carries no entry id the unique index
+    -- could match against, so nothing refused it. One deposit per collection is
+    -- the rule; this function is now the fallback, not the second writer.
+    IF NOT EXISTS (SELECT 1 FROM public.cash_movements
+                   WHERE customer_id = p_customer
+                     AND source_finance_entry_id = p_entry_id) THEN
+      INSERT INTO public.cash_movements (id, customer_id, shift_id, user_id,
+        type, amount_minor_units, reason, created_at, source_finance_entry_id)
+      VALUES (gen_random_uuid(), p_customer, shift_found, p_user,
+        'DEPOSIT', entry.amount_minor_units,
+        'Collected from ' || COALESCE(cat_name, 'a person'), now(), p_entry_id);
+    END IF;
   END IF;
 
   INSERT INTO public.pos_audit_logs (id, customer_id, user_id, action, details, created_at)
@@ -721,7 +731,26 @@ GRANT EXECUTE ON FUNCTION pos_open_shift TO service_role;
 -- 3h2. pos_add_cash_movement: the OPEN check, the insert and the audit row are
 -- one transaction, and the shift row is share-locked so the movement can never
 -- land on a session pos_close_shift is reconciling (audit #3 + #11).
+--
+-- Two optional arguments carry what the sync path knows and the browser does
+-- not: `p_movement_id` is the uuid the till already wrote on its own device, and
+-- `p_source_finance_entry_id` is the collection the deposit came from.
+-- Minting a fresh uuid for a synced movement made the till keep its row AND
+-- download the cloud's copy of the same money (the register showed the deposit
+-- twice while the browser showed it once), and a movement with no entry id is
+-- invisible to `cash_movements_one_per_finance_entry` — so the deposit a till
+-- makes and the one pos_complete_finance makes for the same collection both
+-- landed. Both are idempotent now, and a replay writes no second audit line.
+--
+-- Adding defaulted arguments changes the signature, and PostgreSQL treats a
+-- different argument list as a new function rather than a replacement — the old
+-- 7-arg overload would survive and make the name ambiguous for every REVOKE /
+-- GRANT / call. Drop it first; a caller that still passes 7 positional
+-- arguments resolves to the new one through the defaults.
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS public.pos_add_cash_movement(
+  uuid, text, text, text, bigint, text, text);
+
 CREATE OR REPLACE FUNCTION pos_add_cash_movement(
   p_customer uuid,
   p_user     text,
@@ -729,13 +758,17 @@ CREATE OR REPLACE FUNCTION pos_add_cash_movement(
   p_type     text,
   p_amount   bigint,
   p_reason   text,
-  p_photo    text
+  p_photo    text,
+  p_movement_id text DEFAULT NULL,
+  p_source_finance_entry_id text DEFAULT NULL
 )
 RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = ''
 AS $$
 DECLARE mv_id text;
+  existing  text;
+  inserted  boolean;
 BEGIN
   IF p_amount IS NULL OR p_amount <= 0 THEN
     RAISE EXCEPTION 'Amount must be positive.';
@@ -746,7 +779,34 @@ BEGIN
   IF p_reason IS NULL OR btrim(p_reason) = '' THEN
     RAISE EXCEPTION 'A reason is required.';
   END IF;
+  IF p_photo IS NOT NULL AND length(p_photo) > 5000000 THEN
+    RAISE EXCEPTION 'Photo too large (max 5MB).';
+  END IF;
 
+  -- The same movement, arriving twice (a device retrying a push it never got an
+  -- ack for). Answer with the row that exists instead of writing a second one.
+  IF p_movement_id IS NOT NULL THEN
+    SELECT id INTO existing FROM public.cash_movements
+    WHERE customer_id = p_customer AND id = p_movement_id;
+    IF FOUND THEN
+      RETURN jsonb_build_object('id', existing, 'duplicate', true);
+    END IF;
+  END IF;
+
+  -- The same collection, deposited by the other path. Skipping is what lets the
+  -- outbox row and pos_complete_finance converge on one deposit; the unique
+  -- index alone would only turn it into an opaque rejection.
+  IF p_source_finance_entry_id IS NOT NULL THEN
+    SELECT id INTO existing FROM public.cash_movements
+    WHERE customer_id = p_customer
+      AND source_finance_entry_id = p_source_finance_entry_id;
+    IF FOUND THEN
+      RETURN jsonb_build_object('id', existing, 'duplicate', true);
+    END IF;
+  END IF;
+
+  -- Checked after the replays on purpose: a movement re-sent after its shift
+  -- closed is still the same money already in the drawer, not a failure.
   PERFORM 1 FROM public.shifts
     WHERE customer_id = p_customer AND id = p_shift_id AND status = 'OPEN'
     FOR SHARE;
@@ -754,11 +814,19 @@ BEGIN
     RAISE EXCEPTION 'Movement requires an open shift.';
   END IF;
 
-  mv_id := gen_random_uuid()::text;
+  mv_id := COALESCE(p_movement_id, gen_random_uuid()::text);
   INSERT INTO public.cash_movements (id, customer_id, shift_id, user_id, type,
-    amount_minor_units, reason, photo, created_at)
+    amount_minor_units, reason, photo, created_at, source_finance_entry_id)
   VALUES (mv_id, p_customer, p_shift_id, p_user, p_type, p_amount,
-    btrim(p_reason), NULLIF(p_photo, ''), now());
+    btrim(p_reason), NULLIF(p_photo, ''), now(), p_source_finance_entry_id)
+  ON CONFLICT (customer_id, id) DO NOTHING;
+  GET DIAGNOSTICS inserted = ROW_COUNT;
+  IF NOT inserted THEN
+    -- A concurrent twin won the same id; report it as the replay it is.
+    SELECT id INTO existing FROM public.cash_movements
+    WHERE customer_id = p_customer AND id = mv_id;
+    RETURN jsonb_build_object('id', COALESCE(existing, mv_id), 'duplicate', true);
+  END IF;
 
   INSERT INTO public.pos_audit_logs (id, customer_id, user_id, action, details, created_at)
   VALUES (gen_random_uuid(), p_customer, p_user, 'CASH_MOVEMENT_ADDED',
@@ -767,8 +835,10 @@ BEGIN
   RETURN jsonb_build_object('id', mv_id);
 END;
 $$;
-REVOKE ALL ON FUNCTION pos_add_cash_movement FROM public;
-GRANT EXECUTE ON FUNCTION pos_add_cash_movement TO service_role;
+REVOKE ALL ON FUNCTION pos_add_cash_movement(
+  uuid, text, text, text, bigint, text, text, text, text) FROM public;
+GRANT EXECUTE ON FUNCTION pos_add_cash_movement(
+  uuid, text, text, text, bigint, text, text, text, text) TO service_role;
 
 -- ---------------------------------------------------------------------------
 -- 3h3. pos_shift_counters: today's register counters in SQL, so the snapshot no
