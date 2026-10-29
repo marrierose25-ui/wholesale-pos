@@ -281,6 +281,87 @@ path, the gateway and the mirror schema against each other; all are fixed.
   too. Open it in a fresh tab — the service worker keeps serving the old bundle
   until the tab is fully closed and reopened.
 
+### Bidirectional master data and the 3-second cycle (Phase 29)
+
+Only sales, shifts and cash movements travelled before this phase: accounts,
+the product catalog and Money Tracking were local-only, so a cashier created on
+the desktop did not exist on the phone, and a browser could not see what a till
+was selling. Syncing those three domains is what made the 3-second cadence
+worth having — and it exposed two failures that were breaking real sales.
+
+- **The premise "native sales are REJECTED in `sync_mirror`" did not hold.**
+  At diagnosis the tenant sat at 8 APPLIED / 0 REJECTED, so there was no fresh
+  rejection row to read. The symptom had three separate causes, all fixed:
+  - **A release that never sent anything.** `build_release.ps1` shipped without
+    `WHOLESALE_POS_SYNC_FN_URL`, so sync was inert in exactly the builds that
+    were handed out. All three endpoints are now derived from one licensing
+    constant, which a build cannot forget.
+  - **`pos_sync_apply` RAISEd on the `shift` branch.** Every shift entry was
+    refused, so the open drawer a sale depends on never landed and the sale
+    followed it with *"Sale requires an open shift"*. `docs/supabase_sync_master_data.sql`
+    orders the apply pass by dependency (`user → shift → sale → cash_movement →
+    void_request → finance_category → finance_entry`) and turns a transient
+    failure into `CONTINUE` — the entry stays PENDING and retries — instead of
+    aborting the whole pass over one row.
+  - **A second register could not take a payment at all.** `sales.receipt_number`
+    is `TEXT UNIQUE NOT NULL` locally, but `nextReceiptNumber()` consulted only
+    *this device's* day counter. A till that joined the shop had already
+    **pulled** the first register's `REC-<day>-0001…0004`, was handed `0001`
+    anyway, and `saveSale` threw `SqliteException(2067)` — so the sale never
+    even reached the outbox. Allocation now starts above the highest receipt
+    present locally for the day, inside the same transaction, and writes the
+    bumped counter back. Proven live: the harness sale reached the cloud as
+    `REC-20261029-0005`.
+- **Master data is mutable, a ledger is not.** `user`, `product`,
+  `finance_category` and `finance_entry` are re-staged with
+  `ignoreDuplicates: false` and a fresh `received_at` so the newest edit wins,
+  while sale/shift/cash_movement keep the one-shot ledger replay. The gateway
+  maps client entity names to mirror tables, and `SyncPullApplier` lands all
+  seven table groups with the one-way state rules from Phase 27 intact.
+- **The tick is 3 seconds, from one constant.** `SyncIntervals.cycle` feeds
+  both `main.dart::_startSyncLoop` and `SyncService.pullInterval`, so the
+  cadence cannot drift apart between the timer and the pull staleness window.
+  The single-flight guard (`if (_inFlight) return SyncResult.idle();`) is what
+  makes 3 seconds safe: a slow cycle skips a tick rather than overlapping it and
+  locking SQLite. **The PWA has no timer to change** — it is cloud-direct
+  through `pos-api`, so the browser reads the live tables and its freshness is
+  bounded by how fast the natives push.
+- **The matrix now has a live test**
+  (`app/test/integration/sync_matrix_live_test.dart`). Two registers on their
+  **own SQLite files** with their own seats and licenses, plus real HTTP to
+  `pos-api` as the browser. `openInMemory()` cannot be used here: under the FFI
+  engine every `:memory:` handle in an isolate is the *same* database, so both
+  tills would share one device, one outbox and one cursor — and the run would
+  prove nothing. Opt-in through `MATRIX_CODE`/`MATRIX_USER`/`MATRIX_PASS`; with
+  no credentials every test **skips**, so an offline run can never report a
+  false pass. Result: A 9,338 ms, B 9,923 ms, C 9,953 / 11,521 ms, D 11,012 /
+  4,588 / 10,225 ms, both outboxes drained, and the server holding **16 APPLIED
+  / 0 REJECTED / 0 PENDING** for the tenant.
+- **Checked in the browser too** (PWA as owner): the matrix cashiers on Users,
+  the 100.00 Br sale as **VOIDED** with its reason in Sales History, the
+  `Matrix Person` collection **COMPLETED** in Money Tracking and the four
+  **+100.00 Br** deposits on the Register. Two UI gaps surfaced that are product
+  decisions, not sync ones: **there is no product catalog screen at all**
+  (`lib/features/products/` is empty, the sale dialog is free-text by design),
+  so test B could only be run against `save_product` and verified on the tills;
+  and a **voided sale exposes no receipt number** in the UI, only its UUID in
+  the audit log.
+- **A stale dev license vetoed every ship build.** `flutter build` leaves the
+  output folder alone, so the `license.key` that `-IncludeMyLicense` copies in
+  for the developer's own PC survived and made the cleanliness check throw on
+  every later customer build. A ship build now drops it before the check, which
+  still rejects a fresh copy, a local DB and any signing material.
+- `flutter analyze`: clean. `dart format --set-exit-if-changed`: clean.
+  `flutter test`: **353 passing** (18 new master-data tests across the outbox,
+  the pull applier and the three repositories, plus the receipt-allocation
+  regression). SQL applied and the `sync` function deployed with
+  `--no-verify-jwt`.
+- **All three artifacts rebuilt on this code**: `WholesalePOS_Windows_Release.zip`
+  (16 entries, no licence, local DB or signing material), `app-release.apk`
+  (59.4 MB, same package so it updates over an installed till) and the PWA
+  re-pinned at `web-xi-seven-15.vercel.app` and byte-verified (3,157,883 bytes
+  served = the fresh bundle).
+
 ## Next Up
 
 - Stock/inventory movements and low-stock alerts.
