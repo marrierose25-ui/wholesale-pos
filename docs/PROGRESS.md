@@ -231,11 +231,12 @@ path, the gateway and the mirror schema against each other; all are fixed.
   a backlogged parent table holds back its children). Sync gateway deployed at
   version 11.
 - **Artifacts rebuilt on top of these fixes**: `app-release.apk`
-  (`versionCode 2`, same `com.umer.wholesale_pos_app` package, so it updates
+  (`versionCode 3`, same `com.umer.wholesale_pos_app` package, so it updates
   over an installed till instead of replacing it) and
-  `WholesalePOS_Windows_Release.zip` (18 entries, no licence, local DB or
-  signing material). The PWA needed no rebuild: its writes go through
-  `pos-api`, not through the local pull applier.
+  `WholesalePOS_Windows_Release.zip` (15 entries, no licence, local DB or
+  signing material). The PWA was rebuilt and redeployed in Phase 28, when the
+  account editor gained the tick — that change is client-side, so the browser
+  build did need it.
 
 ### Money Tracking as a permission (Phase 28)
 
@@ -273,6 +274,12 @@ path, the gateway and the mirror schema against each other; all are fixed.
   — against a throwaway tenant inside a transaction that always rolls back, so
   it reports **8/8 passing** without leaving a row behind. All nine assertions
   and all eight smoke tests pass on the live project.
+- **The PWA is live on the new build.** `tools/deploy_web.ps1` rebuilt
+  `main_web.dart`, deployed to Vercel, re-pinned `web-xi-seven-15.vercel.app`
+  at the fresh deployment and proved it by byte length (3,157,883 bytes served
+  = the local bundle), so the browser build's account editor offers the tick
+  too. Open it in a fresh tab — the service worker keeps serving the old bundle
+  until the tab is fully closed and reopened.
 
 ## Next Up
 
