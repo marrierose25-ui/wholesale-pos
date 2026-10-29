@@ -630,6 +630,23 @@ void main() {
       // The phone takes the money: completing a CASH collection also deposits
       // it into the open register, which is a cash movement, not just a flag.
       await android.finance.markCompleted(ownerId: ownerId, entryId: entryId);
+      // The id the phone booked the money under. It has to survive the round
+      // trip: when the gateway minted its own uuid, the till kept UUID-1, the
+      // pull added UUID-2 and the register paid one collection twice while the
+      // browser — which only ever saw the cloud's single row — showed it once.
+      final paidOnAndroid = await android.db.query(
+        'cash_movements',
+        where: 'source_finance_entry_id = ?',
+        whereArgs: [entryId],
+      );
+      expect(
+        paidOnAndroid,
+        hasLength(1),
+        reason: 'the phone pays one collection exactly once',
+      );
+      final movementId = paidOnAndroid.single['id'] as String;
+      expect(paidOnAndroid.single['amount_minor_units'], _br100);
+
       final toWeb2 = await hop(android, windows);
 
       final completedOnWeb = _findById(
@@ -664,14 +681,42 @@ void main() {
             'the desktop must see the phone took the money in '
             '${toWeb2.inMilliseconds} ms',
       );
-      final deposits = await windows.db.query(
-        'cash_movements',
-        where: "type = 'DEPOSIT'",
+
+      // Native/PWA parity, measured on the money rather than on a flag: the
+      // browser's own ledger must hold ONE row for this collection, and it must
+      // be the phone's row by id and by amount.
+      final cloudMovements =
+          (await api.call('list_cash_movements', {'limit': 500}))['movements']
+              as List;
+      final paidInCloud = cloudMovements
+          .where((m) => (m as Map)['source_finance_entry_id'] == entryId)
+          .toList();
+      expect(
+        paidInCloud,
+        hasLength(1),
+        reason: 'the PWA paid this collection once, not twice',
       );
       expect(
-        deposits.any((m) => (m['amount_minor_units'] as num).toInt() == _br100),
-        isTrue,
-        reason: 'the deposit must be on the desktop register too',
+        (paidInCloud.single as Map)['id'],
+        movementId,
+        reason: 'the cloud adopted the id the cashier was already shown',
+      );
+      expect((paidInCloud.single as Map)['amount_minor_units'], _br100);
+
+      final paidOnWindows = await windows.db.query(
+        'cash_movements',
+        where: 'source_finance_entry_id = ?',
+        whereArgs: [entryId],
+      );
+      expect(
+        paidOnWindows,
+        hasLength(1),
+        reason: 'the desktop pulled one copy of the phone money',
+      );
+      expect(
+        paidOnWindows.single['id'],
+        movementId,
+        reason: 'same row, same id, on every surface',
       );
 
       print(
