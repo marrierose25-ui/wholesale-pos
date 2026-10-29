@@ -379,7 +379,14 @@ async function login(db: any, body: any): Promise<Response> {
   const { data: user } = await db.from('pos_users')
     .select('*').eq('customer_id', customerId).ilike('username', needle)
     .eq('active', true).is('deleted_at', null).maybeSingle();
-  if (!user) { loginRecordFail(tkey); return json({ ok: false, error: 'Invalid credentials.' }, 401); }
+  if (!user) {
+    // Constant-time: derive against a dummy even when the user is unknown so
+    // 'no such account' and 'wrong password' take the same wall-clock time.
+    await verifyPassword(password, 'AAAAAAAAAAAAAAAAAAAAAA==',
+      '210000\$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=');
+    loginRecordFail(tkey);
+    return json({ ok: false, error: 'Invalid credentials.' }, 401);
+  }
 
   const ok = await verifyPassword(password, user.pw_salt, user.pw_hash);
   if (!ok) { loginRecordFail(tkey); return json({ ok: false, error: 'Invalid credentials.' }, 401); }
@@ -710,6 +717,10 @@ async function requestVoid(db: any, ctx: Ctx, body: any): Promise<Response> {
     .eq('customer_id', ctx.customerId).eq('id', String(body.sale_id ?? '')).maybeSingle();
   if (saleErr) throw new Error(saleErr.message);
   if (!sale || sale.status !== 'COMPLETED') return json({ ok: false, error: 'Sale not voidable.' }, 400);
+  const { data: existingReq } = await db.from('void_requests').select('id')
+    .eq('customer_id', ctx.customerId).eq('sale_id', String(body.sale_id ?? ''))
+    .eq('status', 'PENDING').maybeSingle();
+  if (existingReq) return json({ ok: false, error: 'A void request is already pending for this sale.' }, 409);
   const id = crypto.randomUUID();
   const ins = await db.from('void_requests').insert({
     id, customer_id: ctx.customerId, sale_id: body.sale_id,
@@ -910,7 +921,7 @@ async function addCashMovement(db: any, ctx: Ctx, body: any): Promise<Response> 
   // Optional proof photo (base64 image, usually attached on a debit as
   // withdrawal evidence). Capped server-side so entries can't bloat the row.
   const photo = typeof body.photo === 'string' && body.photo.length > 0 ? body.photo : null;
-  if (photo !== null && photo.length > 4_000_000) {
+  if (photo !== null && photo.length > 300_000) {
     return json({ ok: false, error: 'Proof photo is too large.' }, 400);
   }
   // The open-shift check, the row and its audit entry commit together, with the
@@ -1375,6 +1386,8 @@ async function financePermanentlyDeleteCategory(db: any, ctx: Ctx, body: any): P
 async function financeAddEntry(db: any, ctx: Ctx, body: any): Promise<Response> {
   const amount = Number(body.amount_minor_units ?? 0);
   if (amount <= 0) return json({ ok: false, error: 'Amount must be positive.' }, 400);
+  const source = str(body.source);
+  if (!source) return json({ ok: false, error: 'A source is required.' }, 400);
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const description = body.description == null ? null : str(body.description) || null;
