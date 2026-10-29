@@ -362,6 +362,78 @@ worth having — and it exposed two failures that were breaking real sales.
   re-pinned at `web-xi-seven-15.vercel.app` and byte-verified (3,157,883 bytes
   served = the fresh bundle).
 
+### One deposit per collection on every surface (Phase 30)
+
+Completing a CASH collection on a native till put the money in the register
+**twice** — the cashier's own `DEPOSIT` plus a second row pulled back from the
+cloud — while the PWA listed it once. The stated cause ("`pos_sync_apply` calls
+`pos_complete_finance`, which inserts a second row") turned out not to be what
+the code does, so both halves of the failure had to be fixed separately.
+
+- **What the duplicate on the till actually was.** `pos_sync_apply` never calls
+  `pos_complete_finance`: its `finance_entry` branch writes the entry row, and
+  the deposit arrives as a separate `cash_movement` entity. The second local row
+  came from `pos_add_cash_movement`, which **discarded the uuid the till sent**
+  and inserted `gen_random_uuid()::text`. The device kept `UUID-1`, the pull
+  handed it `UUID-2` for the same 100.00 Br, and the cloud — which held only one
+  row — is exactly why the browser looked correct.
+- **The genuine cloud-side double payment** is the browser/till race: whoever
+  completes the entry through `pos_complete_finance` writes a deposit, and the
+  pushed deposit writes another. `cash_movements_one_per_finance_entry` exists to
+  stop that, but it indexes `(customer_id, source_finance_entry_id) WHERE … IS
+  NOT NULL`, and the pushed row had NULL in that column — locally the column did
+  not even exist.
+- **Client (schema 16 → 17).** `cash_movements.source_finance_entry_id TEXT` is
+  added by a guarded `ALTER TABLE` and in the fresh-install DDL.
+  `FinanceRepository.markCompleted` stamps it on the movement map, which *is* the
+  outbox payload, so the tag travels in the same write. `SyncPullApplier` skips a
+  cloud deposit whose entry this till has already paid, and carries the column
+  through, so the guard survives the next pull.
+- **RPCs.** `pos_complete_finance` now inserts `IF NOT EXISTS` for that entry —
+  fallback writer, not second writer. `pos_add_cash_movement` gained
+  `p_movement_id` and `p_source_finance_entry_id` (both defaulted, so the
+  browser's 7-argument call is unchanged), is idempotent on either key, inserts
+  `ON CONFLICT (customer_id, id) DO NOTHING` with `GET DIAGNOSTICS`, and a replay
+  returns the existing id **without** a second `CASH_MOVEMENT_ADDED` audit line.
+  The `OPEN` shift check moved *after* the replay tests: a row re-sent after its
+  shift closed is the same money already in the drawer, not a failure.
+  `pos_sync_apply`'s `cash_movement` branch passes `rec.entity_id` and the entry
+  id through. No TypeScript change was needed — the gateway stores
+  `entry.payload` verbatim.
+- **`DROP FUNCTION` first.** Adding defaulted parameters changes the signature,
+  and PostgreSQL reads a different argument list as a *new* function, so the
+  deployed 7-arg overload survived and the file died on `42725: function name
+  "pos_add_cash_movement" is not unique` at its unqualified `REVOKE`.
+- **The data repair** (`docs/supabase_finance_movement_dedupe.sql`) is a view of
+  the actions plus a function that runs them: delete the newer half of a
+  confirmed pair, then stamp the survivor. Delete-then-stamp is forced by the
+  partial unique index — the survivor cannot claim the entry id while the tagged
+  twin still exists. Pairing only accepts a **mutual nearest** match on tenant,
+  type, amount, reason and a sub-day clock distance, because two collections
+  from one person for the same amount are ordinary. Live result: **9 TAGGED /
+  0 DELETED**, 119 movements before and after (no money left the database), and
+  every completed CASH collection except one now has exactly one tagged deposit.
+  Four untagged deposits were deliberately left alone — their collections no
+  longer exist (orphans of deleted people), and one completed entry has no
+  deposit at all, which predates this fix. The view and the function were
+  dropped after the run.
+- **Old duplicates on a till are not guessed at.** Migration 17 adds the column
+  and rewrites nothing: an exact-twin heuristic would also delete two legitimate
+  identical collections, so a device that already shows the doubled deposit keeps
+  it until the drawer is reconciled by hand.
+- `flutter analyze` clean, `dart format --set-exit-if-changed` clean, **357
+  tests passing** (+4: the tag in the queued payload, the pull guard both ways,
+  the v16→v17 column, and one-deposit-per-completion at the repository). The
+  live matrix's test D no longer asks `deposits.any(...)` — it requires exactly
+  one movement for the entry on the phone, exactly one in the browser's own
+  ledger, and **the same id and amount on all three surfaces**. Run: A 25,818 ms,
+  B 10,598 ms, C 11,854 / 11,930 ms, D 12,373 / 12,834 / 15,125 ms, both outboxes
+  drained.
+- **Artifacts rebuilt on this code**: `WholesalePOS_Windows_Release.zip` (16
+  entries, no licence, no local DB), `app-release.apk` (59.4 MB) and the PWA
+  re-pinned at `web-xi-seven-15.vercel.app`, byte-verified (3,157,883 bytes
+  served = the fresh bundle).
+
 ## Next Up
 
 - Stock/inventory movements and low-stock alerts.
