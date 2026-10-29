@@ -5,12 +5,71 @@ import 'package:uuid/uuid.dart';
 
 import 'sync_outbox_entry.dart';
 
+/// Which table and columns name the operator behind a sync entity. Kept in code
+/// rather than in a payload so the outbox, not the caller, decides what leaves
+/// the device.
+class _LedgerOwner {
+  const _LedgerOwner(this.table, this.columns);
+
+  final String table;
+  final List<String> columns;
+}
+
 /// Appends a change to the outbox. Callers pass the *same transaction handle*
 /// they used for the business write, so the data change and its queue entry
 /// commit or roll back together — the classic transactional-outbox guarantee
 /// that no event is ever lost or duplicated by a crash.
 class SyncOutbox {
   SyncOutbox._();
+
+  /// Money a training account rang up belongs to that till alone: its sales,
+  /// shifts, deposits, void requests and collections are never pushed, because
+  /// once they reach the cloud they land in every device's dashboard, sales
+  /// history and drawer. Checked here rather than at each call site so a future
+  /// writer cannot forget it. Master data is deliberately absent: the demo
+  /// account's own row must keep syncing (that is how its login works on every
+  /// device), and products and people are shared by design.
+  ///
+  /// A finance entry names two hands, because a collection is really two rows:
+  /// the entry and the deposit that pays it. If either was the demo account,
+  /// both stay home — pushing only the entry would leave the cloud with a
+  /// collection marked taken and no money behind it.
+  static const Map<String, _LedgerOwner> _ledgerOwners = {
+    SyncEntities.sale: _LedgerOwner('sales', ['cashier_id']),
+    SyncEntities.shift: _LedgerOwner('shifts', ['cashier_id']),
+    SyncEntities.cashMovement: _LedgerOwner('cash_movements', ['user_id']),
+    SyncEntities.voidRequest: _LedgerOwner('void_requests', ['requested_by']),
+    SyncEntities.financeEntry: _LedgerOwner('finance_entries', [
+      'created_by',
+      'completed_by',
+    ]),
+  };
+
+  /// True when this row was written by an account flagged `is_demo`.
+  ///
+  /// Answers false when the row is already gone (a delete of something the
+  /// device just removed) or the operator is unknown, so real money always
+  /// syncs: only a positively identified training account is ever held back.
+  /// The table and columns come from the constant map above, never from input.
+  static Future<bool> _isDemoOwned(
+    DatabaseExecutor txn, {
+    required String entityType,
+    required String entityId,
+  }) async {
+    final owner = _ledgerOwners[entityType];
+    if (owner == null) return false;
+    final actors = owner.columns.map((c) => 't.$c').join(', ');
+    final rows = await txn.rawQuery(
+      '''
+      SELECT 1 FROM ${owner.table} t
+      JOIN users u ON u.id IN ($actors)
+      WHERE t.id = ? AND u.is_demo = 1
+      LIMIT 1
+      ''',
+      [entityId],
+    );
+    return rows.isNotEmpty;
+  }
 
   /// Queues a whole row, filed under the key its entity type uses.
   ///
@@ -68,6 +127,9 @@ class SyncOutbox {
     required String entityId,
     required Map<String, Object?> payload,
   }) async {
+    if (await _isDemoOwned(txn, entityType: entityType, entityId: entityId)) {
+      return;
+    }
     await txn.insert('sync_outbox', {
       'id': const Uuid().v4(),
       'entity_type': entityType,
@@ -84,6 +146,9 @@ class SyncOutbox {
     required String entityType,
     required String entityId,
   }) async {
+    if (await _isDemoOwned(txn, entityType: entityType, entityId: entityId)) {
+      return;
+    }
     await txn.insert('sync_outbox', {
       'id': const Uuid().v4(),
       'entity_type': entityType,

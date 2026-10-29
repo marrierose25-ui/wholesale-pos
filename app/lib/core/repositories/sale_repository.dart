@@ -9,6 +9,7 @@ import '../sync/sync_outbox.dart';
 import '../sync/sync_outbox_entry.dart';
 import '../utils/date_range.dart';
 import '../utils/money_utils.dart';
+import '../utils/report_filters.dart';
 import 'shift_repository.dart';
 
 /// Data-access contract for sales, voids, receipts, dashboards, reports and
@@ -319,6 +320,12 @@ class SqfliteSaleRepository implements SaleRepository {
     final where = <String>[];
     final args = <dynamic>[];
 
+    // Training-account sales stay inside the demo login. They can still be in
+    // this database (written before the outbox guard, or pulled from a cloud
+    // that an un-updated till kept feeding), and a history list the dashboard
+    // totals disagree with is worse than either being wrong.
+    where.add(notDemoOperator('sales.cashier_id'));
+
     if (period != null) {
       where.add('sales.created_at >= ? AND sales.created_at < ?');
       args.add(period.start.toIso8601String());
@@ -380,6 +387,7 @@ class SqfliteSaleRepository implements SaleRepository {
       'sales',
       where:
           "status = 'VOIDED' AND "
+          '${notDemoOperator('cashier_id')} AND '
           '(voided_shift_id = ? OR (voided_shift_id IS NULL AND shift_id = ?))',
       whereArgs: [shiftId, shiftId],
       orderBy: 'created_at DESC',
@@ -457,6 +465,7 @@ class SqfliteSaleRepository implements SaleRepository {
       FROM void_requests vr
       LEFT JOIN users ON vr.requested_by = users.id
       WHERE vr.status = ?
+        AND ${notDemoOperator('vr.requested_by')}
       ORDER BY vr.created_at DESC
     ''',
       [VoidRequest.statusPending],
@@ -660,6 +669,7 @@ class SqfliteSaleRepository implements SaleRepository {
       FROM sales
       WHERE status = 'COMPLETED'
         AND payment_method IN ('CASH', 'BANK')
+        AND ${notDemoOperator('cashier_id')}
         AND created_at >= ? AND created_at < ?
       GROUP BY day
       ORDER BY day ASC
@@ -778,8 +788,11 @@ class SqfliteSaleRepository implements SaleRepository {
       range.start.toIso8601String(),
       range.end.toIso8601String(),
     ];
-    const completed =
-        "created_at >= ? AND created_at < ? AND status = 'COMPLETED'";
+    // Every figure below shares one filter, so the dashboard, its void count and
+    // its pending approvals all speak about the real shop only.
+    final completed =
+        "created_at >= ? AND created_at < ? AND status = 'COMPLETED' "
+        'AND ${notDemoOperator('cashier_id')}';
 
     final revenueRow = await _db.rawQuery('''
       SELECT COUNT(*) AS count, COALESCE(SUM(total_minor_units), 0) AS total
@@ -800,7 +813,8 @@ class SqfliteSaleRepository implements SaleRepository {
     // Sales rung up in the period that were later voided.
     final voidRow = await _db.rawQuery('''
       SELECT COUNT(*) AS count FROM sales
-      WHERE status = 'VOIDED' AND created_at >= ? AND created_at < ?
+      WHERE status = 'VOIDED' AND ${notDemoOperator('cashier_id')}
+        AND created_at >= ? AND created_at < ?
     ''', rangeArgs);
 
     // Cashier void requests still awaiting an owner's decision.
@@ -809,6 +823,7 @@ class SqfliteSaleRepository implements SaleRepository {
       FROM void_requests vr
       JOIN sales s ON vr.sale_id = s.id
       WHERE vr.status = 'PENDING'
+        AND ${notDemoOperator('s.cashier_id')}
         AND s.created_at >= ? AND s.created_at < ?
     ''', rangeArgs);
 
@@ -883,6 +898,7 @@ class SqfliteSaleRepository implements SaleRepository {
       FROM sale_items si
       JOIN sales ON si.sale_id = sales.id
       WHERE sales.status = 'COMPLETED'
+        AND ${notDemoOperator('sales.cashier_id')}
         AND sales.payment_method IN ('CASH', 'BANK')$rangeClause
       GROUP BY si.product_name_snapshot
       ORDER BY total_revenue DESC
@@ -904,6 +920,7 @@ class SqfliteSaleRepository implements SaleRepository {
       FROM sales
       JOIN users ON sales.cashier_id = users.id
       WHERE sales.status = 'COMPLETED'
+        AND ${notDemoOperator('sales.cashier_id')}
         AND sales.payment_method IN ('CASH', 'BANK')$rangeClause
       GROUP BY users.id, users.username
       ORDER BY total_revenue DESC

@@ -7,6 +7,7 @@ import '../../features/sales/shift.dart';
 import '../sync/sync_outbox.dart';
 import '../sync/sync_outbox_entry.dart';
 import '../utils/date_range.dart';
+import '../utils/report_filters.dart';
 
 /// Data-access contract for register shifts and cash movements.
 ///
@@ -109,7 +110,10 @@ class SqfliteShiftRepository implements ShiftRepository {
     DateRange? period,
     String? status,
   }) async {
-    final clauses = <String>[];
+    // A training account's register sessions are not the shop's history, and its
+    // money never entered the drawer, so it is left out of the balance sums
+    // below too: a till that trained all day still closes on real cash.
+    final clauses = <String>[notDemoOperator('shifts.cashier_id')];
     final args = <Object?>[];
     if (period != null) {
       clauses.add('shifts.opened_at >= ? AND shifts.opened_at < ?');
@@ -235,7 +239,7 @@ class SqfliteShiftRepository implements ShiftRepository {
 
   @override
   Future<List<CashMovement>> getCashMovements({String? shiftId}) async {
-    final clauses = <String>[];
+    final clauses = <String>[notDemoOperator('cm.user_id')];
     final args = <Object?>[];
     if (shiftId != null) {
       clauses.add('cm.shift_id = ?');
@@ -265,11 +269,18 @@ class SqfliteShiftRepository implements ShiftRepository {
 
   @override
   Future<Map<String, int>> getShiftSummary(Shift shift) async {
+    // One OPEN shift is shared by every login on the device, so the practice
+    // money a demo cashier rang up would otherwise sit in the real drawer's
+    // expected cash. Excluded here and in every sum below, so the balance the
+    // cashier counts against holds only money the shop actually took.
+    final notDemoSale = notDemoOperator('cashier_id');
+    final notDemoMovement = notDemoOperator('user_id');
     final cashSales = await _db.rawQuery(
       '''
       SELECT SUM(total_minor_units) as total 
       FROM sales 
-      WHERE status = 'COMPLETED' AND payment_method = 'CASH' AND shift_id = ?
+      WHERE status = 'COMPLETED' AND payment_method = 'CASH'
+        AND $notDemoSale AND shift_id = ?
     ''',
       [shift.id],
     );
@@ -278,7 +289,8 @@ class SqfliteShiftRepository implements ShiftRepository {
       '''
       SELECT SUM(total_minor_units) as total 
       FROM sales 
-      WHERE status = 'COMPLETED' AND payment_method = 'BANK' AND shift_id = ?
+      WHERE status = 'COMPLETED' AND payment_method = 'BANK'
+        AND $notDemoSale AND shift_id = ?
     ''',
       [shift.id],
     );
@@ -287,7 +299,8 @@ class SqfliteShiftRepository implements ShiftRepository {
       '''
       SELECT SUM(total_minor_units) as total 
       FROM sales 
-      WHERE status = 'VOIDED' AND (voided_shift_id = ? OR (voided_shift_id IS NULL AND shift_id = ?))
+      WHERE status = 'VOIDED' AND $notDemoSale
+        AND (voided_shift_id = ? OR (voided_shift_id IS NULL AND shift_id = ?))
     ''',
       [shift.id, shift.id],
     );
@@ -298,7 +311,7 @@ class SqfliteShiftRepository implements ShiftRepository {
         SUM(CASE WHEN type = 'DEPOSIT' THEN amount_minor_units ELSE 0 END) as deposits,
         SUM(CASE WHEN type IN ('WITHDRAWAL', 'EXPENSE') THEN amount_minor_units ELSE 0 END) as withdrawals
       FROM cash_movements 
-      WHERE shift_id = ?
+      WHERE $notDemoMovement AND shift_id = ?
     ''',
       [shift.id],
     );
@@ -352,7 +365,8 @@ class SqfliteShiftRepository implements ShiftRepository {
         COALESCE(SUM(CASE WHEN payment_method = 'CASH' THEN total_minor_units ELSE 0 END), 0) AS cash_sales,
         COALESCE(SUM(CASE WHEN payment_method = 'BANK' THEN total_minor_units ELSE 0 END), 0) AS bank_sales
       FROM sales
-      WHERE status = 'COMPLETED' AND shift_id = ?
+      WHERE status = 'COMPLETED' AND ${notDemoOperator('cashier_id')}
+        AND shift_id = ?
         AND created_at >= ? AND created_at < ?
     ''',
       [shift.id, start, end],
@@ -363,7 +377,8 @@ class SqfliteShiftRepository implements ShiftRepository {
         COALESCE(SUM(CASE WHEN type = 'DEPOSIT' THEN amount_minor_units ELSE 0 END), 0) AS deposits,
         COALESCE(SUM(CASE WHEN type IN ('WITHDRAWAL', 'EXPENSE') THEN amount_minor_units ELSE 0 END), 0) AS withdrawals
       FROM cash_movements
-      WHERE shift_id = ? AND created_at >= ? AND created_at < ?
+      WHERE ${notDemoOperator('user_id')} AND shift_id = ?
+        AND created_at >= ? AND created_at < ?
     ''',
       [shift.id, start, end],
     );
@@ -388,6 +403,7 @@ class SqfliteShiftRepository implements ShiftRepository {
       '''
       SELECT COALESCE(SUM(total_minor_units), 0) AS total FROM sales
       WHERE status = 'VOIDED' AND payment_method = 'CASH'
+        AND ${notDemoOperator('cashier_id')}
         AND voided_shift_id = ? AND shift_id <> ?
     ''',
       [shiftId, shiftId],
