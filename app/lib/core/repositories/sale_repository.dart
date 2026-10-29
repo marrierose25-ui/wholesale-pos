@@ -176,6 +176,16 @@ class SqfliteSaleRepository implements SaleRepository {
   /// `REC-20261021-0007`. Numbers are allocated in a transaction so a retail
   /// audit can follow them in order. They are internal identifiers only and
   /// are never shown in the sales-history interface.
+  ///
+  /// The day's counter alone is not enough: `sales.receipt_number` is UNIQUE
+  /// locally, and a register that has pulled the shop's history already holds
+  /// other tills' numbers for today (the pull namespaces only the ones that
+  /// clash on the way in, never the first). The counter only remembers what
+  /// THIS till handed out, so a second device joining the shop would be told
+  /// `0001` — a number already in the book — and `saveSale` would fail on the
+  /// unique index. The till could not take a single payment until it was
+  /// restarted with a bumped counter. Allocation therefore starts above the
+  /// highest receipt present locally for the day.
   @override
   Future<String> nextReceiptNumber() async {
     final now = DateTime.now();
@@ -184,6 +194,7 @@ class SqfliteSaleRepository implements SaleRepository {
         '${now.month.toString().padLeft(2, '0')}'
         '${now.day.toString().padLeft(2, '0')}';
     final key = 'receipt-$day';
+    final prefix = 'REC-$day-';
 
     final next = await _db.transaction((txn) async {
       final rows = await txn.query(
@@ -193,7 +204,16 @@ class SqfliteSaleRepository implements SaleRepository {
         whereArgs: [key],
         limit: 1,
       );
-      final value = rows.isEmpty ? 1 : (rows.first['value'] as int) + 1;
+      var value = rows.isEmpty ? 1 : (rows.first['value'] as int) + 1;
+      // `substr(...,n,4)` reads the padded run of digits only, so a receipt the
+      // pull tagged (`REC-…-0004#bf4aca21`) still counts as used.
+      final used = await txn.rawQuery(
+        'SELECT MAX(CAST(substr(receipt_number, ?, 4) AS INTEGER)) AS top '
+        'FROM sales WHERE receipt_number LIKE ?',
+        [prefix.length + 1, '$prefix%'],
+      );
+      final highest = (used.first['top'] as int?) ?? 0;
+      if (value <= highest) value = highest + 1;
       await txn.insert('counters', {
         'name': key,
         'value': value,
@@ -201,7 +221,7 @@ class SqfliteSaleRepository implements SaleRepository {
       return value;
     });
 
-    return 'REC-$day-${next.toString().padLeft(4, '0')}';
+    return '$prefix${next.toString().padLeft(4, '0')}';
   }
 
   @override
