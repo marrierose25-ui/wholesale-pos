@@ -173,6 +173,10 @@ class SqfliteShiftRepository implements ShiftRepository {
       throw Exception('Invalid cash movement type.');
     }
     if (reason.trim().isEmpty) throw Exception('A reason is required.');
+    // Cap proof photo base64 size (~150 KB JPEG after decode).
+    if (photo != null && photo.length > 200 * 1024) {
+      throw Exception('Proof photo is too large (limit ~150 KB).');
+    }
     await _db.transaction((txn) async {
       final shifts = await txn.query(
         'shifts',
@@ -456,7 +460,10 @@ class SqfliteShiftRepository implements ShiftRepository {
       txn,
       entityType: SyncEntities.cashMovement,
       entityId: movementId,
-      payload: {'cash_movement': rows.first},
+      payload: {
+        'cash_movement': (Map<String, Object?>.from(rows.first)
+          ..remove('photo')),
+      },
     );
   }
 }

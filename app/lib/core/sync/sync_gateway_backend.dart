@@ -167,10 +167,13 @@ class SyncGatewayBackend implements SyncBackend {
     // 'failed' stays queued. The server echoes the outbox id it saw, so two
     // queued edits to one sale no longer share a single verdict; a server that
     // predates entryId falls back to the entityId mapping, and one that sends
-    // no results list falls back to acking the whole batch.
+    // no results list leaves every row queued for the next retry.
     final results = decoded is Map ? decoded['results'] : null;
     if (results is! List || results.isEmpty) {
-      return entries.map((e) => e.id).toSet();
+      // No per-entry verdict means nothing is confirmed; leave every row
+      // queued and retry. Returning empty (vs ack-all) is fail-safe:
+      // retries are cheap, losing a sale is not.
+      return const <String>{};
     }
     final idsByEntity = <String, List<String>>{};
     for (final e in entries) {
