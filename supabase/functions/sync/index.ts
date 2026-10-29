@@ -387,6 +387,17 @@ async function pull(db: any, auth: { customerId: string }, body: any): Promise<R
   // ambiguous because a push stamps every row it applied with one timestamp, so
   // the id tiebreaker makes the walk strictly ordered and gap-free.
   const cursor = body.cursor && typeof body.cursor === 'object' ? body.cursor : null;
+  // The cursor is interpolated into a PostgREST `.or(...)` expression, which
+  // parses commas, parentheses and dots. Validate BOTH halves against their
+  // real shapes before they touch the query string, so a crafted cursor cannot
+  // inject extra filter terms (or escape the tenant filter).
+  if (cursor) {
+    const cAt = String(cursor.received_at ?? '');
+    const cId = String(cursor.id ?? '');
+    if (!/^[0-9T:.+\-]{10,40}Z?$/.test(cAt) || !/^[A-Za-z0-9_\-]{1,60}$/.test(cId)) {
+      return json({ ok: false, error: 'Invalid cursor.' }, 400);
+    }
+  }
   // A first sync has no cursor yet. Start from the beginning of the tenant's
   // history instead of rejecting the call — the request is already
   // authenticated by a signed license, and the tenant filter is applied below.
