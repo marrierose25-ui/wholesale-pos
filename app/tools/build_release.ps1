@@ -42,6 +42,9 @@ $LicenseFnUrl     = 'https://trcthxyyuapwavzeisvm.supabase.co/functions/v1/licen
 # license, no SQLite). It lives on the SAME Supabase host as the licensing
 # function, so derive its URL rather than duplicate the project reference.
 $PosApiUrl = $LicenseFnUrl -replace '/licensing$', '/pos-api'
+# The sync gateway rides the same host; without this define a release silently
+# ships with cloud sync off (Settings → Cloud Sync says "off on this build").
+$SyncFnUrl = $LicenseFnUrl -replace '/licensing$', '/sync'
 
 # Always build from the app/ folder (where pubspec.yaml lives), regardless
 # of the caller's current directory.
@@ -52,6 +55,7 @@ $defines = @(
     "--dart-define=WHOLESALE_POS_LICENSE_PUBLIC_KEY=$LicensePublicKey",
     "--dart-define=WHOLESALE_POS_LICENSE_FN_URL=$LicenseFnUrl",
     "--dart-define=WHOLESALE_POS_API_URL=$PosApiUrl"
+    "--dart-define=WHOLESALE_POS_SYNC_FN_URL=$SyncFnUrl"
 )
 if ($DevUnlicensed) {
     Write-Warning 'DevUnlicensed is ON — this build bypasses license checks. NEVER distribute it.'
