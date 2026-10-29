@@ -64,12 +64,15 @@ if ($DevUnlicensed) {
 
 # Post-build safety check: a distributable must NEVER carry the developer's
 # license, a seeded local DB, or signing material. Throws on any hit so a dirty
-# artifact can't be packaged by accident.
+# artifact can't be packaged by accident. -AllowDevLicense exempts ONLY
+# license.key, and only for the developer's own -IncludeMyLicense build, so a
+# leftover from the last such run does not block the next one; DB files and
+# signing material are always rejected.
 function Assert-CleanOutput {
-    param([string]$Dir)
+    param([string]$Dir, [switch]$AllowDevLicense)
     if (-not (Test-Path $Dir)) { return }
     $forbidden = Get-ChildItem -Path $Dir -Recurse -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -match '(?i)^(license\.key)$' -or
+        Where-Object { ($AllowDevLicense -eq $false -and $_.Name -match '(?i)^(license\.key)$') -or
                        $_.Name -match '(?i)\.(db|db-wal|db-shm|jks|keystore|pfx|p12)$' }
     if ($forbidden) {
         $names = ($forbidden | ForEach-Object { $_.FullName }) -join [Environment]::NewLine
@@ -84,6 +87,11 @@ if ($DevUnlicensed) {
 if ($Platform -eq 'windows') {
     flutter build windows --release @defines
     $out = Join-Path $AppDir 'build\windows\x64\runner\Release'
+    # Cleanliness is checked BEFORE the deliberate dev-only copy below: this
+    # rule exists to catch a license riding along with a ship build, and
+    # -IncludeMyLicense adds exactly that file on purpose, so running the check
+    # afterwards made the developer-only path always throw.
+    Assert-CleanOutput $out -AllowDevLicense:$IncludeMyLicense
     # A customer build must NOT inherit the developer's license.key. It is only
     # copied when -IncludeMyLicense is passed, for running on the dev PC itself.
     if ($IncludeMyLicense) {
@@ -93,7 +101,6 @@ if ($Platform -eq 'windows') {
             Write-Host "Copied license.key into $out (developer's own PC path; DO NOT ship)."
         }
     }
-    Assert-CleanOutput $out
     Write-Host "Windows release output: $out"
 } elseif ($Platform -eq 'apk') {
     flutter build apk --release @defines
