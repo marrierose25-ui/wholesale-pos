@@ -230,6 +230,12 @@ path, the gateway and the mirror schema against each other; all are fixed.
   stops signing in; a void request decided in the browser stops pending here;
   a backlogged parent table holds back its children). Sync gateway deployed at
   version 11.
+- **Artifacts rebuilt on top of these fixes**: `app-release.apk`
+  (`versionCode 2`, same `com.umer.wholesale_pos_app` package, so it updates
+  over an installed till instead of replacing it) and
+  `WholesalePOS_Windows_Release.zip` (18 entries, no licence, local DB or
+  signing material). The PWA needed no rebuild: its writes go through
+  `pos-api`, not through the local pull applier.
 
 ## Next Up
 
