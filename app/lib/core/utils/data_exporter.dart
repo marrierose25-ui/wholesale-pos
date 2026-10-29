@@ -62,8 +62,7 @@ class DataExporter {
     // column, which the ledger read falls back to).
     final photos = await db.query('cash_movement_photos');
     final photosByMovement = {
-      for (final row in photos)
-        row['movement_id'] as String: row['jpeg_bytes'],
+      for (final row in photos) row['movement_id'] as String: row['jpeg_bytes'],
     };
     for (final movement in cashMovements) {
       final bytes = photosByMovement[movement['id']];

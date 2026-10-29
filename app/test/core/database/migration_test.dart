@@ -698,9 +698,8 @@ void main() {
       );
 
       // The ledger read still hands the view a base64 string to decode.
-      final ledger = await SqfliteShiftRepository(
-        db,
-      ).getCashMovements(shiftId: 'shift-1');
+      final ledger = await SqfliteShiftRepository(db)
+          .getCashMovements(shiftId: 'shift-1');
       expect(ledger.single.photo, jpeg);
 
       await db.close();
