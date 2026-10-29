@@ -96,6 +96,16 @@ class SyncPullApplier {
   /// [UserRepository], because the login path compares against them.
   static const String cloudAccountMarker = UserRepository.cloudAccountMarker;
 
+  /// Placeholders used when a pulled row names a parent this device has never
+  /// seen. `sales` is the only way a second till learns that another register
+  /// (or a cashier created on it) exists, and its three foreign keys are NOT
+  /// NULL, so an unresolved one does not merely look wrong — the whole sale is
+  /// rejected by the trigger and silently disappears from this device's
+  /// history. These ids are the smallest row that can satisfy them.
+  static const String unknownUserId = 'cloud-unknown-user';
+  static const String unknownShiftId = 'cloud-unknown-shift';
+  static const String unknownDeviceId = 'cloud-unknown-device';
+
   Future<SyncApplyReport> apply(SyncPullResult page) async {
     var sales = 0,
         saleItems = 0,
@@ -113,10 +123,12 @@ class SyncPullApplier {
       final applied = await _applySales(txn, page.changes['sales'] ?? const []);
       sales = applied.$1;
       skipped += applied.$2;
-      saleItems = await _applySaleItems(
+      final lines = await _applySaleItems(
         txn,
         page.changes['sale_items'] ?? const [],
       );
+      saleItems = lines.$1;
+      skipped += lines.$2;
       cash = await _applyCashMovements(
         txn,
         page.changes['cash_movements'] ?? const [],
@@ -182,14 +194,20 @@ class SyncPullApplier {
       if (row['is_demo'] == true) {
         final demo = await _localDemo(txn, id);
         if (demo != null) {
-          if (credential.isNotEmpty) {
+          await _safely(txn, () async {
             await txn.update(
               'users',
-              {...credential, 'is_demo': 1},
+              {
+                ...credential,
+                'is_demo': 1,
+                // The ticks are the owner's training plan for this login, so
+                // they follow the cloud even though the role cannot.
+                'permissions': _permissionsJson(row['permissions']),
+              },
               where: 'id = ?',
               whereArgs: [demo],
             );
-          }
+          });
           continue;
         }
       }
@@ -198,14 +216,7 @@ class SyncPullApplier {
         // A credential created, reset or rotated in the browser has to land or
         // the account can only sign in on the web. Only the cloud pair is
         // written: the local pair may hold a newer password set on this PC.
-        if (credential.isNotEmpty) {
-          await txn.update(
-            'users',
-            credential,
-            where: 'id = ?',
-            whereArgs: [id],
-          );
-        }
+        await _refreshUserState(txn, id, row, credential);
         continue;
       }
 
@@ -232,15 +243,50 @@ class SyncPullApplier {
         'is_active': row['active'] == false ? 0 : 1,
         // jsonb arrives as a decoded list; a text column arrives as the JSON
         // text itself. Both have to land as the local TEXT form.
-        'permissions': permissions is String
-            ? (permissions.isEmpty ? '[]' : permissions)
-            : jsonEncode(permissions is List ? permissions : const <String>[]),
+        'permissions': _permissionsJson(permissions),
         'is_demo': row['is_demo'] == true ? 1 : 0,
         'deleted_at': _localIso(row['deleted_at']),
         'created_at': _localIso(row['created_at']) ?? _nowIso(),
       });
     }
     return created;
+  }
+
+  /// Applies the parts of an account the cloud owns onto a row that is already
+  /// here: the credential, the role, the feature ticks, whether it may sign in
+  /// at all, and whether it was deleted.
+  ///
+  /// A till never uploads `users`, so for an account that exists in both places
+  /// the browser copy is the only one an owner can edit — the one place they
+  /// revoke, retick or delete staff. Skipping these fields meant a cashier
+  /// switched off in the browser could still sign in on every till that had
+  /// already pulled them, forever.
+  Future<void> _refreshUserState(
+    Transaction txn,
+    String id,
+    Map<String, dynamic> row,
+    Map<String, Object?> credential,
+  ) async {
+    final isDemo = row['is_demo'] == true;
+    final role = _str(row['role']);
+    final values = <String, Object?>{
+      ...credential,
+      // The training account keeps its role and can never be switched off;
+      // everything else follows the cloud.
+      if (!isDemo && role != null) 'role': role,
+      if (!isDemo) 'is_active': row['active'] == false ? 0 : 1,
+      if (!isDemo) 'deleted_at': _localIso(row['deleted_at']),
+      'permissions': _permissionsJson(row['permissions']),
+    };
+    await _safely(txn, () async {
+      await txn.update('users', values, where: 'id = ?', whereArgs: [id]);
+    });
+  }
+
+  /// jsonb arrives as a decoded list, a text column as the JSON text itself.
+  static String _permissionsJson(Object? value) {
+    if (value is String) return value.isEmpty ? '[]' : value;
+    return jsonEncode(value is List ? value : const <String>[]);
   }
 
   /// The account this till already treats as the training login: the flagged
@@ -279,16 +325,88 @@ class SyncPullApplier {
     var created = 0;
     for (final id in ids) {
       if (await _exists(txn, 'devices', id)) continue;
-      final short = id.length >= 8 ? id.substring(0, 8) : id;
       created += await _insert(txn, 'devices', {
         'id': id,
-        'name': 'Device $short',
+        'name': 'Device ${_short(id, 8)}',
         'platform': 'cloud',
         'license_key': null,
         'last_sync_at': null,
       });
     }
     return created;
+  }
+
+  /// The device a pulled sale names, created on demand. A sale's `device_id` is
+  /// NOT NULL and references `devices`, so a register this PC has never talked
+  /// to would otherwise cost the whole sale.
+  Future<String> _ensureDevice(Transaction txn, Object? rawId) async {
+    final id = _str(rawId) ?? unknownDeviceId;
+    if (await _exists(txn, 'devices', id)) return id;
+    await _insert(txn, 'devices', {
+      'id': id,
+      'name': id == unknownDeviceId
+          ? 'Unknown register'
+          : 'Device ${_short(id, 8)}',
+      'platform': 'cloud',
+      'license_key': null,
+      'last_sync_at': null,
+    });
+    return id;
+  }
+
+  /// The cashier a pulled row names, created on demand. `users` is never
+  /// uploaded from a till, so a cashier account created on another register
+  /// exists only there — the sale still has to land here, with a row that can
+  /// satisfy `sales.cashier_id`.
+  ///
+  /// The placeholder is inactive and soft-deleted on purpose: it resolves the
+  /// foreign key and names the cashier in history, but it can never sign in and
+  /// never shows up in the Users screen. It is replaced by the real row the
+  /// moment the cloud ever publishes that id ([_refreshUserState] clears
+  /// `deleted_at` and the flags).
+  Future<String> _ensureUser(Transaction txn, Object? rawId) async {
+    final id = _str(rawId) ?? unknownUserId;
+    if (await _exists(txn, 'users', id)) return id;
+    var username = id == unknownUserId
+        ? 'cashier-unknown'
+        : 'cashier-${_short(id, 8)}';
+    if (!await _usernameFree(txn, username)) {
+      username = '$username-${DateTime.now().microsecondsSinceEpoch}';
+    }
+    await _insert(txn, 'users', {
+      'id': id,
+      'username': username,
+      'password_hash': cloudAccountMarker,
+      'salt': '',
+      'role': 'CASHIER',
+      'is_active': 0,
+      'permissions': '[]',
+      'is_demo': 0,
+      'deleted_at': _nowIso(),
+      'created_at': _nowIso(),
+    });
+    return id;
+  }
+
+  /// The drawer a pulled row names. `sales.shift_id` and
+  /// `cash_movements.shift_id` are NOT NULL foreign keys, and the cloud creates
+  /// a shift on demand when it applies a push — so a sale can arrive one page
+  /// before the shift it belongs to. A closed, zero-cash container is enough to
+  /// keep the history: drawing cash is this register's own business.
+  Future<String> _ensureShift(Transaction txn, Object? rawId) async {
+    final id = _str(rawId) ?? unknownShiftId;
+    if (await _exists(txn, 'shifts', id)) return id;
+    await _insert(txn, 'shifts', {
+      'id': id,
+      'cashier_id': '',
+      'opening_cash_minor_units': 0,
+      'closing_cash_minor_units': null,
+      'expected_cash_minor_units': null,
+      'status': 'CLOSED',
+      'opened_at': _nowIso(),
+      'closed_at': _nowIso(),
+    });
+    return id;
   }
 
   // ---------------------------------------------------------------------------
@@ -303,7 +421,10 @@ class SyncPullApplier {
     for (final row in rows) {
       final id = _str(row['id']);
       if (id == null || id.isEmpty) continue;
-      if (await _exists(txn, 'shifts', id)) continue;
+      if (await _exists(txn, 'shifts', id)) {
+        await _refreshShiftState(txn, id, row);
+        continue;
+      }
       final values = <String, Object?>{
         'id': id,
         'cashier_id': _str(row['cashier_id']) ?? '',
@@ -333,6 +454,60 @@ class SyncPullApplier {
     return created;
   }
 
+  /// A drawer closed elsewhere has to close here too.
+  ///
+  /// The local `one_open_shift` index allows exactly one OPEN row for the whole
+  /// database, so a shift this till pulled while it was OPEN and never learned
+  /// was closed is not cosmetic — `ShiftRepository.openShift` refuses to start
+  /// another drawer while it sits there, and the register is locked out of
+  /// ringing up anything at all.
+  ///
+  /// One-way on purpose: only `CLOSED` is taken from the cloud, and only onto a
+  /// row this device still has open, so a stale page can never reopen a drawer
+  /// or rewrite the figures this register counted for its own session.
+  Future<void> _refreshShiftState(
+    Transaction txn,
+    String id,
+    Map<String, dynamic> row,
+  ) async {
+    if (_str(row['status']) != 'CLOSED') return;
+    if (await _hasPending(txn, 'shift', id)) return;
+    await _safely(txn, () async {
+      await txn.update(
+        'shifts',
+        {
+          'status': 'CLOSED',
+          'closing_cash_minor_units': _nullableInt(
+            row['closing_cash_minor_units'],
+          ),
+          'expected_cash_minor_units': _nullableInt(
+            row['expected_cash_minor_units'],
+          ),
+          'closed_at': _localIso(row['closed_at']) ?? _nowIso(),
+        },
+        where: "id = ? AND status = 'OPEN'",
+        whereArgs: [id],
+      );
+    });
+  }
+
+  /// True while this device still holds an unacked write for the entity, whose
+  /// local copy is newer than anything the server can send back.
+  Future<bool> _hasPending(
+    Transaction txn,
+    String entityType,
+    String entityId,
+  ) async {
+    final pending = await txn.query(
+      'sync_outbox',
+      columns: const ['id'],
+      where: 'entity_type = ? AND entity_id = ? AND synced_at IS NULL',
+      whereArgs: [entityType, entityId],
+      limit: 1,
+    );
+    return pending.isNotEmpty;
+  }
+
   /// Returns `(inserted, skippedByLocalUniqueIndex)`.
   Future<(int, int)> _applySales(
     Transaction txn,
@@ -349,7 +524,15 @@ class SyncPullApplier {
         continue;
       }
 
-      final deviceId = _str(row['device_id']) ?? '';
+      // Order matters: `users` is never uploaded from a till, and the cloud
+      // mints the shift when it applies a push, so either parent can be
+      // unknown here. All three columns are NOT NULL foreign keys — resolving
+      // them first is the difference between "the sale is on this device" and
+      // the insert being refused and the sale vanishing without a trace.
+      final cashierId = await _ensureUser(txn, row['cashier_id']);
+      final shiftId = await _ensureShift(txn, row['shift_id']);
+      final deviceId = await _ensureDevice(txn, row['device_id']);
+
       final inserted = await _insert(txn, 'sales', {
         'id': id,
         // Receipt numbers are allocated per till and are internal identifiers
@@ -362,9 +545,9 @@ class SyncPullApplier {
           _str(row['receipt_number']) ?? id,
           deviceId.isNotEmpty ? deviceId : id,
         ),
-        'cashier_id': _str(row['cashier_id']) ?? '',
+        'cashier_id': cashierId,
         'device_id': deviceId,
-        'shift_id': _str(row['shift_id']) ?? '',
+        'shift_id': shiftId,
         'customer_name': _str(row['customer_name']),
         'payment_method': _str(row['payment_method']) ?? 'CASH',
         'subtotal_minor_units': _int(row['subtotal_minor_units']),
@@ -394,19 +577,17 @@ class SyncPullApplier {
   /// Skipped while this device still holds an unacked write for the same sale:
   /// the local intent has not reached the server yet, so the server's copy is
   /// the older one.
+  ///
+  /// One-way: only `VOIDED` is taken from the cloud. A sale is never un-voided
+  /// server-side, so applying a stale `COMPLETED` page would put a voided sale
+  /// back into this register's takings — the money would silently reappear.
   Future<void> _refreshVoidState(
     Transaction txn,
     String saleId,
     Map<String, dynamic> row,
   ) async {
-    final pending = await txn.query(
-      'sync_outbox',
-      columns: const ['id'],
-      where: 'entity_type = ? AND entity_id = ? AND synced_at IS NULL',
-      whereArgs: ['sale', saleId],
-      limit: 1,
-    );
-    if (pending.isNotEmpty) return;
+    if (_str(row['status']) != 'VOIDED') return;
+    if (await _hasPending(txn, 'sale', saleId)) return;
 
     await _safely(txn, () async {
       await txn.update(
@@ -424,18 +605,29 @@ class SyncPullApplier {
     });
   }
 
-  Future<int> _applySaleItems(
+  /// Returns `(inserted, skipped)`. A line whose sale is not here yet is
+  /// counted, not guessed at: inserting it against a missing parent would be
+  /// refused, and inventing a sale would invent money.
+  Future<(int, int)> _applySaleItems(
     Transaction txn,
     List<Map<String, dynamic>> rows,
   ) async {
     var created = 0;
+    var skipped = 0;
     for (final row in rows) {
       final id = _str(row['id']);
       if (id == null || id.isEmpty) continue;
       if (await _exists(txn, 'sale_items', id)) continue;
+      final saleId = _str(row['sale_id']);
+      if (saleId == null || !await _exists(txn, 'sales', saleId)) {
+        // The parent has not landed (a backlogged `sales` walk, or a sale the
+        // cloud rejected). Nothing to attach to.
+        skipped++;
+        continue;
+      }
       created += await _insert(txn, 'sale_items', {
         'id': id,
-        'sale_id': _str(row['sale_id']) ?? '',
+        'sale_id': saleId,
         'product_id': _str(row['product_id']) ?? '',
         'product_name_snapshot': _str(row['product_name_snapshot']) ?? '',
         'unit_price_snapshot_minor_units': _int(
@@ -450,7 +642,7 @@ class SyncPullApplier {
         'notes': _str(row['notes']),
       });
     }
-    return created;
+    return (created, skipped);
   }
 
   Future<int> _applyCashMovements(
@@ -462,14 +654,19 @@ class SyncPullApplier {
       final id = _str(row['id']);
       if (id == null || id.isEmpty) continue;
       if (await _exists(txn, 'cash_movements', id)) continue;
+      // Same NOT NULL foreign keys as a sale: the drawer it belongs to and the
+      // person who moved the cash.
+      final shiftId = await _ensureShift(txn, row['shift_id']);
+      final userId = _str(row['user_id']);
+      if (userId != null) await _ensureUser(txn, userId);
       created += await _insert(txn, 'cash_movements', {
         'id': id,
-        'shift_id': _str(row['shift_id']) ?? '',
+        'shift_id': shiftId,
         'type': _str(row['type']) ?? 'CREDIT',
         'amount_minor_units': _int(row['amount_minor_units']),
         'reason': _str(row['reason']),
         'created_at': _localIso(row['created_at']) ?? _nowIso(),
-        'user_id': _str(row['user_id']),
+        'user_id': userId,
         'photo': _str(row['photo']),
       });
     }
@@ -484,19 +681,55 @@ class SyncPullApplier {
     for (final row in rows) {
       final id = _str(row['id']);
       if (id == null || id.isEmpty) continue;
-      if (await _exists(txn, 'void_requests', id)) continue;
+      if (await _exists(txn, 'void_requests', id)) {
+        await _refreshVoidRequestState(txn, id, row);
+        continue;
+      }
+      final saleId = _str(row['sale_id']);
+      if (saleId == null || !await _exists(txn, 'sales', saleId)) continue;
+      final requestedBy = await _ensureUser(txn, row['requested_by']);
+      final decidedBy = _str(row['decided_by']);
+      if (decidedBy != null) await _ensureUser(txn, decidedBy);
       created += await _insert(txn, 'void_requests', {
         'id': id,
-        'sale_id': _str(row['sale_id']) ?? '',
-        'requested_by': _str(row['requested_by']) ?? '',
+        'sale_id': saleId,
+        'requested_by': requestedBy,
         'reason': _str(row['reason']) ?? '',
         'status': _str(row['status']) ?? 'PENDING',
         'created_at': _localIso(row['created_at']) ?? _nowIso(),
-        'decided_by': _str(row['decided_by']),
+        'decided_by': decidedBy,
         'decided_at': _localIso(row['decided_at']),
       });
     }
     return created;
+  }
+
+  /// A void request decided in the browser has to stop showing as pending on
+  /// every till, or the cashier keeps asking the owner about a decision that was
+  /// already made. One-way (PENDING → decided) for the same reason a void is
+  /// never undone.
+  Future<void> _refreshVoidRequestState(
+    Transaction txn,
+    String id,
+    Map<String, dynamic> row,
+  ) async {
+    final status = _str(row['status']);
+    if (status == null || status == 'PENDING') return;
+    if (await _hasPending(txn, 'void_request', id)) return;
+    final decidedBy = _str(row['decided_by']);
+    if (decidedBy != null) await _ensureUser(txn, decidedBy);
+    await _safely(txn, () async {
+      await txn.update(
+        'void_requests',
+        {
+          'status': status,
+          'decided_by': decidedBy,
+          'decided_at': _localIso(row['decided_at']) ?? _nowIso(),
+        },
+        where: "id = ? AND status = 'PENDING'",
+        whereArgs: [id],
+      );
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -648,14 +881,24 @@ class CloudSyncPuller {
     // One table at a time. A keyset cursor only orders rows within a single
     // table, so paging them together would let a busy table push the cursor
     // past rows a quieter one has not delivered yet — silently losing sales.
+    //
+    // Dependency order is also a stop condition: `sale_items` cannot be
+    // attached to a sale that is still queued behind [maxPagesPerRun] pages of
+    // `sales`, and `cash_movements` / `void_requests` need the same parents.
+    // When a table runs out of pages this run, the walk stops there and the
+    // next tick resumes it, rather than pulling children into a gap.
     var total = SyncApplyReport.empty;
     for (final table in tableOrder) {
-      total = total + await _pullTable(table, pageSize);
+      final (report, complete) = await _pullTable(table, pageSize);
+      total = total + report;
+      if (!complete) break;
     }
     return total;
   }
 
-  Future<SyncApplyReport> _pullTable(String table, int pageSize) async {
+  /// Returns `(applied, exhaustedTheTable)`. `false` means the table still had
+  /// pages left when the per-run ceiling was reached.
+  Future<(SyncApplyReport, bool)> _pullTable(String table, int pageSize) async {
     final applier = SyncPullApplier(db);
     var cursor = await _readCursor(table);
     var applied = SyncApplyReport.empty;
@@ -672,12 +915,12 @@ class CloudSyncPuller {
 
       final next = result.nextCursor;
       // Without a new cursor the loop would re-read the same page forever.
-      if (next == null) break;
+      if (next == null) return (applied, true);
       cursor = next;
       await _writeCursor(table, next);
-      if (!result.hasMore) break;
+      if (!result.hasMore) return (applied, true);
     }
-    return applied;
+    return (applied, false);
   }
 
   Future<Map<String, String>?> _readCursor(String table) async {

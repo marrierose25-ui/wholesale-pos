@@ -306,6 +306,59 @@ shop's live sales is the next phase. Multi-register *selling* (two tills, same
 shop) additionally needs the outbox to start pulling reference data, which
 stays deliberately out of scope under the single-writer rule (§1).
 
+## 10. Multi-device rules (two or more tills on one shop)
+
+A second device turns every "the local row is the truth" shortcut into a silent
+divergence, because nothing crashes — the other device simply keeps a different
+opinion. The rules below are the ones that had to be made explicit; each is
+enforced in code and covered by a test.
+
+**Server**
+
+* **An UPDATE must move the row forward** (`docs/supabase_sync_delta.sql`).
+  The pull is a keyset walk over `(received_at, id)`, and `received_at` was a
+  `DEFAULT now()` — stamped on INSERT and never again. A void, a decided void
+  request or a closed drawer changed the row in place and kept its original
+  stamp, so it never re-entered the feed: till B kept counting voided money,
+  kept showing decided requests as pending, and could not open a drawer at all
+  (one OPEN shift per shop). A `BEFORE UPDATE` trigger now stamps it on every
+  mirror table, so *no* writer can forget. Moving later in the ordering is also
+  safe for the walk: the worst case is a second delivery, and re-applying a
+  known row is a no-op.
+* **State transitions are not content** (`terminalState` in
+  `supabase/functions/sync/index.ts`). `sync_mirror` is keyed per entity and
+  deliberately keeps the first payload, and `pos_sync_apply` can only INSERT a
+  sale — replaying an existing one through `pos_create_sale` is an idempotent
+  no-op. So a sale voided on a till never voided in the cloud and every other
+  device kept the revenue. The gateway now applies `VOIDED` sales and
+  `APPROVED`/`REJECTED` void requests through `pos_void_sale` /
+  `pos_approve_void` / `pos_reject_void`, after the apply pass (the sale has to
+  exist first). A refused repeat is a success: a retried entry looks exactly
+  like a repeat. A transition whose row is still queued behind a backlog is
+  reported retryable rather than acked, so it is attempted again.
+
+**Client** (`lib/core/sync/sync_pull_applier.dart`)
+
+* **A pulled row is never dropped for a missing foreign key.** `sales` requires
+  `cashier_id`, `shift_id` and `device_id`, and the till that made a sale may
+  be the only one that has seen the cashier or the drawer. A dropped insert
+  loses the sale, its line items and its movements silently. The applier now
+  mints the missing parent first — an inactive, soft-deleted placeholder user
+  that cannot sign in and is hidden from the staff list, a closed zero-cash
+  drawer, an "Unknown register" device — and then keeps the sale.
+* **Only one-way transitions are applied.** A stale `COMPLETED` page can no
+  longer un-void a sale; a void request only moves PENDING → decided; a shift
+  only moves OPEN → CLOSED. Anything still queued in this till's own outbox is
+  left alone, and the local row wins everywhere else.
+* **Cloud-owned account fields are adopted.** Role, `is_active`, `deleted_at`
+  and `permissions` follow the cloud, so a cashier switched off (or a role
+  changed) in the browser stops signing in on every till. A local password is
+  never overwritten — the browser credential is stored beside it (schema 15).
+* **Parents are pulled before their children.** The puller pages one table at
+  a time in dependency order and stops the run as soon as a table was not
+  exhausted, instead of pulling `sale_items` while `sales` still has a backlog
+  and refusing every orphan.
+
 ## Summary for the auditor
 
 The team converted a single-writer offline POS into a **sync-ready** system by

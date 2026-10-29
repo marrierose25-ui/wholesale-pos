@@ -91,6 +91,60 @@ const ENTITY_ALIAS: Record<string, string> = {
 // Max outbox entries accepted in one push batch (abuse guard).
 const MAX_BATCH = 500;
 
+// ---------------------------------------------------------------------------
+// terminalState: the part of a payload that is a STATE TRANSITION, not content.
+// ---------------------------------------------------------------------------
+// A device resends an entity's whole current row, so "I voided this sale" is the
+// same entity pushed again with status VOIDED, and "the owner approved this
+// request" is the request pushed again as APPROVED. `sync_mirror` is keyed per
+// entity and deliberately keeps the first payload (an applied entry is never
+// overwritten), and `pos_sync_apply` can only INSERT the sale or the request —
+// it can never transition one. So the transition is applied here, through the
+// same RPCs the PWA calls, which is the only place allowed to make it.
+//
+// Returns null when the payload is plain content (create, cash movement, …).
+function terminalState(
+  entityType: string,
+  entityId: string,
+  payload: any,
+  customerId: string,
+): { rpc: string; args: Record<string, unknown>; benign: string[] } | null {
+  const p = payload && typeof payload === 'object' ? payload : {};
+
+  if (entityType === 'sale') {
+    const sale = p.sale;
+    if (!sale || String(sale.status ?? '').toUpperCase() !== 'VOIDED') return null;
+    const reason = String(sale.void_reason ?? '').trim();
+    return {
+      rpc: 'pos_void_sale',
+      args: {
+        p_customer: customerId,
+        p_user: String(sale.voided_by ?? '') || String(sale.cashier_id ?? '') || 'sync',
+        p_sale_id: entityId,
+        p_reason: reason || 'Voided on a register',
+      },
+      benign: ['already voided'],
+    };
+  }
+
+  if (entityType === 'void_request') {
+    const request = p.void_request;
+    const status = String(request?.status ?? '').toUpperCase();
+    if (status !== 'APPROVED' && status !== 'REJECTED') return null;
+    return {
+      rpc: status === 'APPROVED' ? 'pos_approve_void' : 'pos_reject_void',
+      args: {
+        p_customer: customerId,
+        p_user: String(request?.decided_by ?? '') || 'sync',
+        p_request_id: entityId,
+      },
+      benign: ['was decided', 'already decided', 'voidable', 'already voided'],
+    };
+  }
+
+  return null;
+}
+
 Deno.serve(async (req) => {
   if (req.method !== 'POST') return json({ ok: false, error: 'POST required' }, 405);
   let body: any;
@@ -194,6 +248,19 @@ async function push(db: any, auth: { customerId: string; fingerprint: string }, 
   let stored = 0;
   const results: { entryId: string; entityId: string; status: string; error?: string }[] = [];
   const staged: { entryId: string; entityId: string; entityType: string }[] = [];
+  // Entities that already exist in the cloud change STATE rather than content:
+  // a voided sale, a decided void request. `pos_sync_apply` replays the sale
+  // through `pos_create_sale`, which is idempotent by sale id — for an existing
+  // sale that is a no-op, so the void never landed and every other device kept
+  // counting the money. These are applied afterwards through the same RPCs the
+  // PWA uses, which is where the state transition can actually happen.
+  const stateChanges: {
+    entryId: string;
+    entityId: string;
+    rpc: string;
+    args: Record<string, unknown>;
+    benign: string[];
+  }[] = [];
 
   for (const entry of entries) {
     const entryId = String(entry.entryId ?? '');
@@ -228,6 +295,9 @@ async function push(db: any, auth: { customerId: string; fingerprint: string }, 
     }
     stored++;
     staged.push({ entryId, entityId, entityType });
+
+    const change = terminalState(entityType, entityId, entry.payload, auth.customerId);
+    if (change) stateChanges.push({ entryId, entityId, ...change });
   }
 
   // Applying is server-owned and idempotent: every staged entry is replayed
@@ -263,6 +333,37 @@ async function push(db: any, auth: { customerId: string; fingerprint: string }, 
           error: state === 'REJECTED' ? String(r?.apply_error ?? '') : undefined,
         });
       }
+    }
+  }
+
+  // State changes go last, in order: the sale has to exist before it can be
+  // voided. Both RPCs refuse a repeat, and a repeat is exactly what a retried
+  // entry looks like — that refusal is a success, not a failure.
+  for (const change of stateChanges) {
+    const result = results.find((r) => r.entryId === change.entryId);
+    // The row the transition targets has to have landed first. 'stored' means
+    // it is still queued behind a backlog — the void is early, not refused, so
+    // leave it unacked and let the next push carry the same payload again.
+    // 'rejected' means there is nothing to void at all, and re-pushing the
+    // whole batch for an entry the cloud will never accept only wedges the
+    // queue (ack'd entries are pruned; a stuck 'failed' one is not).
+    if (result && result.status === 'stored') {
+      result.status = 'failed';
+      result.error = 'Waiting for the entity to be applied first.';
+      continue;
+    }
+    if (result && result.status === 'rejected') continue;
+
+    const { error } = await db.rpc(change.rpc, change.args);
+    if (!error) {
+      if (result) result.status = 'applied';
+      continue;
+    }
+    const message = String(error.message ?? '');
+    const replay = change.benign.some((s) => message.includes(s));
+    if (result) {
+      result.status = replay ? 'applied' : 'rejected';
+      if (!replay) result.error = message;
     }
   }
 

@@ -180,6 +180,57 @@
 - `pos-api` (v16) now stamps `pos_users.received_at` on every edit. The gateway pages that table by that stamp, so without it a password reset in the browser was never re-sent to a till that already pulled the row.
 - `flutter analyze`: clean. `flutter test`: 337 passing (3 new: a browser-issued password signs in on this device, a pulled demo credential merges onto `demo`, and the pre-schema-15 `demo#` repair).
 
+### Multi-device consistency (Phase 27)
+
+Running two tills on one shop was where the sync design's assumptions started to
+cost money without an error message. Seven failures were found by reading the pull
+path, the gateway and the mirror schema against each other; all are fixed.
+
+- **A void never left the till that made it.** `sync_mirror` keeps the first
+  payload per entity and `pos_sync_apply` replays a sale through
+  `pos_create_sale`, which is idempotent by sale id — for a sale that already
+  exists that is a no-op. So the second device, and the owner's dashboard, kept
+  counting voided money. The gateway (`terminalState`, v11) now applies
+  `VOIDED` sales and `APPROVED`/`REJECTED` void requests through the same RPCs
+  the PWA calls, after the apply pass; a refused repeat is treated as success
+  (a retried entry is exactly a repeat), and a transition whose row is still
+  queued behind a backlog is reported retryable instead of acked.
+- **An UPDATE never re-entered the delta feed.** `received_at` was `DEFAULT
+  now()`, so a void, a decided request or a closed drawer changed the row in
+  place and kept its old stamp. `docs/supabase_sync_delta.sql` adds a
+  `BEFORE UPDATE` trigger on all six mirror tables (applied live and proved
+  with a rolled-back probe: `2026-10-28 16:58:57` → `2026-10-29 05:08:45`).
+- **A drawer closed elsewhere locked this one out.** Local `shift` rows were
+  never updated on pull, and the database allows exactly one OPEN shift, so a
+  foreign OPEN row meant the register could not open a drawer again. A pulled
+  `CLOSED` shift now closes the local one (OPEN → CLOSED only, skipped while
+  this till still has the shift queued).
+- **A cashier switched off in the browser kept signing in on every till.**
+  Pulled users only refreshed the cloud credential; role, `is_active`,
+  `deleted_at` and `permissions` now follow the cloud too. A local password is
+  still never overwritten, and the demo account is exempt.
+- **Voided money could come back.** `_refreshVoidState` applied whatever status
+  the cloud sent, so a stale `COMPLETED` page un-voided a sale. Void state,
+  void-request decisions and shift closes are now strictly one-way.
+- **Sales vanished on the second device.** `sales` requires `cashier_id`,
+  `shift_id` and `device_id`; a cashier or drawer known only to the making till
+  made the insert fail and the whole sale (with its items and movements)
+  disappear, silently. The applier now mints the missing parent first — an
+  inactive soft-deleted placeholder user that cannot sign in, a closed
+  zero-cash drawer, an "Unknown register" device.
+- **Children arrived before their parents.** The puller walked tables in order
+  but kept going after hitting its per-run page ceiling, so `sale_items` could
+  be pulled while `sales` still had a backlog, and every orphan was refused. It
+  now stops the run as soon as a table was not exhausted.
+
+- `flutter analyze`: clean. `dart format --set-exit-if-changed`: clean.
+  `flutter test`: **343 passing** (6 new: a sale whose cashier and drawer exist
+  only elsewhere still lands; a drawer closed in the cloud closes this one too;
+  a stale completed page never un-voids; a cashier switched off in the browser
+  stops signing in; a void request decided in the browser stops pending here;
+  a backlogged parent table holds back its children). Sync gateway deployed at
+  version 11.
+
 ## Next Up
 
 - Stock/inventory movements and low-stock alerts.

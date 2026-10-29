@@ -428,6 +428,178 @@ void main() {
       )).single;
       expect(sale['status'], 'COMPLETED');
     });
+
+    test('lands a sale whose cashier and drawer exist only elsewhere', () async {
+      // A cashier created on another till is never uploaded, so this device has
+      // no such user; the cloud also mints the drawer when it applies a push.
+      // All three of a sale's foreign keys are NOT NULL, so an unresolved one
+      // used to make SQLite refuse the row and the sale vanished silently.
+      final report = await SyncPullApplier(db).apply(
+        pageOf('sales', [
+          cloudSale(cashierId: 'till-only-user', shiftId: 'far-shift'),
+        ]),
+      );
+
+      expect(report.sales, 1);
+      expect(report.skipped, 0);
+
+      final sale = (await db.query('sales')).single;
+      expect(sale['cashier_id'], 'till-only-user');
+      expect(sale['shift_id'], 'far-shift');
+      expect(sale['device_id'], 'device-1');
+
+      // The placeholder resolves the key but is inert: hidden from the Users
+      // screen, inactive, and unable to sign in.
+      final cashier = (await db.query(
+        'users',
+        where: 'id = ?',
+        whereArgs: ['till-only-user'],
+      )).single;
+      expect(cashier['is_active'], 0);
+      expect(cashier['deleted_at'], isNotNull);
+      expect(await SqfliteUserRepository(db).getAllUsers(), isEmpty);
+
+      final drawer = (await db.query(
+        'shifts',
+        where: 'id = ?',
+        whereArgs: ['far-shift'],
+      )).single;
+      expect(drawer['status'], 'CLOSED');
+    });
+
+    test('a drawer closed in the cloud closes this one too', () async {
+      await seedLocalSale(
+        db,
+        saleId: 'local-sale',
+        receipt: 'REC-L',
+        shiftStatus: 'CLOSED',
+      );
+      final applier = SyncPullApplier(db);
+
+      // Pulled while another register still had it open: it lands as the only
+      // OPEN row here, so this till could never start its own drawer again.
+      await applier.apply(
+        pageOf('shifts', [cloudShift(id: 'cloud-shift', status: 'OPEN')]),
+      );
+      expect(await db.query('shifts', where: "status = 'OPEN'"), hasLength(1));
+
+      await applier.apply(
+        pageOf('shifts', [
+          {
+            ...cloudShift(id: 'cloud-shift', status: 'CLOSED'),
+            'closing_cash_minor_units': 90000,
+            'expected_cash_minor_units': 95000,
+            'closed_at': '2026-10-28T18:00:00+00:00',
+          },
+        ]),
+      );
+
+      final closed = (await db.query(
+        'shifts',
+        where: 'id = ?',
+        whereArgs: ['cloud-shift'],
+      )).single;
+      expect(closed['status'], 'CLOSED');
+      expect(closed['closing_cash_minor_units'], 90000);
+      expect(closed['expected_cash_minor_units'], 95000);
+      expect(closed['closed_at'], isNotNull);
+      expect(
+        await db.query('shifts', where: "status = 'OPEN'"),
+        isEmpty,
+        reason: 'the register can open a drawer again',
+      );
+    });
+
+    test('a stale completed page never un-voids a sale', () async {
+      await seedLocalSale(db, saleId: 'local-sale', receipt: 'REC-L');
+      final applier = SyncPullApplier(db);
+
+      await applier.apply(
+        pageOf('sales', [
+          cloudSale(id: 'local-sale', status: 'VOIDED', voidReason: 'Damaged'),
+        ]),
+      );
+      // A page that was read before the void: the money must not reappear.
+      await applier.apply(pageOf('sales', [cloudSale(id: 'local-sale')]));
+
+      final sale = (await db.query(
+        'sales',
+        where: 'id = ?',
+        whereArgs: ['local-sale'],
+      )).single;
+      expect(sale['status'], 'VOIDED');
+      expect(sale['void_reason'], 'Damaged');
+    });
+
+    test('honours a cashier switched off in the browser', () async {
+      const password = 'browser-password-2';
+      final saltBytes = List<int>.generate(16, (i) => i + 3);
+      final pwSalt = base64.encode(saltBytes);
+      final pwHash = await cloudCredential(password, saltBytes);
+      final applier = SyncPullApplier(db);
+      final repository = SqfliteUserRepository(db);
+
+      await applier.apply(
+        pageOf('users', [cloudUser(pwSalt: pwSalt, pwHash: pwHash)]),
+      );
+      expect(await repository.authenticate('0700000001', password), isNotNull);
+
+      // The tick list follows the browser too.
+      await applier.apply(
+        pageOf('users', [
+          cloudUser(
+            permissions: const ['pos', 'reports'],
+            pwSalt: pwSalt,
+            pwHash: pwHash,
+          ),
+        ]),
+      );
+      final reticked = (await db.query('users')).single;
+      expect(reticked['permissions'], '["pos","reports"]');
+
+      await applier.apply(
+        pageOf('users', [
+          cloudUser(active: false, pwSalt: pwSalt, pwHash: pwHash),
+        ]),
+      );
+      expect(await repository.authenticate('0700000001', password), isNull);
+    });
+
+    test('a void request decided in the browser stops pending here', () async {
+      await seedLocalSale(db, saleId: 'local-sale', receipt: 'REC-L');
+      await db.insert('void_requests', {
+        'id': 'vr-1',
+        'sale_id': 'local-sale',
+        'requested_by': 'local-user',
+        'reason': 'Damaged',
+        'status': 'PENDING',
+        'created_at': DateTime.now().toIso8601String(),
+      });
+
+      await SyncPullApplier(db).apply(
+        pageOf('void_requests', [
+          {
+            'id': 'vr-1',
+            'sale_id': 'local-sale',
+            'requested_by': 'local-user',
+            'reason': 'Damaged',
+            'status': 'REJECTED',
+            'created_at': '2026-10-28T10:00:00+00:00',
+            'decided_by': 'user-1',
+            'decided_at': '2026-10-28T11:00:00+00:00',
+          },
+        ]),
+      );
+
+      final request = (await db.query('void_requests')).single;
+      expect(request['status'], 'REJECTED');
+      expect(request['decided_by'], 'user-1');
+      // The deciding account is unknown to this till; the FK still resolves.
+      expect(
+        await db.query('users', where: 'id = ?', whereArgs: ['user-1']),
+        hasLength(1),
+      );
+    });
   });
 
   group('CloudSyncPuller', () {
@@ -473,6 +645,38 @@ void main() {
     test('does nothing when the backend is not configured', () async {
       final puller = CloudSyncPuller(backend: const NoopSyncBackend(), db: db);
       expect((await puller.pullNow()).isEmpty, isTrue);
+    });
+
+    test('waits for a backlogged parent table before its children', () async {
+      // More accounts than one run may page through: the walk has to stop
+      // instead of reaching sales with the parent table half-delivered, where
+      // every line item would be refused for a missing sale.
+      final users = [
+        for (var i = 0; i < CloudSyncPuller.maxPagesPerRun + 1; i++)
+          cloudUser(id: 'u$i', username: '07000000$i'),
+      ];
+      final backend = PagingBackend({
+        'users': users,
+        'sales': [cloudSale()],
+      });
+      final puller = CloudSyncPuller(backend: backend, db: db);
+
+      await puller.pullNow(pageSize: 1);
+
+      expect(
+        backend.requestedTables.every((t) => t!.single == 'users'),
+        isTrue,
+        reason: 'sales must not be asked for while users is incomplete',
+      );
+      expect(await db.query('sales'), isEmpty);
+
+      // The next run finishes the accounts and then reaches the children.
+      await puller.pullNow(pageSize: 1);
+      expect(
+        await db.query('users', where: 'cloud_pw_hash IS NOT NULL'),
+        hasLength(users.length),
+      );
+      expect(await db.query('sales'), hasLength(1));
     });
   });
 
