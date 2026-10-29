@@ -1473,18 +1473,22 @@ async function financeSearchEntries(db: any, ctx: Ctx, body: any): Promise<Respo
   return json({ ok: true, entries });
 }
 async function financePersonTotals(db: any, ctx: Ctx, body: any): Promise<Response> {
-  const { data: cat } = await db.from('pos_finance_categories').select('deleted_at')
-    .eq('customer_id', ctx.customerId).eq('id', String(body.category_id ?? '')).maybeSingle();
-  if (!cat || cat.deleted_at) {
-    return json({ ok: true, totals: { pending_total: 0, completed_total: 0 } });
-  }
-  const { data } = await db.from('pos_finance_entries').select('status, amount_minor_units')
-    .eq('customer_id', ctx.customerId).eq('category_id', String(body.category_id ?? ''));
-  let pending = 0, completed = 0;
-  for (const e of data ?? []) {
-    if (e.status === 'PENDING') pending += Number(e.amount_minor_units); else completed += Number(e.amount_minor_units);
-  }
-  return json({ ok: true, totals: { pending_total: pending, completed_total: completed } });
+  // One SQL aggregate, not a row fetch: PostgREST caps a select at 1,000 rows,
+  // so summing a busy person's entries in JavaScript understated their totals
+  // once they passed that many. The RPC also answers zeros for a binned person.
+  const { data, error } = await db.rpc('pos_finance_person_totals', {
+    p_customer: ctx.customerId,
+    p_category_id: String(body.category_id ?? ''),
+  });
+  if (error) throw new Error(error.message);
+  const totals = data ?? {};
+  return json({
+    ok: true,
+    totals: {
+      pending_total: Number(totals.pending_total ?? 0),
+      completed_total: Number(totals.completed_total ?? 0),
+    },
+  });
 }
 
 // Attaches the display-only category_name and guarantees FinanceEntry.fromMap's

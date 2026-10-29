@@ -1104,6 +1104,41 @@ REVOKE ALL ON FUNCTION pos_cashier_performance FROM public;
 GRANT EXECUTE ON FUNCTION pos_cashier_performance TO service_role;
 
 -- ---------------------------------------------------------------------------
+-- 3l. Person (finance category) totals. pos-api used to fetch every entry of a
+-- person and sum them in JavaScript, which PostgREST silently truncated at
+-- 1,000 rows — a busy person's pending/completed totals were understated. The
+-- aggregate lives in SQL so it is exact at any row count, and a binned person
+-- answers zeros because every list already hides their entries.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION pos_finance_person_totals(
+  p_customer uuid, p_category_id text)
+RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  res  jsonb;
+  zero jsonb := jsonb_build_object('pending_total', 0, 'completed_total', 0);
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM public.pos_finance_categories
+    WHERE customer_id = p_customer AND id = p_category_id AND deleted_at IS NULL
+  ) THEN
+    RETURN zero;
+  END IF;
+  SELECT jsonb_build_object(
+    'pending_total',   COALESCE(sum(amount_minor_units) FILTER (WHERE status = 'PENDING'), 0),
+    'completed_total', COALESCE(sum(amount_minor_units) FILTER (WHERE status <> 'PENDING'), 0)
+  ) INTO res
+  FROM public.pos_finance_entries
+  WHERE customer_id = p_customer AND category_id = p_category_id;
+  RETURN COALESCE(res, zero);
+END;
+$$;
+REVOKE ALL ON FUNCTION pos_finance_person_totals FROM public;
+GRANT EXECUTE ON FUNCTION pos_finance_person_totals TO service_role;
+
+-- ---------------------------------------------------------------------------
 -- Privilege hardening for every pos_* RPC (audit 2 #27).
 --
 -- `REVOKE ... FROM public` alone is NOT enough: Supabase's default privileges
