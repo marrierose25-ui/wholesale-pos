@@ -68,6 +68,21 @@ if ($DevUnlicensed) {
 # license.key, and only for the developer's own -IncludeMyLicense build, so a
 # leftover from the last such run does not block the next one; DB files and
 # signing material are always rejected.
+# `flutter build` never writes into the output folder's leftovers, so a
+# license.key copied there by an earlier -IncludeMyLicense run would survive and
+# block every later customer build. A ship build simply does not carry one, so
+# it is removed BEFORE the check; the check still guards a fresh copy, a local
+# DB and every signing key.
+function Clear-DevLicense {
+    param([string]$Dir)
+    if (-not (Test-Path $Dir)) { return }
+    Get-ChildItem -Path $Dir -Recurse -File -Filter 'license.key' -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            Write-Host "Removing the developer's own license from build output: $($_.FullName)"
+            Remove-Item $_.FullName -Force
+        }
+}
+
 function Assert-CleanOutput {
     param([string]$Dir, [switch]$AllowDevLicense)
     if (-not (Test-Path $Dir)) { return }
@@ -87,6 +102,7 @@ if ($DevUnlicensed) {
 if ($Platform -eq 'windows') {
     flutter build windows --release @defines
     $out = Join-Path $AppDir 'build\windows\x64\runner\Release'
+    if (-not $IncludeMyLicense) { Clear-DevLicense $out }
     # Cleanliness is checked BEFORE the deliberate dev-only copy below: this
     # rule exists to catch a license riding along with a ship build, and
     # -IncludeMyLicense adds exactly that file on purpose, so running the check

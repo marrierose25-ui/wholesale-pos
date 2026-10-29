@@ -45,3 +45,6 @@ walkthrough_shots/
 # Agent-session leftovers: patch dumps and one-off fix scripts.
 /batch_*.txt
 /fix.ps1
+
+# IDE agent workspace state (its own screenshots, caches).
+.qoder/
