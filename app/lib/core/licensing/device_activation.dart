@@ -100,8 +100,15 @@ class DeviceActivation {
         deviceFingerprint: fingerprint,
       );
       if (verify == null || verify['error'] != null) {
-        return const DeviceActivationResult.failed(
-          'Server returned an invalid license.',
+        // Surface the validator's own wording. The most common cause is a
+        // release built without --dart-define=WHOLESALE_POS_LICENSE_PUBLIC_KEY:
+        // the server signs correctly and the client then fails closed, which
+        // used to be reported as a bare "invalid license".
+        final detail = verify?['error'] as String?;
+        return DeviceActivationResult.failed(
+          detail == null
+              ? 'Server returned an invalid license.'
+              : 'Server returned an invalid license: $detail',
         );
       }
       licenseToStore = returned;

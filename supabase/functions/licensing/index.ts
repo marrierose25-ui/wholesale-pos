@@ -33,6 +33,18 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const SEED_B64URL = Deno.env.get('LICENSE_SIGNING_SEED_B64URL')!;
 
+// Fail loudly in the logs (not to the client) when the signing seed is missing
+// or malformed: every activation would otherwise mint an unverifiable license.
+{
+  const seedBytes = SEED_B64URL ? base64UrlDecode(SEED_B64URL) : new Uint8Array();
+  if (seedBytes.length !== 32) {
+    console.error(
+      'LICENSE_SIGNING_SEED_B64URL is missing or not a 32-byte base64url value ' +
+      `(decoded ${seedBytes.length} bytes); signed licenses will not verify.`,
+    );
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method !== 'POST') return json({ ok: false, error: 'POST required' }, 405);
   let body: any;
