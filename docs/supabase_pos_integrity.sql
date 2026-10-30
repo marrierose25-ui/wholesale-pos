@@ -258,6 +258,14 @@ BEGIN
     RAISE EXCEPTION 'Sale requires a receipt number.';
   END IF;
 
+  -- The browser has no local store, so a sale posted here IS the cloud's sale.
+  -- The native `SyncOutbox` and `pos_sync_apply` both refuse the training
+  -- account; this is the third door, and it has to be shut or a demo login in a
+  -- browser keeps writing practice takings straight into the shop's books.
+  IF public.pos_is_demo(p_customer, p_cashier) THEN
+    RAISE EXCEPTION 'Training-account data stays on the till that made it.';
+  END IF;
+
   -- Idempotency: a retried sale returns the row that already exists, so a
   -- client timeout followed by a retry can never book the sale twice.
   IF p_sale_id IS NOT NULL AND btrim(p_sale_id) <> '' THEN
@@ -562,6 +570,12 @@ DECLARE
   shift_found text;
   updated    int;
 BEGIN
+  -- Same refusal as the sync gateway: a training account cannot move the shop's
+  -- money in the cloud, and the browser has no local books to put it in.
+  IF public.pos_is_demo(p_customer, p_user) THEN
+    RAISE EXCEPTION 'Training-account data stays on the till that made it.';
+  END IF;
+
   -- FOR UPDATE: two concurrent completions used to both read PENDING, one
   -- updated the row and the loser updated nothing yet still deposited the
   -- collection a second time. Now the loser blocks, re-reads and finds no
@@ -688,6 +702,13 @@ BEGIN
     RETURN shift_found;
   END IF;
 
+  -- Reading the shop's open drawer is harmless, so only the CREATE below is
+  -- refused for a training account: an unguarded create would leave the tenant
+  -- with a shift that exists purely because somebody practised in a browser.
+  IF public.pos_is_demo(p_customer, p_user) THEN
+    RAISE EXCEPTION 'Training-account data stays on the till that made it.';
+  END IF;
+
   shift_found := gen_random_uuid()::text;
   INSERT INTO public.shifts (id, customer_id, cashier_id, opening_cash_minor_units,
     status, opened_at, device_id)
@@ -720,6 +741,9 @@ AS $$
 DECLARE shift_new text;
 BEGIN
   PERFORM pg_advisory_xact_lock(hashtext(p_customer::text));
+  IF public.pos_is_demo(p_customer, p_user) THEN
+    RAISE EXCEPTION 'Training-account data stays on the till that made it.';
+  END IF;
   IF p_opening < 0 THEN
     RAISE EXCEPTION 'Opening cash cannot be negative.';
   END IF;
@@ -788,6 +812,9 @@ DECLARE mv_id text;
   existing  text;
   inserted  boolean;
 BEGIN
+  IF public.pos_is_demo(p_customer, p_user) THEN
+    RAISE EXCEPTION 'Training-account data stays on the till that made it.';
+  END IF;
   IF p_amount IS NULL OR p_amount <= 0 THEN
     RAISE EXCEPTION 'Amount must be positive.';
   END IF;

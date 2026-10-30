@@ -18,6 +18,7 @@
 --   M  how the gateway filed the two probe rows
 --   R  does the cloud report agree with a hand-computed real-only sum?
 --   Q  positive control: the flag discriminates demo from owner
+--   W  the direct door: a browser sale posted as the demo account
 --   D  cleanup
 --
 -- The probe touches only its own rows, is scoped to the first tenant that has a
@@ -175,19 +176,57 @@ SELECT 7, 'Q is_demo(demo)=' || public.pos_is_demo(c.customer_id, c.demo_id)::te
              || public.pos_is_demo(c.customer_id, 'no-such-user')::text
 FROM pg_temp.probe_ctx c;
 
+-- The direct door. `pos_create_sale` is how the PWA books a sale — it has no
+-- local store, so what it posts IS the cloud's row, and it never passes through
+-- the sync gateway. Three practice receipts reached this tenant that way.
+-- The owner half is the control: a real cashier must fail on the open shift,
+-- not on the training flag, so the guard below is discrimination, not a wall.
+DO $$
+DECLARE
+  c    record;
+  msg  text;
+BEGIN
+  SELECT * INTO c FROM pg_temp.probe_ctx;
+  BEGIN
+    PERFORM public.pos_create_sale(c.customer_id, c.demo_id, 'isolation-probe',
+      'PROBE-SHIFT', 'PROBE-DIRECT-SALE', '[]'::jsonb, 'CASH', 0, 10000);
+    INSERT INTO probe_results VALUES (9, 'W demo_sale=ACCEPTED (regression!)');
+  EXCEPTION WHEN OTHERS THEN
+    msg := SQLERRM;
+    INSERT INTO probe_results VALUES (9, 'W demo_sale=' ||
+      CASE WHEN msg LIKE '%Training-account data stays%'
+           THEN 'refused' ELSE 'WRONG ERROR: ' || msg END);
+  END;
+  BEGIN
+    PERFORM public.pos_create_sale(c.customer_id, c.owner_id, 'isolation-probe',
+      'PROBE-SHIFT', 'PROBE-DIRECT-REAL', '[]'::jsonb, 'CASH', 0, 10000);
+    INSERT INTO probe_results VALUES (10, 'W owner_sale=ACCEPTED (unexpected)');
+  EXCEPTION WHEN OTHERS THEN
+    msg := SQLERRM;
+    INSERT INTO probe_results VALUES (10, 'W owner_sale=' ||
+      CASE WHEN msg LIKE '%Training-account%'
+           THEN 'WRONGLY REFUSED: ' || msg
+           ELSE 'passed the flag, failed later: ' || left(msg, 34) END);
+  END;
+END
+$$;
+
 -- Leave nothing behind. The ledger deletes run first so a refused-but-landed
 -- row (a regression) cannot outlive the probe that created it.
 DELETE FROM public.sale_items i
-WHERE i.id LIKE 'PROBE-DEMO-%'
+WHERE i.id LIKE 'PROBE-%'
   AND EXISTS (SELECT 1 FROM pg_temp.probe_ctx c WHERE c.customer_id = i.customer_id);
 DELETE FROM public.sales s
-WHERE s.id LIKE 'PROBE-DEMO-%'
+WHERE s.id LIKE 'PROBE-%'
   AND EXISTS (SELECT 1 FROM pg_temp.probe_ctx c WHERE c.customer_id = s.customer_id);
 DELETE FROM public.pos_finance_entries f
-WHERE f.id LIKE 'PROBE-DEMO-%'
+WHERE f.id LIKE 'PROBE-%'
   AND EXISTS (SELECT 1 FROM pg_temp.probe_ctx c WHERE c.customer_id = f.customer_id);
+DELETE FROM public.shifts h
+WHERE h.id LIKE 'PROBE-%'
+  AND EXISTS (SELECT 1 FROM pg_temp.probe_ctx c WHERE c.customer_id = h.customer_id);
 DELETE FROM public.sync_mirror m
-WHERE m.entity_id LIKE 'PROBE-DEMO-%'
+WHERE m.entity_id LIKE 'PROBE-%'
   AND EXISTS (SELECT 1 FROM pg_temp.probe_ctx c WHERE c.customer_id = m.customer_id);
 
 INSERT INTO probe_results
