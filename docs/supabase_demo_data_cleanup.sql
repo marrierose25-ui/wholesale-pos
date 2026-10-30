@@ -32,6 +32,13 @@
 --
 -- Run the dry report first, then the purge. `docs/supabase_pos_integrity.sql`
 -- has to be applied first: this file calls `public.pos_is_demo()`.
+--
+-- THIS FILE IS THE FUNCTION, NOT JUST THE DOCUMENT. The purge runs the copy that
+-- is installed in the database, so an edit here does nothing until the file is
+-- applied again. Check which version is live before trusting it with a delete:
+--   supabase db query --linked "SELECT 'archive='||(
+--     position('demo_purge_rows' in pg_get_functiondef(p.oid)) > 0)::text
+--   FROM pg_proc p WHERE p.proname = 'pos_purge_demo_ledger'"
 --   cd <repo root>
 --   supabase db query --linked -f docs/supabase_pos_integrity.sql
 --   supabase db query --linked -f docs/supabase_demo_data_cleanup.sql
