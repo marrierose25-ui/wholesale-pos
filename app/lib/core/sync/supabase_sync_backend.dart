@@ -5,6 +5,7 @@ import 'dart:io' show Platform;
 
 import 'package:http/http.dart' as http;
 
+import '../utils/app_logger.dart';
 import 'sync_backend.dart';
 import 'sync_outbox_entry.dart';
 
@@ -66,8 +67,7 @@ class SupabaseSyncBackend implements SyncBackend {
     // If a phone build had the keys baked in but we refused to use them,
     // announce it once so an operator can notice the sync stayed off.
     if (isMobile && !unsafeAllowEmbed && url.isNotEmpty && key.isNotEmpty) {
-      // ignore: avoid_print
-      print(
+      AppLogger.warn(
         'WholesalePOS: cloud sync is DISABLED on this phone build. To enable '
         'private-use sync on your own devices, rebuild with '
         '--dart-define=WHOLESALE_POS_UNSAFE_EMBED_SYNC_SECRET=true. Do NOT do '
@@ -104,8 +104,7 @@ class SupabaseSyncBackend implements SyncBackend {
     for (final entry in entries) {
       final table = _tableFor(entry.entityType);
       if (table == null) {
-        // ignore: avoid_print
-        print(
+        AppLogger.warn(
           'WholesalePOS sync: dropping outbox entry ${entry.id} — unknown '
           'entity type "${entry.entityType}".',
         );

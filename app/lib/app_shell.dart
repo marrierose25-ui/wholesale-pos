@@ -9,6 +9,7 @@ import 'core/backend/app_backend.dart';
 import 'core/models/user.dart';
 import 'core/theme/app_design.dart';
 import 'core/theme/app_theme.dart';
+import 'core/utils/app_logger.dart';
 import 'features/dashboard/dashboard_screen.dart';
 import 'features/finance/finance_overview_screen.dart';
 import 'features/auth/login_screen.dart';
@@ -336,12 +337,10 @@ class _MainScaffoldState extends State<MainScaffold>
         await widget.backend.sales.saveSale(sale);
         done++;
       }
-      // ignore: avoid_print
-      print('[dev-seed] created $done/$count sample sales');
+      AppLogger.info('[dev-seed] created $done/$count sample sales');
       if (mounted) _refreshDataScreens();
     } catch (e) {
-      // ignore: avoid_print
-      print('[dev-seed] aborted: $e');
+      AppLogger.warn('[dev-seed] aborted: $e');
     }
   }
 

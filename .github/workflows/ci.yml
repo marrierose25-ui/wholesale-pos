@@ -1,0 +1,48 @@
+name: CI
+
+# The audit's finding: nothing verified the app between a local `flutter test`
+# and a customer. build.yml only runs the suite (for SonarQube coverage), so a
+# lint regression, a web entry point that stopped compiling, or a test that
+# only passed on the developer's machine all reached `main`. This job is the
+# gate: analyze, test, then build the artefact we actually ship.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: ./app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      # --fatal-infos: an infolevel lint is a build failure, which is what keeps
+      # avoid_print, unawaited futures and dead null checks from accumulating.
+      - name: Analyze
+        run: flutter analyze --fatal-infos
+
+      - name: Test
+        run: flutter test
+
+      # The PWA is a separate entry point (lib/main_web.dart, no dart:io). Tests
+      # cover the shared code, so only a build proves the web graph still links.
+      # No license key or backend URL is baked in here: this build is validated,
+      # never distributed.
+      - name: Build web (PWA entry point)
+        run: flutter build web --release -t lib/main_web.dart

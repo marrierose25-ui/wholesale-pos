@@ -3,6 +3,7 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:sqflite/sqflite.dart';
 
 import 'core/database/local_database.dart';
@@ -25,6 +26,8 @@ import 'core/sync/sync_service.dart';
 import 'core/sync/sync_status.dart';
 import 'core/theme/app_design.dart';
 import 'core/theme/app_theme.dart';
+import 'core/utils/app_logger.dart';
+import 'core/utils/app_logger_io.dart';
 import 'features/audit/audit_log_screen.dart';
 import 'features/auth/login_screen.dart';
 import 'features/dashboard/dashboard_screen.dart';
@@ -38,11 +41,20 @@ import 'features/users/user_management_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // The log file is installed before anything else can fail, so the crash that
+  // lands on the error screen is the crash whose trace is in the file. It is
+  // awaited because a failure in the first few hundred milliseconds would
+  // otherwise be buffered and only written once the sink arrives — which is
+  // still true, but installing first keeps the file in chronological order.
+  final sink = await FileLogSink.tryCreate();
+  if (sink != null) {
+    await AppLogger.install(sink);
+  }
   try {
     await _startup();
   } catch (error, stackTrace) {
-    // ignore: avoid_print
-    print('STARTUP FAILURE: $error\n$stackTrace');
+    AppLogger.failure(error, stackTrace);
+    await AppLogger.flush();
     runApp(_StartupErrorApp(error, stackTrace));
   }
 }
@@ -98,6 +110,11 @@ Future<void> _startup() async {
   if (syncBackend.isConfigured) {
     _startSyncLoop(syncService, outbox);
   }
+  AppLogger.info(
+    'Started: device $deviceId, sync '
+    '${syncBackend.isConfigured ? "on" : "off on this build"}, '
+    'log ${AppLogger.logFilePath ?? "console only"}',
+  );
 
   runApp(
     WholesalePosApp(
@@ -117,30 +134,52 @@ Future<void> _startup() async {
 }
 
 /// Everything the UI needs from the sync engine (see [SyncRuntime]).
-/// Drains the outbox to the cloud on a timer. The first attempt runs on
-/// startup (to catch anything queued while offline); then every
-/// [SyncIntervals.cycle] — which pushes and pulls on the same cadence, so a
-/// sale recorded on one register is on every other screen within seconds.
+/// Drains the outbox to the cloud on the engine's adaptive cadence (see
+/// [SyncService.nextDelay]). The loop starts at [SyncIntervals.cycle] and
+/// climbs to [SyncIntervals.max] while nothing moves, which is what stops a
+/// quiet till from pulling nine cloud tables 28,800 times a day; it drops back
+/// to the floor the moment a cycle actually ships or lands a row.
 ///
-/// The tick only *requests* a drain. [SyncService.syncNow] holds a
-/// single-flight guard, so a cycle still running when the next tick arrives
-/// returns idle instead of starting a second drain: two overlapping drains
-/// would interleave SQLite writes on the same transaction and re-order the
-/// outbox the queue exists to sequence. Errors are swallowed: rows stay queued
-/// and the next tick retries, so syncing can never crash the register.
+/// The tick only *requests* a drain. [SyncService.syncNow] holds a single-flight
+/// guard, so a cycle still running when the next one arrives returns idle
+/// instead of starting a second drain: two overlapping drains would interleave
+/// SQLite writes on the same transaction and re-order the outbox the queue
+/// exists to sequence. Errors are logged and swallowed: rows stay queued and the
+/// next cycle retries, so syncing can never crash the register.
+///
+/// This is a self-rescheduling [Timer] rather than a `periodic` one precisely
+/// because the wait changes: a periodic timer is pinned to whatever interval it
+/// was created with. `service.onWake` lets a local write (a sale, a shift open,
+/// a cash movement) re-arm it to [SyncIntervals.wake] instead of waiting out a
+/// backoff the till earned while the shop was empty.
 void _startSyncLoop(SyncService service, SyncOutboxRepository outbox) {
+  Timer? timer;
+
   Future<void> drain() async {
     try {
       await service.syncNow();
       await outbox.pruneSynced();
-    } catch (_) {
-      // Leave everything queued; retried on the next tick.
+    } catch (e) {
+      // Leave everything queued; retried on the next cycle.
+      AppLogger.warn('Sync drain threw: $e');
     }
+    // Re-arm only now, because this cycle just changed which interval applies,
+    // and cancelling first means a cycle that outlives its own delay can never
+    // leave two timers running.
+    timer?.cancel();
+    timer = Timer(service.nextDelay, drain);
   }
 
+  // A local write must not wait out a backoff the till earned while the shop
+  // was empty. Short rather than immediate, because a sale writes a handful of
+  // rows and one drain should carry the lot.
+  service.onWake = () {
+    timer?.cancel();
+    timer = Timer(SyncIntervals.wake, drain);
+  };
+
   drain();
-  // The event loop holds the repeating timer for the life of the process.
-  Timer.periodic(SyncIntervals.cycle, (_) => drain());
+  // The event loop holds this timer for the life of the process.
 }
 
 class WholesalePosApp extends StatefulWidget {
@@ -472,7 +511,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
   Future<void> _onLoginSuccess(User user) async {
     setState(() => _currentUser = user);
     // "Sign in and see the whole shop": refresh immediately instead of waiting
-    // for the periodic tick. Fire-and-forget so a dead network can never hold
+    // for the next cycle. Fire-and-forget so a dead network can never hold
     // up a cashier who is standing at the till ready to sell.
     final runtime = widget.syncRuntime;
     if (runtime != null) {
@@ -482,8 +521,10 @@ class _AuthWrapperState extends State<AuthWrapper> {
             .then<void>(
               (_) {},
               onError: (Object e) {
-                // ignore: avoid_print
-                print('Post-login sync failed: $e');
+                // [syncNow] reports a failed cycle through its status instead
+                // of rethrowing, so reaching here means the reporting itself
+                // blew up — the one sync path that would otherwise be silent.
+                AppLogger.error('Post-login sync threw: $e');
               },
             ),
       );
@@ -628,6 +669,13 @@ class _MainLayoutState extends State<MainLayout> {
     _financeKey.currentState?.load(silent: true);
   }
 
+  /// This till just wrote something the rest of the shop has to hear about.
+  ///
+  /// The adaptive loop is allowed to idle at a minute between cycles, and a
+  /// sale must not wait for that. One call drops the cadence back to the floor
+  /// and re-arms the timer for right now (see [SyncService.notifyLocalActivity]).
+  void _wakeSync() => widget.syncRuntime?.service.notifyLocalActivity();
+
   void _loadScreen(int index, {bool silent = false}) {
     if (index < 0 || index >= _navFeatureKeys.length) return;
     switch (_navFeatureKeys[index]) {
@@ -653,6 +701,7 @@ class _MainLayoutState extends State<MainLayout> {
     // live feature mapping at call time, so it stays correct however the
     // visible tabs are ticked out for the signed-in account.
     void onSaleCompleted() {
+      _wakeSync();
       _refreshDataScreens();
       final registerIndex = _navFeatureKeys.indexOf('register');
       if (registerIndex >= 0) setState(() => _selectedIndex = registerIndex);
@@ -668,7 +717,13 @@ class _MainLayoutState extends State<MainLayout> {
     );
     final registerScreen = RegisterScreen(
       key: _registerKey,
-      onShiftUpdated: _refreshDataScreens,
+      onShiftUpdated: () {
+        // Shift opens, closes and cash movements are ledger writes like any
+        // other: the drawer balance on another till should not wait out a
+        // backoff to learn about them.
+        _wakeSync();
+        _refreshDataScreens();
+      },
       currentUser: user,
       shiftRepository: widget.shiftRepository,
       saleRepository: widget.saleRepository,
@@ -1125,24 +1180,84 @@ class _ShellDestination {
 }
 
 /// Shown instead of a blank window if startup fails.
+///
+/// Two ways to get the story out of a machine that will not start, because a
+/// shop operator cannot open a terminal: the trace is selectable on screen, and
+/// one tap puts the path of the rolling log file (which holds this failure and
+/// everything that led up to it) on the clipboard to send to support.
 class _StartupErrorApp extends StatelessWidget {
   final Object error;
   final StackTrace stackTrace;
   const _StartupErrorApp(this.error, this.stackTrace);
 
+  Future<void> _copyLogPath(BuildContext context) async {
+    final logPath = AppLogger.logFilePath;
+    if (logPath == null) return;
+    // The line describing this failure is queued, not yet on disk.
+    await AppLogger.flush();
+    await Clipboard.setData(ClipboardData(text: logPath));
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text('Copied the log path: $logPath')));
+  }
+
   @override
   Widget build(BuildContext context) {
+    final logPath = AppLogger.logFilePath;
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       home: Scaffold(
         body: Padding(
           padding: const EdgeInsets.all(24),
           child: Center(
-            child: SelectableText(
-              'Wholesale POS could not start.\n\n'
-              'Please screenshot this and send to support.\n'
-              'No data has been lost.\n\n'
-              '$error\n\n$stackTrace',
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 640),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    'Wholesale POS could not start.',
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'No data has been lost. Send the log file to support — '
+                    'the button below copies its location.',
+                  ),
+                  const SizedBox(height: 16),
+                  SelectableText('$error'),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      ElevatedButton.icon(
+                        icon: const Icon(Icons.copy, size: 18),
+                        label: const Text('Copy log file location'),
+                        onPressed: logPath == null
+                            ? null
+                            : () => _copyLogPath(context),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          logPath ?? 'No log file on this build',
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  // Scrollable and selectable: a Dart stack trace is far longer
+                  // than the window, and the frame that matters is usually the
+                  // part that used to be cut off.
+                  Flexible(
+                    child: SingleChildScrollView(
+                      child: SelectableText('$stackTrace'),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),

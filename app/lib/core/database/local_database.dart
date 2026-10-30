@@ -9,11 +9,17 @@ import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart' as ffi;
 import 'package:uuid/uuid.dart';
 
+import '../utils/app_logger.dart';
+
 class LocalDatabase {
   static const String databaseName = 'wholesale_pos.db';
   static const int schemaVersion = 17;
   static const String deviceIdFileName = 'device_id.txt';
   static const String themeSettingKey = 'theme_mode';
+
+  /// Suffix of the safety copy taken before a schema change. See
+  /// [_backupBeforeSchemaChange].
+  static const String backupSuffix = '.bak';
 
   LocalDatabase._();
 
@@ -60,11 +66,82 @@ class LocalDatabase {
       path,
       options: OpenDatabaseOptions(
         version: schemaVersion,
-        onConfigure: (db) async => await db.execute('PRAGMA foreign_keys = ON'),
+        onConfigure: (db) async {
+          await db.execute('PRAGMA foreign_keys = ON');
+          // `onConfigure` is the last moment before sqflite reads `user_version`
+          // and starts writing, so the copy taken here is the pre-migration
+          // file, byte for byte.
+          await _backupBeforeSchemaChange(db);
+        },
         onCreate: _onCreate,
         onUpgrade: _onUpgrade,
       ),
     );
+  }
+
+  /// Copies the on-disk database to `<path>.bak` when this build is about to
+  /// change its schema version.
+  ///
+  /// `onUpgrade` runs inside one SQLite transaction, so a migration that throws
+  /// rolls back and the file is left as it was. What that does NOT protect
+  /// against is a migration that completes and is simply wrong — a rebuild that
+  /// copies a table and drops a column it did not mean to, which is the failure
+  /// mode every past schema bug in this project has had. By then the damage is
+  /// committed and the only copy of the shop's real ledger is the `.bak` this
+  /// made first, and renaming it back over `wholesale_pos.db` is the whole
+  /// recovery procedure.
+  ///
+  /// Three deliberate details:
+  ///   * A brand-new file (`user_version == 0`) is skipped: there is nothing in
+  ///     it to save, and `onCreate` is not a migration.
+  ///   * An already-current file is skipped, so a bad migration that DID land
+  ///     cannot overwrite last week's good backup on the next launch.
+  ///   * A file NEWER than this build is backed up too. With no `onDowngrade`
+  ///     handler sqflite neither migrates nor refuses: it silently stamps the
+  ///     file with the lower version (see `database_mixin.dart`'s
+  ///     `setVersion(options.version!)`), which is exactly the kind of quiet
+  ///     write that deserves a copy — it happens when a shop rolls a till back
+  ///     to an older installer.
+  ///
+  /// A failed backup does NOT stop the open. A till that cannot write its
+  /// backup still has to trade; refusing to start turns a disk problem into a
+  /// closed shop. The failure is logged, and logged loudly, because it means
+  /// this run has no safety copy.
+  static Future<void> _backupBeforeSchemaChange(Database db) async {
+    final path = db.path;
+    if (path == inMemoryDatabasePath) return;
+
+    final int onDisk;
+    try {
+      onDisk = await db.getVersion();
+    } catch (e) {
+      AppLogger.warn(
+        'MIGRATION BACKUP SKIPPED: could not read the schema '
+        'version of $path: $e',
+      );
+      return;
+    }
+    if (onDisk == 0 || onDisk == schemaVersion) return;
+
+    try {
+      final file = File(path);
+      if (!await file.exists()) return;
+      // The database has no `-wal`/`-shm` sidecars to worry about: this project
+      // never sets `journal_mode = WAL`, so SQLite is in rollback-journal mode,
+      // where the main file is only amended once a transaction has committed
+      // and its journal is gone. This process holds the only handle and has run
+      // no write yet, so a plain copy is a consistent snapshot.
+      await file.copy('$path$backupSuffix');
+      AppLogger.info(
+        'MIGRATION BACKUP: schema v$onDisk -> v$schemaVersion, '
+        'pre-change copy at $path$backupSuffix',
+      );
+    } catch (e) {
+      AppLogger.warn(
+        'MIGRATION BACKUP FAILED for v$onDisk -> v$schemaVersion: '
+        '$e — the migration will run with NO safety copy of this file.',
+      );
+    }
   }
 
   /// Ensures at most one OPEN shift. Older data may contain >1 if a
@@ -77,8 +154,7 @@ class LocalDatabase {
     final now = DateTime.now().toUtc().toIso8601String();
     for (var i = 0; i < rows.length - 1; i++) {
       final id = rows[i]['id'] as String;
-      // ignore: avoid_print
-      print('MIGRATION: auto-closing stale duplicate open shift $id');
+      AppLogger.warn('MIGRATION: auto-closing stale duplicate open shift $id');
       await db.update(
         'shifts',
         {'status': 'CLOSED', 'closed_at': now},
@@ -201,8 +277,9 @@ class LocalDatabase {
       try {
         await _closeDuplicateOpenShifts(db);
       } catch (e) {
-        // ignore: avoid_print
-        print('MIGRATION WARNING: could not close duplicate open shifts: $e');
+        AppLogger.warn(
+          'MIGRATION WARNING: could not close duplicate open shifts: $e',
+        );
       }
       try {
         await db.execute(
@@ -210,8 +287,7 @@ class LocalDatabase {
           "ON shifts(status) WHERE status = 'OPEN'",
         );
       } catch (e) {
-        // ignore: avoid_print
-        print('MIGRATION WARNING: one_open_shift index failed: $e');
+        AppLogger.warn('MIGRATION WARNING: one_open_shift index failed: $e');
       }
       await db.execute('''
         CREATE TRIGGER prevent_second_open_shift_insert
@@ -544,8 +620,7 @@ class LocalDatabase {
         "ON shifts(status) WHERE status = 'OPEN'",
       );
     } catch (e) {
-      // ignore: avoid_print
-      print('WARNING: one_open_shift index failed: $e');
+      AppLogger.warn('WARNING: one_open_shift index failed: $e');
     }
     await db.execute(
       'CREATE INDEX IF NOT EXISTS sales_shift_id ON sales(shift_id)',

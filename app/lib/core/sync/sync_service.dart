@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import '../utils/app_logger.dart';
 import 'sync_backend.dart';
 import 'sync_outbox_repository.dart';
 import 'sync_pull_applier.dart';
@@ -7,13 +8,44 @@ import 'sync_status.dart';
 
 /// The one place the sync engine's cadence is written down.
 ///
-/// Three seconds is the interval every surface runs on: the native drain loop
-/// in `main.dart`, the pull throttle below, and the manual "sync now" the
-/// operator can press. It is short enough that a sale on one register shows on
-/// another inside a blink, and safe only because [SyncService.syncNow] refuses
-/// to overlap itself — a slow cycle is skipped, not queued behind a second one.
+/// A flat 3-second loop pulls nine cloud tables every three seconds, which is
+/// 28,800 pulls a day per till — on a shop with three registers and a phone
+/// that is ~90k requests a day to move nothing at all overnight, and it is the
+/// battery drain that makes a cashier turn sync off. So the cadence is
+/// adaptive: [cycle] is the floor a busy till runs at, and an idle one climbs
+/// [backoffRungs] instead, to [max] at worst.
+///
+/// The number that must NOT grow is the one the operator feels. A sale they
+/// just rang has to leave the till immediately ([SyncService.notifyLocalActivity]
+/// wakes the loop), and a row from another register has to land inside a
+/// blink — so the fast floor is held for [boost] after any activity.
 abstract final class SyncIntervals {
+  /// The floor, and the interval a boosted (recently active) till keeps.
   static const Duration cycle = Duration(seconds: 3);
+
+  /// How long a cycle that moved anything holds the floor, so a shop in the
+  /// middle of trading stays instant instead of climbing after every sale.
+  static const Duration boost = Duration(seconds: 30);
+
+  /// The ceiling. Even a till that has seen nothing for hours retries twice a
+  /// minute, which is invisible on battery and still catches the network
+  /// coming back.
+  static const Duration max = Duration(seconds: 60);
+
+  /// The rungs above [cycle] an idle cycle climbs, one per idle cycle. Three
+  /// quiet cycles take a till from the floor to a minute.
+  static const List<Duration> backoffRungs = <Duration>[
+    Duration(seconds: 10),
+    Duration(seconds: 30),
+    max,
+  ];
+
+  /// How soon a woken loop drains after a local write.
+  ///
+  /// Not zero: one sale writes a sale row, its line items and sometimes a
+  /// movement, and a short settle lets a single request carry all of them
+  /// instead of firing one per write.
+  static const Duration wake = Duration(milliseconds: 250);
 }
 
 /// Outcome of one drain attempt.
@@ -62,14 +94,19 @@ class SyncService {
   /// PostgREST sink which is write-only). Push still runs; nothing is pulled.
   final CloudSyncPuller? puller;
 
-  /// How often the download half is allowed to run.
+  /// How often the download half is allowed to run, and the floor of the
+  /// adaptive cadence ([nextDelay] never goes below it).
   ///
   /// Pushing is cheap and event-driven (one call, only when the outbox holds
-  /// rows); pulling costs one request per cloud table. Both now run on
-  /// [SyncIntervals.cycle] so a change made anywhere in the shop is visible
-  /// here within seconds — sign-in still forces it ([syncNow] with `forcePull`),
-  /// which is the moment the operator actually expects the whole shop's history.
+  /// rows); pulling costs one request per cloud table, so it follows the
+  /// adaptive interval rather than a fixed one: sign-in still forces it
+  /// ([syncNow] with `forcePull`), which is the moment the operator actually
+  /// expects the whole shop's history.
   final Duration pullInterval;
+
+  /// Injected clock. Only the boost window needs it, and a test that has to
+  /// prove a 30-second window expires cannot wait 30 seconds for it.
+  final DateTime Function() _now;
 
   /// Live view of the loop, for the UI. A [ValueNotifier] so a settings screen
   /// can rebuild without polling.
@@ -77,19 +114,75 @@ class SyncService {
 
   DateTime? _lastPull;
 
-  /// Single-flight guard (audit #11). A periodic timer, app-resume and the
-  /// post-sale trigger can all request a drain at once; two overlapping drains
-  /// would send the same rows in unpredictable order and re-introduce the
-  /// out-of-order overwrite the outbox's ASC ordering exists to prevent. While
-  /// one drain is running, concurrent calls return idle — the still-queued rows
-  /// are picked up by the very next trigger.
+  /// Which rung of [SyncIntervals.backoffRungs] an idle cycle sits on. 0 means
+  /// the floor, and it is both the fresh state and the state after activity.
+  /// Never climbs past the last rung.
+  int _rung = 0;
+
+  /// Until when [_rung] is pinned to 0, set by any cycle that moved data or any
+  /// local write. Null means never.
+  DateTime? _boostUntil;
+
+  /// Set by the drain loop in `main.dart` so this class can wake it up without
+  /// owning a `Timer` (and without the engine importing the UI layer).
+  void Function()? _wake;
+
+  /// The last error text written to the log, so a network that stays down for
+  /// an hour produces one line about it and not two thousand.
+  String? _lastLoggedError;
+
+  /// True while a recently-active till should keep the floor interval.
+  bool get _isBoosted {
+    final until = _boostUntil;
+    return until != null && _now().isBefore(until);
+  }
+
+  /// How long the caller's loop should wait before its next drain.
   ///
-  /// This guard is what makes a [SyncIntervals.cycle]-short timer safe. A full
-  /// cycle is a push, a pull of every cloud table and the writes they cause,
-  /// so it can outlast three seconds on a slow connection. Without the guard,
-  /// two drains would interleave on the same SQLite file — concurrent writers
-  /// inside one `db.transaction` fail with locking errors, and the second one
-  /// would re-send rows the first had already queued but not yet acked.
+  /// The engine decides the cadence; the loop only obeys. That split is what
+  /// makes it testable without a fake async clock and what lets a sign-in, a
+  /// manual "sync now" and a sale all consult one answer.
+  Duration get nextDelay {
+    if (_isBoosted || _rung == 0) return pullInterval;
+    final index = _rung - 1;
+    return SyncIntervals.backoffRungs[index.clamp(
+      0,
+      SyncIntervals.backoffRungs.length - 1,
+    )];
+  }
+
+  /// Called by the drain loop so a local write can shorten the wait to the next
+  /// cycle. Re-assigning it is how the loop hands itself over at start-up; it is
+  /// never read for anything but calling.
+  set onWake(void Function()? callback) => _wake = callback;
+
+  /// A local write (a sale, a shift open, a cash movement) just queued rows.
+  ///
+  /// This is the event the operator is waiting for, so the loop comes back to
+  /// the floor interval and is prodded immediately instead of whenever the
+  /// current rung happens to fire — the difference between "synced in 3s" and
+  /// "synced within a minute" on a till that has been quiet all morning.
+  void notifyLocalActivity() {
+    _rung = 0;
+    _boostUntil = _now().add(SyncIntervals.boost);
+    _wake?.call();
+  }
+
+  /// Single-flight guard (audit #11). The timer, a wake fired by
+  /// [notifyLocalActivity], sign-in and the manual "sync now" in Settings can
+  /// all request a drain at once; two overlapping drains would send the same
+  /// rows in unpredictable order and re-introduce the out-of-order overwrite
+  /// the outbox's ASC ordering exists to prevent. While one drain is running,
+  /// concurrent calls return idle — the still-queued rows are picked up by the
+  /// very next trigger.
+  ///
+  /// The guard is what makes a [SyncIntervals.cycle]-short floor safe. A full
+  /// cycle is a push, a pull of every cloud table and the writes they cause, so
+  /// it can outlast three seconds on a slow connection — and the wake hook in
+  /// [notifyLocalActivity] now deliberately fires cycles closer together than
+  /// the interval ever did. Concurrent writers inside one `db.transaction` fail
+  /// with locking errors, and the second one would re-send rows the first had
+  /// already queued but not yet acked; both are prevented here.
   bool _inFlight = false;
 
   SyncService(
@@ -97,7 +190,9 @@ class SyncService {
     this._backend, {
     this.puller,
     this.pullInterval = SyncIntervals.cycle,
-  }) : status = ValueNotifier(SyncStatus(configured: _backend.isConfigured));
+    @visibleForTesting DateTime Function()? now,
+  }) : _now = now ?? DateTime.now,
+       status = ValueNotifier(SyncStatus(configured: _backend.isConfigured));
 
   Future<SyncResult> syncNow({
     int batchLimit = 200,
@@ -131,11 +226,10 @@ class SyncService {
     } finally {
       _inFlight = false;
       final message = failure == null ? null : _describe(failure);
+      _recordCadence(pushed: pushed, applied: applied, error: message);
       status.value = SyncStatus(
         configured: true,
-        lastSuccess: message == null
-            ? DateTime.now()
-            : status.value.lastSuccess,
+        lastSuccess: message == null ? _now() : status.value.lastSuccess,
         error: message,
         authenticationFailed: failure is SyncAuthException,
         applied: applied,
@@ -149,6 +243,44 @@ class SyncService {
       applied: applied,
       error: status.value.error,
     );
+  }
+
+  /// Feeds the adaptive interval and the log file from one cycle's outcome.
+  ///
+  /// "Moved something" means pushed or applied, and nothing else. A cycle that
+  /// queued nothing and downloaded nothing is a till at an empty shop, and the
+  /// only thing worth doing about it is asking less often.
+  ///
+  /// A FAILED cycle counts as idle on purpose. A network that is down does not
+  /// get better because this till asked every three seconds — that behaviour is
+  /// the quota burn this fix exists to stop — and nothing is lost by waiting,
+  /// because the outbox still holds every row and the first success snaps back
+  /// to the floor and drains the backlog at full speed.
+  void _recordCadence({
+    required int pushed,
+    required int applied,
+    String? error,
+  }) {
+    if (pushed > 0 || applied > 0) {
+      _rung = 0;
+      _boostUntil = _now().add(SyncIntervals.boost);
+    } else if (!_isBoosted && _rung < SyncIntervals.backoffRungs.length) {
+      _rung++;
+    }
+
+    if (error == null) {
+      if (_lastLoggedError != null) {
+        AppLogger.info('Sync recovered after: $_lastLoggedError');
+        _lastLoggedError = null;
+      }
+      return;
+    }
+    // One line per distinct failure. Without this an offline till on the floor
+    // interval writes the same stack every three seconds and buries the one
+    // message that mattered underneath it.
+    if (error == _lastLoggedError) return;
+    _lastLoggedError = error;
+    AppLogger.warn('Sync cycle failed: $error');
   }
 
   /// Returns `(pushed, stillQueued)`.
@@ -183,13 +315,13 @@ class SyncService {
     final puller = this.puller;
     if (puller == null) return 0;
     final last = _lastPull;
-    if (!force &&
-        last != null &&
-        DateTime.now().difference(last) < pullInterval) {
+    // Throttle on the live cadence, not the floor: a manual "sync now" that is
+    // not a forcePull must not defeat the backoff the loop just earned.
+    if (!force && last != null && _now().difference(last) < nextDelay) {
       return 0;
     }
     final report = await puller.pullNow();
-    _lastPull = DateTime.now();
+    _lastPull = _now();
     return report.inserted;
   }
 
