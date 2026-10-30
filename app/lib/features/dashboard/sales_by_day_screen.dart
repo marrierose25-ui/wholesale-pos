@@ -110,6 +110,7 @@ class SalesByDayScreenState extends State<SalesByDayScreen> {
     try {
       final text = _searchController.text.trim();
       final sales = await widget.saleRepository.getSales(
+        userId: widget.currentUser.id,
         searchQuery: text.isEmpty ? null : text,
         period: _activeRange,
         status: _tabStatuses[_tab],

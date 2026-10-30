@@ -82,12 +82,17 @@ class RegisterHistoryScreenState extends State<RegisterHistoryScreen> {
       });
     }
     try {
-      final movements = await widget.shiftRepository.getCashMovements();
+      final movements = await widget.shiftRepository.getCashMovements(
+        userId: widget.currentUser.id,
+      );
       _all = movements;
       // Completed cash sales feed each day's net drawer change (money that
       // physically entered the drawer), so the card number matches the day
       // detail's "Net drawer change" rather than only the movement totals.
-      final sales = await widget.saleRepository.getSales(status: 'COMPLETED');
+      final sales = await widget.saleRepository.getSales(
+        userId: widget.currentUser.id,
+        status: 'COMPLETED',
+      );
       final cashByDay = <DateTime, int>{};
       for (final s in sales) {
         if (s.paymentMethod != 'CASH') continue;

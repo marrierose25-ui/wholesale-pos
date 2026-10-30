@@ -189,7 +189,12 @@ class LicenseValidator {
         }
       }
       final nowValue = now ?? DateTime.now();
-      if (issuedAt.isAfter(nowValue.add(const Duration(days: 1)))) {
+      // A month, not a day. Windows boxes with a dead CMOS battery come back
+      // from a power cut in 2009, and refusing to run until the owner sets the
+      // clock is indistinguishable from a broken app. Thirty days is wide enough
+      // for that and still narrow enough that a licence cannot be used by
+      // winding the clock back before it was issued.
+      if (issuedAt.isAfter(nowValue.add(const Duration(days: 30)))) {
         return {'error': 'System clock is set before the license issue date.'};
       }
       if (!nowValue.isBefore(expiresAt)) {

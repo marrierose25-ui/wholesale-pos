@@ -300,6 +300,7 @@ class _MainScaffoldState extends State<MainScaffold>
     try {
       final shift = await widget.backend.shifts.ensureActiveShift(
         widget.currentUser.id,
+        userId: widget.currentUser.id,
       );
       var done = 0;
       for (var i = 0; i < count; i++) {
@@ -307,7 +308,9 @@ class _MainScaffoldState extends State<MainScaffold>
         final qtyMilli = (1 + (i % 4)) * 1000; // 1..4 whole units
         final lineTotal = (p.unitPriceMinor * qtyMilli / 1000).round();
         final saleId = uid.v4();
-        final receipt = await widget.backend.sales.nextReceiptNumber();
+        final receipt = await widget.backend.sales.nextReceiptNumber(
+          userId: widget.currentUser.id,
+        );
         final item = SaleItem(
           id: uid.v4(),
           saleId: saleId,
@@ -448,13 +451,20 @@ class _MainScaffoldState extends State<MainScaffold>
     );
     add(
       'reports',
-      ReportsScreen(key: _reportsKey, saleRepository: backend.sales),
+      ReportsScreen(
+        key: _reportsKey,
+        saleRepository: backend.sales,
+        currentUser: user,
+      ),
     );
     add(
       'users',
       UserManagementScreen(userRepository: backend.users, currentUser: user),
     );
-    add('audit', AuditLogScreen(saleRepository: backend.sales));
+    add(
+      'audit',
+      AuditLogScreen(saleRepository: backend.sales, currentUser: user),
+    );
     // Settings is always visible regardless of ticks (logout / theme).
     entries.add(
       _ShellDestination('settings', 'Settings', Icons.settings, settingsScreen),

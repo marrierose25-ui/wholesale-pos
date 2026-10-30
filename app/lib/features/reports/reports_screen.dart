@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/models/user.dart';
 import '../../core/repositories/sale_repository.dart';
 import '../../core/theme/app_design.dart';
 import '../../core/theme/app_theme.dart';
@@ -8,8 +9,13 @@ import '../../core/utils/money_utils.dart';
 
 class ReportsScreen extends StatefulWidget {
   final SaleRepository saleRepository;
+  final User currentUser;
 
-  const ReportsScreen({super.key, required this.saleRepository});
+  const ReportsScreen({
+    super.key,
+    required this.saleRepository,
+    required this.currentUser,
+  });
 
   @override
   State<ReportsScreen> createState() => ReportsScreenState();
@@ -45,8 +51,14 @@ class ReportsScreenState extends State<ReportsScreen> {
     });
     try {
       final results = await Future.wait([
-        widget.saleRepository.getProductSalesSummary(period: _activeRange),
-        widget.saleRepository.getCashierPerformance(period: _activeRange),
+        widget.saleRepository.getProductSalesSummary(
+          userId: widget.currentUser.id,
+          period: _activeRange,
+        ),
+        widget.saleRepository.getCashierPerformance(
+          userId: widget.currentUser.id,
+          period: _activeRange,
+        ),
       ]);
       if (!mounted) return;
       setState(() {

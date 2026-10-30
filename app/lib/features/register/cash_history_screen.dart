@@ -214,6 +214,7 @@ class _RegisterDayScreenState extends State<RegisterDayScreen> {
         end: widget.day.add(const Duration(days: 1)),
       );
       final sales = await widget.saleRepository.getSales(
+        userId: widget.currentUser?.id ?? '',
         period: range,
         status: 'COMPLETED',
       );

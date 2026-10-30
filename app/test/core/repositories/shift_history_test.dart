@@ -127,6 +127,66 @@ void main() {
     // An open shift has no closing figure yet.
     expect(open.single.discrepancy, isNull);
   });
+
+  // F-002: shift repository reads enforce feature-tick authorization.
+  test(
+    'getShiftHistory requires the register_history tick for staff',
+    () async {
+      await expectLater(
+        repository.getShiftHistory(userId: 'cashier-1'),
+        throwsException,
+      );
+      expect(
+        (await repository.getShiftHistory(userId: 'owner-1')).isNotEmpty,
+        isTrue,
+      );
+    },
+  );
+
+  test(
+    'getCashMovements requires the register_history tick for staff',
+    () async {
+      await expectLater(
+        repository.getCashMovements(userId: 'cashier-1'),
+        throwsException,
+      );
+      expect(
+        (await repository.getCashMovements(userId: 'owner-1')).isEmpty,
+        isTrue,
+      );
+    },
+  );
+
+  test('getRegisterSnapshot requires the register tick', () async {
+    await expectLater(
+      repository.getRegisterSnapshot(DateRange.today(), userId: 'cashier-1'),
+      throwsException,
+    );
+    expect(
+      (await repository.getRegisterSnapshot(
+        DateRange.today(),
+        userId: 'owner-1',
+      )).isNotEmpty,
+      isTrue,
+    );
+  });
+
+  test('getShiftSummary requires the register tick', () async {
+    final open = await repository.getActiveShift(userId: 'owner-1');
+    expect(open, isNotNull);
+    if (open == null) return;
+    await expectLater(
+      repository.getShiftSummary(open, userId: 'cashier-1'),
+      throwsException,
+    );
+    expect(
+      (await repository.getShiftSummary(
+        open,
+        userId: 'owner-1',
+      )).containsKey('expected_cash'),
+      isTrue,
+    );
+  });
 }
 
 Future<void> _insertShift(

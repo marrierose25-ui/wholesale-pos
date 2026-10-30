@@ -1,12 +1,18 @@
 import 'package:flutter/material.dart';
 
+import '../../core/models/user.dart';
 import '../../core/repositories/sale_repository.dart';
 import '../../core/theme/app_design.dart';
 
 class AuditLogScreen extends StatefulWidget {
   final SaleRepository saleRepository;
+  final User currentUser;
 
-  const AuditLogScreen({super.key, required this.saleRepository});
+  const AuditLogScreen({
+    super.key,
+    required this.saleRepository,
+    required this.currentUser,
+  });
 
   @override
   State<AuditLogScreen> createState() => _AuditLogScreenState();
@@ -24,7 +30,9 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
 
   Future<void> _loadLogs() async {
     setState(() => _isLoading = true);
-    final logs = await widget.saleRepository.getAuditLogs();
+    final logs = await widget.saleRepository.getAuditLogs(
+      userId: widget.currentUser.id,
+    );
     setState(() {
       _logs = logs;
       _isLoading = false;

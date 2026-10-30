@@ -64,10 +64,14 @@ class DataExporter {
     final photosByMovement = {
       for (final row in photos) row['movement_id'] as String: row['jpeg_bytes'],
     };
+    final cashMovementsWithPhotos = <Map<String, dynamic>>[];
     for (final movement in cashMovements) {
       final bytes = photosByMovement[movement['id']];
       if (bytes is List<int> && bytes.isNotEmpty) {
-        movement['photo'] = base64Encode(bytes);
+        cashMovementsWithPhotos.add(Map<String, dynamic>.from(movement)
+          ..['photo'] = base64Encode(bytes));
+      } else {
+        cashMovementsWithPhotos.add(movement);
       }
     }
     final auditLogs = await db.query('audit_logs');
@@ -102,7 +106,7 @@ class DataExporter {
       'sale_items': saleItems,
       'void_requests': voidRequests,
       'shifts': shifts,
-      'cash_movements': cashMovements,
+      'cash_movements': cashMovementsWithPhotos,
       'audit_logs': auditLogs,
       'devices': devices,
       'counters': counters,

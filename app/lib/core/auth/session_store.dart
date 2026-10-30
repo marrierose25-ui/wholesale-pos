@@ -61,8 +61,8 @@ class SessionData {
 /// implementation without touching any callers.
 abstract class SessionStore {
   /// Setting key that records whether "stay signed in" is enabled on this
-  /// device. Opt-in and OFF by default so a shared till never auto-resumes an
-  /// owner session.
+  /// device. Persistent sign-in is ON by default so a till that is closed and
+  /// reopened does not demand the password again; only an explicit '0' opts out.
   static const String rememberKey = 'remember_login';
 
   /// How long a persisted session stays valid once the app is closed.

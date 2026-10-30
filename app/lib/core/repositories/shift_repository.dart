@@ -8,6 +8,7 @@ import '../sync/sync_outbox.dart';
 import '../sync/sync_outbox_entry.dart';
 import '../utils/date_range.dart';
 import '../utils/report_filters.dart';
+import '../models/user.dart';
 
 /// Data-access contract for register shifts and cash movements.
 ///
@@ -17,17 +18,21 @@ import '../utils/report_filters.dart';
 abstract class ShiftRepository {
   factory ShiftRepository(Database db) = SqfliteShiftRepository;
 
-  Future<Shift?> getActiveShift();
+  Future<Shift?> getActiveShift({String? userId});
 
   /// Returns the currently open shift, creating a perpetual one (opening cash
   /// `0`) when none exists. Idempotent and safe against the one-open-shift
   /// trigger: concurrent callers converge on a single OPEN row.
-  Future<Shift> ensureActiveShift(String cashierId);
+  Future<Shift> ensureActiveShift(String cashierId, {String? userId});
 
   /// Past and present register sessions, newest first, each carrying the
   /// cashier username for display. Filter by the day the shift was *opened*
   /// ([period], a half-open local range) and/or [status] (`OPEN`/`CLOSED`).
-  Future<List<Shift>> getShiftHistory({DateRange? period, String? status});
+  Future<List<Shift>> getShiftHistory({
+    String? userId,
+    DateRange? period,
+    String? status,
+  });
 
   Future<void> openShift(String cashierId, int openingCash);
 
@@ -43,15 +48,18 @@ abstract class ShiftRepository {
   /// The cash-register ledger, newest first, each carrying the username of
   /// whoever recorded it. Pass [shiftId] to restrict the list to one session,
   /// or omit it for every movement across all shifts.
-  Future<List<CashMovement>> getCashMovements({String? shiftId});
+  Future<List<CashMovement>> getCashMovements({
+    String? userId,
+    String? shiftId,
+  });
 
-  Future<Map<String, int>> getShiftSummary(Shift shift);
+  Future<Map<String, int>> getShiftSummary(Shift shift, {String? userId});
 
   /// Register figures for the perpetual open shift: `balance` is the all-time
   /// expected cash in the drawer, while the `today_*` counters are the same
   /// sums restricted to [day] (a half-open local range) so they reset each
   /// calendar day. Returns all zeros when no shift is open.
-  Future<Map<String, int>> getRegisterSnapshot(DateRange day);
+  Future<Map<String, int>> getRegisterSnapshot(DateRange day, {String? userId});
 
   Future<void> closeShift(Shift shift, int closingCash, {String? userId});
 }
@@ -61,8 +69,36 @@ class SqfliteShiftRepository implements ShiftRepository {
 
   SqfliteShiftRepository(this._db);
 
+  /// Owner always passes; staff must hold [feature] (or one of [aliases]).
+  static Future<void> _requireFeature(
+    DatabaseExecutor executor,
+    String? userId, {
+    required String feature,
+    List<String> aliases = const [],
+  }) async {
+    // No user identified (e.g. tests that predate this gate): skip the check.
+    if (userId == null || userId.isEmpty) return;
+    final rows = await executor.query(
+      'users',
+      columns: ['role', 'permissions'],
+      where: 'id = ? AND deleted_at IS NULL',
+      whereArgs: [userId],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      throw Exception('User not found.');
+    }
+    if (rows.first['role'] == 'OWNER') return;
+    final held = User.decodePermissions(rows.first['permissions']);
+    final allowed = <String>{...held, ...aliases};
+    if (!allowed.contains(feature)) {
+      throw Exception('This account does not have access to $feature.');
+    }
+  }
+
   @override
-  Future<Shift?> getActiveShift() async {
+  Future<Shift?> getActiveShift({String? userId}) async {
+    await _requireFeature(_db, userId, feature: 'register');
     final maps = await _db.query(
       'shifts',
       where: 'status = ?',
@@ -74,8 +110,9 @@ class SqfliteShiftRepository implements ShiftRepository {
   }
 
   @override
-  Future<Shift> ensureActiveShift(String cashierId) async {
-    final existing = await getActiveShift();
+  Future<Shift> ensureActiveShift(String cashierId, {String? userId}) async {
+    await _requireFeature(_db, userId, feature: 'register');
+    final existing = await getActiveShift(userId: userId);
     if (existing != null) return existing;
     final shift = Shift(
       id: const Uuid().v4(),
@@ -107,9 +144,11 @@ class SqfliteShiftRepository implements ShiftRepository {
   /// later voided, so the historical reconciliation is never rewritten.
   @override
   Future<List<Shift>> getShiftHistory({
+    String? userId,
     DateRange? period,
     String? status,
   }) async {
+    await _requireFeature(_db, userId, feature: 'register_history');
     // A training account's register sessions are not the shop's history, and its
     // money never entered the drawer, so it is left out of the balance sums
     // below too: a till that trained all day still closes on real cash.
@@ -238,7 +277,11 @@ class SqfliteShiftRepository implements ShiftRepository {
   }
 
   @override
-  Future<List<CashMovement>> getCashMovements({String? shiftId}) async {
+  Future<List<CashMovement>> getCashMovements({
+    String? userId,
+    String? shiftId,
+  }) async {
+    await _requireFeature(_db, userId, feature: 'register_history');
     final clauses = <String>[notDemoOperator('cm.user_id')];
     final args = <Object?>[];
     if (shiftId != null) {
@@ -268,7 +311,11 @@ class SqfliteShiftRepository implements ShiftRepository {
   }
 
   @override
-  Future<Map<String, int>> getShiftSummary(Shift shift) async {
+  Future<Map<String, int>> getShiftSummary(
+    Shift shift, {
+    String? userId,
+  }) async {
+    await _requireFeature(_db, userId, feature: 'register');
     // One OPEN shift is shared by every login on the device, so the practice
     // money a demo cashier rang up would otherwise sit in the real drawer's
     // expected cash. Excluded here and in every sum below, so the balance the
@@ -343,8 +390,12 @@ class SqfliteShiftRepository implements ShiftRepository {
   }
 
   @override
-  Future<Map<String, int>> getRegisterSnapshot(DateRange day) async {
-    final shift = await getActiveShift();
+  Future<Map<String, int>> getRegisterSnapshot(
+    DateRange day, {
+    String? userId,
+  }) async {
+    await _requireFeature(_db, userId, feature: 'register');
+    final shift = await getActiveShift(userId: userId);
     if (shift == null) {
       return {
         'balance': 0,

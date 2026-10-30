@@ -81,12 +81,14 @@ class DashboardScreenState extends State<DashboardScreen> {
     try {
       final range = _activeRange ?? DateRange.today();
       final stats = await widget.saleRepository.getDashboardStats(
+        userId: widget.currentUser.id,
         period: _activeRange,
       );
       // Comparison against the immediately preceding window of equal length
       // (for "Today" that is yesterday; for "This Week" last week, etc.).
       final duration = range.end.difference(range.start);
       final prevStats = await widget.saleRepository.getDashboardStats(
+        userId: widget.currentUser.id,
         period: DateRange(
           start: range.start.subtract(duration),
           end: range.start,

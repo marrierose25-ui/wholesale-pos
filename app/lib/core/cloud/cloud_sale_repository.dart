@@ -42,7 +42,7 @@ class CloudSaleRepository implements SaleRepository {
   }
 
   @override
-  Future<String> nextReceiptNumber() async {
+  Future<String> nextReceiptNumber({String? userId}) async {
     final json = await _api.call('next_receipt_number');
     return json['receipt_number'] as String;
   }
@@ -54,6 +54,7 @@ class CloudSaleRepository implements SaleRepository {
 
   @override
   Future<List<Sale>> getSales({
+    String? userId,
     String? searchQuery,
     DateRange? period,
     String? status,
@@ -74,8 +75,8 @@ class CloudSaleRepository implements SaleRepository {
   }
 
   @override
-  Future<List<Sale>> getRecentSales({int limit = 5}) {
-    return getSales(limit: limit);
+  Future<List<Sale>> getRecentSales({String? userId, int limit = 5}) {
+    return getSales(limit: limit, userId: userId);
   }
 
   /// Voids reviewed at shift close. The server exposes no shift-scoped void
@@ -83,8 +84,11 @@ class CloudSaleRepository implements SaleRepository {
   /// rule: voided in this shift, or voided while this shift was open but rung
   /// up earlier with no recorded voiding shift.
   @override
-  Future<List<Sale>> getVoidedSalesForShift(String shiftId) async {
-    final all = await getSales(status: 'VOIDED');
+  Future<List<Sale>> getVoidedSalesForShift(
+    String shiftId, {
+    String? userId,
+  }) async {
+    final all = await getSales(status: 'VOIDED', userId: userId);
     return all
         .where(
           (s) =>
@@ -100,7 +104,7 @@ class CloudSaleRepository implements SaleRepository {
   }
 
   @override
-  Future<List<VoidRequest>> getPendingVoidRequests() async {
+  Future<List<VoidRequest>> getPendingVoidRequests({String? userId}) async {
     final json = await _api.call('list_void_requests');
     final rows = json['void_requests'];
     if (rows is! List) return const [];
@@ -134,7 +138,10 @@ class CloudSaleRepository implements SaleRepository {
   }
 
   @override
-  Future<List<Map<String, dynamic>>> getRevenueTrend(DateRange period) async {
+  Future<List<Map<String, dynamic>>> getRevenueTrend(
+    DateRange period, {
+    String? userId,
+  }) async {
     final json = await _api.call('revenue_trend', {
       'period_start': isoInstant(period.start),
       'period_end': isoInstant(period.end),
@@ -145,7 +152,10 @@ class CloudSaleRepository implements SaleRepository {
   }
 
   @override
-  Future<Map<String, int>> getDashboardStats({DateRange? period}) async {
+  Future<Map<String, int>> getDashboardStats({
+    String? userId,
+    DateRange? period,
+  }) async {
     final range = period ?? DateRange.today();
     final json = await _api.call('dashboard_summary', {
       'period_start': isoInstant(range.start),
@@ -159,7 +169,10 @@ class CloudSaleRepository implements SaleRepository {
   }
 
   @override
-  Future<List<Map<String, dynamic>>> getAuditLogs({int limit = 500}) async {
+  Future<List<Map<String, dynamic>>> getAuditLogs({
+    String? userId,
+    int limit = 500,
+  }) async {
     final json = await _api.call('list_audit', {'limit': limit});
     final rows = json['audit_logs'];
     if (rows is! List) return const [];
@@ -167,8 +180,8 @@ class CloudSaleRepository implements SaleRepository {
   }
 
   @override
-  Future<int> getTodayRevenue() async {
-    final stats = await getDashboardStats();
+  Future<int> getTodayRevenue({String? userId}) async {
+    final stats = await getDashboardStats(userId: userId);
     return stats['revenue'] ?? 0;
   }
 
@@ -177,6 +190,7 @@ class CloudSaleRepository implements SaleRepository {
   /// screen changes are needed for the cloud path.
   @override
   Future<List<Map<String, dynamic>>> getProductSalesSummary({
+    String? userId,
     DateRange? period,
   }) async {
     final json = await _api.call('report_summary', {
@@ -197,6 +211,7 @@ class CloudSaleRepository implements SaleRepository {
 
   @override
   Future<List<Map<String, dynamic>>> getCashierPerformance({
+    String? userId,
     DateRange? period,
   }) async {
     final json = await _api.call('report_summary', {

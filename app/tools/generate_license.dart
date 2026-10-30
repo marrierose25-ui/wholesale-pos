@@ -43,14 +43,11 @@ Future<void> main(List<String> args) async {
     final keyPair = await Ed25519().newKeyPairFromSeed(seed);
 
     final now = DateTime.now().toUtc();
-    final expiresAt = DateTime.utc(
-      now.year + 1,
-      now.month,
-      now.day,
-      now.hour,
-      now.minute,
-      now.second,
-    );
+    // Ten calendar years, not 365*10 days: the latter drifts off the issue date
+    // by the leap days and lands a licence a day or two short of the anniversary
+    // the customer was quoted. The time of day is dropped on purpose — a licence
+    // that expires mid-afternoon is a support call nobody can explain.
+    final expiresAt = DateTime.utc(now.year + 10, now.month, now.day);
 
     final payload = <String, Object?>{
       'format': 'wholesale-pos-license',

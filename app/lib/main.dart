@@ -768,7 +768,11 @@ class _MainLayoutState extends State<MainLayout> {
     );
     add(
       'reports',
-      ReportsScreen(key: _reportsKey, saleRepository: widget.saleRepository),
+      ReportsScreen(
+        key: _reportsKey,
+        saleRepository: widget.saleRepository,
+        currentUser: user,
+      ),
     );
     add(
       'users',
@@ -777,7 +781,10 @@ class _MainLayoutState extends State<MainLayout> {
         currentUser: user,
       ),
     );
-    add('audit', AuditLogScreen(saleRepository: widget.saleRepository));
+    add(
+      'audit',
+      AuditLogScreen(saleRepository: widget.saleRepository, currentUser: user),
+    );
     // Settings is always visible regardless of ticks (logout / theme).
     entries.add(
       _ShellDestination('settings', 'Settings', Icons.settings, settingsScreen),

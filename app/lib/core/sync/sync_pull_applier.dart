@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:sqflite/sqflite.dart';
 
 import '../repositories/user_repository.dart';
+import '../utils/app_logger.dart';
 import 'sync_backend.dart';
 
 /// What one page of cloud changes actually did to the local database.
@@ -233,20 +234,45 @@ class SyncPullApplier {
       if (row['is_demo'] == true) {
         final demo = await _localDemo(txn, id);
         if (demo != null) {
-          await _safely(txn, () async {
-            await txn.update(
-              'users',
-              {
-                ...credential,
-                'is_demo': 1,
-                // The ticks are the owner's training plan for this login, so
-                // they follow the cloud even though the role cannot.
-                'permissions': _permissionsJson(row['permissions']),
-              },
-              where: 'id = ?',
-              whereArgs: [demo],
+          // Not `_safely` here. This is the one row on the page whose failure is
+          // invisible and expensive: drop it and the owner's browser password
+          // stops opening the demo on this till, with a sync that still reports
+          // success. Try twice, then say so in the log with the row it was on.
+          final values = <String, Object?>{
+            ...credential,
+            'is_demo': 1,
+            // The ticks are the owner's training plan for this login, so
+            // they follow the cloud even though the role cannot.
+            'permissions': _permissionsJson(row['permissions']),
+          };
+          var landed = false;
+          for (var attempt = 1; attempt <= 2 && !landed; attempt++) {
+            try {
+              await txn.update(
+                'users',
+                values,
+                where: 'id = ?',
+                whereArgs: [demo],
+              );
+              landed = true;
+              if (attempt > 1) {
+                AppLogger.info(
+                  'Demo credential adopted on retry $attempt (local $demo).',
+                );
+              }
+            } catch (error) {
+              AppLogger.warn(
+                'Demo credential for $demo failed on attempt $attempt/2: '
+                '$error',
+              );
+            }
+          }
+          if (!landed) {
+            AppLogger.error(
+              'Demo credential for $demo (cloud $id) did not land: the '
+              'browser password will not open the demo on this till.',
             );
-          });
+          }
           continue;
         }
       }
@@ -485,6 +511,7 @@ class SyncPullApplier {
         'opened_at': _localIso(row['opened_at']) ?? _nowIso(),
         'closed_at': _localIso(row['closed_at']),
       };
+      _closeOut(values);
       var inserted = await _insert(txn, 'shifts', values);
       if (inserted == 0 && values['status'] == 'OPEN') {
         // This register already has its OWN open drawer (the local trigger
@@ -493,11 +520,28 @@ class SyncPullApplier {
         // as a closed historical container. The local drawer state is the
         // register's own business; this row is only a parent for old sales.
         values['status'] = 'CLOSED';
+        _closeOut(values);
         inserted = await _insert(txn, 'shifts', values);
       }
       created += inserted;
     }
     return created;
+  }
+
+  /// Makes a `CLOSED` row self-consistent before it is written.
+  ///
+  /// The cloud can send a shift that is closed but carries no closing count —
+  /// a till that closed while its outbox row had no figure, or the OPEN-to-
+  /// CLOSED fallback in [_applyShifts], which reuses a row that never had one.
+  /// Every drawer report sums that column, so a null silently drops the whole
+  /// session out of the totals: fall back to the expected figure, then zero.
+  /// `closed_at` gets the same treatment, because a closed shift with no close
+  /// time is missing from every date-ranged report.
+  void _closeOut(Map<String, Object?> values) {
+    if (values['status'] != 'CLOSED') return;
+    values['closing_cash_minor_units'] ??=
+        values['expected_cash_minor_units'] ?? 0;
+    values['closed_at'] ??= _nowIso();
   }
 
   /// A drawer closed elsewhere has to close here too.
@@ -518,17 +562,18 @@ class SyncPullApplier {
   ) async {
     if (_str(row['status']) != 'CLOSED') return;
     if (await _hasPending(txn, 'shift', id)) return;
+    final closing = _nullableInt(row['closing_cash_minor_units']);
+    final expected = _nullableInt(row['expected_cash_minor_units']);
     await _safely(txn, () async {
       await txn.update(
         'shifts',
         {
           'status': 'CLOSED',
-          'closing_cash_minor_units': _nullableInt(
-            row['closing_cash_minor_units'],
-          ),
-          'expected_cash_minor_units': _nullableInt(
-            row['expected_cash_minor_units'],
-          ),
+          // Only take the cloud's figures when it actually sent them: this
+          // register counted its own drawer, and a page whose closing count is
+          // null must not wipe that count out of the day's totals.
+          'closing_cash_minor_units': ?closing,
+          'expected_cash_minor_units': ?expected,
           'closed_at': _localIso(row['closed_at']) ?? _nowIso(),
         },
         where: "id = ? AND status = 'OPEN'",

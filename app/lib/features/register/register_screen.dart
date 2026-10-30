@@ -62,13 +62,17 @@ class RegisterScreenState extends State<RegisterScreen> {
       // A shift always exists: create the perpetual one on first visit.
       final shift = await widget.shiftRepository.ensureActiveShift(
         widget.currentUser.id,
+        userId: widget.currentUser.id,
       );
       final snapshot = await widget.shiftRepository.getRegisterSnapshot(
         DateRange.today(),
+        userId: widget.currentUser.id,
       );
       final isOwner = widget.currentUser.role == 'OWNER';
       final pending = isOwner
-          ? await widget.saleRepository.getPendingVoidRequests()
+          ? await widget.saleRepository.getPendingVoidRequests(
+              userId: widget.currentUser.id,
+            )
           : <VoidRequest>[];
 
       if (!mounted) return;

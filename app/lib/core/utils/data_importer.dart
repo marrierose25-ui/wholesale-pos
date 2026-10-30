@@ -219,6 +219,7 @@ class DataImporter {
       // Clear existing data
       await txn.delete('audit_logs');
       await txn.delete('cash_movements');
+      await txn.delete('cash_movement_photos');
       await txn.delete('void_requests');
       await txn.delete('sale_items');
       await txn.delete('sales');
@@ -229,6 +230,7 @@ class DataImporter {
       await txn.delete('products');
       await txn.delete('settings');
       await txn.delete('counters');
+      await txn.delete('sync_outbox');
       await txn.delete('users');
 
       // Insert new data
@@ -297,6 +299,14 @@ class DataImporter {
       for (var row in (data['settings'] as List)) {
         await txn.insert('settings', Map<String, dynamic>.from(row));
       }
+      // Restoring brings back the backup's sync cursors, which would point the
+      // next pull at stale positions and risk missing rows. Drop them so the
+      // restored till re-syncs from scratch on the next drain.
+      await txn.delete(
+        'settings',
+        where: 'key LIKE ?',
+        whereArgs: ['sync_cursor.%'],
+      );
       final fkErrors = await txn.rawQuery('PRAGMA foreign_key_check');
       if (fkErrors.isNotEmpty) {
         throw Exception('Backup contains broken foreign-key relationships.');

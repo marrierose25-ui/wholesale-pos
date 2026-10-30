@@ -51,6 +51,7 @@ class SalesScreenState extends State<SalesScreen> {
     try {
       final shift = await widget.shiftRepository.ensureActiveShift(
         widget.currentUser.id,
+        userId: widget.currentUser.id,
       );
       if (mounted) setState(() => _activeShift = shift);
     } catch (_) {
@@ -86,8 +87,13 @@ class SalesScreenState extends State<SalesScreen> {
     try {
       final shift =
           _activeShift ??
-          await widget.shiftRepository.ensureActiveShift(widget.currentUser.id);
-      final receiptNumber = await widget.saleRepository.nextReceiptNumber();
+          await widget.shiftRepository.ensureActiveShift(
+            widget.currentUser.id,
+            userId: widget.currentUser.id,
+          );
+      final receiptNumber = await widget.saleRepository.nextReceiptNumber(
+        userId: widget.currentUser.id,
+      );
       final now = DateTime.now();
       final saleId = const Uuid().v4();
       final lineTotal = draft.lineTotalMinorUnits;

@@ -15,7 +15,7 @@ class CloudShiftRepository implements ShiftRepository {
   CloudShiftRepository(this._api);
 
   @override
-  Future<Shift?> getActiveShift() async {
+  Future<Shift?> getActiveShift({String? userId}) async {
     final json = await _api.call('get_shift');
     final shift = json['shift'];
     if (shift is! Map<String, dynamic>) return null;
@@ -23,7 +23,7 @@ class CloudShiftRepository implements ShiftRepository {
   }
 
   @override
-  Future<Shift> ensureActiveShift(String cashierId) async {
+  Future<Shift> ensureActiveShift(String cashierId, {String? userId}) async {
     final json = await _api.call('ensure_shift');
     final shift = json['shift'];
     if (shift is! Map<String, dynamic>) {
@@ -33,7 +33,10 @@ class CloudShiftRepository implements ShiftRepository {
   }
 
   @override
-  Future<Map<String, int>> getRegisterSnapshot(DateRange day) async {
+  Future<Map<String, int>> getRegisterSnapshot(
+    DateRange day, {
+    String? userId,
+  }) async {
     final json = await _api.call('register_snapshot', {
       'period_start': isoInstant(day.start),
       'period_end': isoInstant(day.end),
@@ -47,6 +50,7 @@ class CloudShiftRepository implements ShiftRepository {
 
   @override
   Future<List<Shift>> getShiftHistory({
+    String? userId,
     DateRange? period,
     String? status,
   }) async {
@@ -84,7 +88,10 @@ class CloudShiftRepository implements ShiftRepository {
   }
 
   @override
-  Future<List<CashMovement>> getCashMovements({String? shiftId}) async {
+  Future<List<CashMovement>> getCashMovements({
+    String? userId,
+    String? shiftId,
+  }) async {
     final json = await _api.call('list_cash_movements', {'shift_id': ?shiftId});
     final rows = json['movements'];
     if (rows is! List) return const [];
@@ -95,7 +102,10 @@ class CloudShiftRepository implements ShiftRepository {
   }
 
   @override
-  Future<Map<String, int>> getShiftSummary(Shift shift) async {
+  Future<Map<String, int>> getShiftSummary(
+    Shift shift, {
+    String? userId,
+  }) async {
     final json = await _api.call('shift_summary', {'shift_id': shift.id});
     final summary = json['summary'];
     if (summary is! Map<String, dynamic>) return const {};

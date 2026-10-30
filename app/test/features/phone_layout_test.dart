@@ -168,7 +168,7 @@ void main() {
   testWidgets('Reports lays out at phone width', (tester) async {
     await pumpAtPhone(
       tester,
-      ReportsScreen(saleRepository: SaleRepository(db)),
+      ReportsScreen(saleRepository: SaleRepository(db), currentUser: owner),
     );
   });
 
@@ -185,7 +185,7 @@ void main() {
   testWidgets('Audit log lays out at phone width', (tester) async {
     await pumpAtPhone(
       tester,
-      AuditLogScreen(saleRepository: SaleRepository(db)),
+      AuditLogScreen(saleRepository: SaleRepository(db), currentUser: owner),
     );
   });
 

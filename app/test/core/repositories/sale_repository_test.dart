@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wholesale_pos_app/core/database/local_database.dart';
 import 'package:wholesale_pos_app/core/repositories/sale_repository.dart';
@@ -311,6 +313,138 @@ void main() {
       final completed = await repository.getSales(status: 'COMPLETED');
       expect(completed.length, 1);
       expect(completed.first.id, flourSaleId);
+    });
+  });
+  // F-002: native repository reads enforce feature-tick authorization, mirroring
+  // the cloud pos-api RBAC. Owners bypass; staff must hold the relevant tick.
+  group('F-002 authorization', () {
+    Future<void> insertStaff({
+      required String id,
+      required String username,
+      required List<String> permissions,
+    }) async {
+      await db.insert('users', {
+        'id': id,
+        'username': username,
+        'password_hash': 'x',
+        'salt': 'x',
+        'role': 'CASHIER',
+        'is_active': 1,
+        'permissions': jsonEncode(permissions),
+        'created_at': DateTime.now().toIso8601String(),
+      });
+    }
+
+    test('getSales rejects staff without history/register_history', () async {
+      await insertStaff(
+        id: 'staff-no-ticks',
+        username: 'sak',
+        permissions: const [],
+      );
+      await expectLater(
+        repository.getSales(userId: 'staff-no-ticks'),
+        throwsException,
+      );
+      await insertStaff(
+        id: 'staff-history',
+        username: 'sak2',
+        permissions: const ['history'],
+      );
+      expect(
+        (await repository.getSales(userId: 'staff-history')).isEmpty,
+        isTrue,
+      );
+      expect((await repository.getSales(userId: 'user-1')).isEmpty, isTrue);
+    });
+
+    test('getDashboardStats requires the dashboard tick', () async {
+      await insertStaff(
+        id: 'staff-no-ticks',
+        username: 'sak',
+        permissions: const [],
+      );
+      await expectLater(
+        repository.getDashboardStats(userId: 'staff-no-ticks'),
+        throwsException,
+      );
+      await insertStaff(
+        id: 'staff-dashboard',
+        username: 'sak3',
+        permissions: const ['dashboard'],
+      );
+      expect(
+        (await repository.getDashboardStats(userId: 'staff-dashboard'))
+            .isNotEmpty,
+        isTrue,
+      );
+      expect(
+        (await repository.getDashboardStats(userId: 'user-1')).isNotEmpty,
+        isTrue,
+      );
+    });
+
+    test('getProductSalesSummary requires the reports tick', () async {
+      await insertStaff(
+        id: 'staff-no-ticks',
+        username: 'sak',
+        permissions: const [],
+      );
+      await expectLater(
+        repository.getProductSalesSummary(userId: 'staff-no-ticks'),
+        throwsException,
+      );
+      await insertStaff(
+        id: 'staff-reports',
+        username: 'sak4',
+        permissions: const ['reports'],
+      );
+      expect(
+        (await repository.getProductSalesSummary(userId: 'staff-reports'))
+            .isEmpty,
+        isTrue,
+      );
+      expect(
+        (await repository.getProductSalesSummary(userId: 'user-1')).isEmpty,
+        isTrue,
+      );
+    });
+
+    test('getAuditLogs requires the audit tick', () async {
+      await insertStaff(
+        id: 'staff-no-ticks',
+        username: 'sak',
+        permissions: const [],
+      );
+      await expectLater(
+        repository.getAuditLogs(userId: 'staff-no-ticks'),
+        throwsException,
+      );
+      await insertStaff(
+        id: 'staff-audit',
+        username: 'sak5',
+        permissions: const ['audit'],
+      );
+      expect(
+        (await repository.getAuditLogs(userId: 'staff-audit')).isEmpty,
+        isTrue,
+      );
+      expect((await repository.getAuditLogs(userId: 'user-1')).isEmpty, isTrue);
+    });
+
+    test('getPendingVoidRequests is owner-only', () async {
+      await insertStaff(
+        id: 'staff-no-ticks',
+        username: 'sak',
+        permissions: const [],
+      );
+      await expectLater(
+        repository.getPendingVoidRequests(userId: 'staff-no-ticks'),
+        throwsException,
+      );
+      expect(
+        (await repository.getPendingVoidRequests(userId: 'user-1')).isEmpty,
+        isTrue,
+      );
     });
   });
 }

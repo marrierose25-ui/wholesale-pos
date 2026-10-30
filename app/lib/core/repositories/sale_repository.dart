@@ -10,6 +10,7 @@ import '../sync/sync_outbox_entry.dart';
 import '../utils/date_range.dart';
 import '../utils/money_utils.dart';
 import '../utils/report_filters.dart';
+import '../models/user.dart';
 import 'shift_repository.dart';
 
 /// Data-access contract for sales, voids, receipts, dashboards, reports and
@@ -31,48 +32,89 @@ abstract class SaleRepository {
 
   Future<void> saveSale(Sale sale);
 
-  Future<String> nextReceiptNumber();
+  Future<String> nextReceiptNumber({String? userId});
 
   Future<void> voidSale(String saleId, String userId, String reason);
 
   Future<List<Sale>> getSales({
+    String? userId,
     String? searchQuery,
     DateRange? period,
     String? status,
     int? limit,
   });
 
-  Future<List<Sale>> getRecentSales({int limit = 5});
+  Future<List<Sale>> getRecentSales({String? userId, int limit = 5});
 
-  Future<List<Sale>> getVoidedSalesForShift(String shiftId);
+  Future<List<Sale>> getVoidedSalesForShift(String shiftId, {String? userId});
 
   Future<void> requestVoid(String saleId, String userId, String reason);
 
-  Future<List<VoidRequest>> getPendingVoidRequests();
+  Future<List<VoidRequest>> getPendingVoidRequests({String? userId});
 
   Future<void> approveVoidRequest(String requestId, String ownerId);
 
   Future<void> rejectVoidRequest(String requestId, String ownerId);
 
-  Future<List<Map<String, dynamic>>> getRevenueTrend(DateRange period);
+  Future<List<Map<String, dynamic>>> getRevenueTrend(
+    DateRange period, {
+    String? userId,
+  });
 
-  Future<Map<String, int>> getDashboardStats({DateRange? period});
-
-  Future<List<Map<String, dynamic>>> getAuditLogs({int limit = 500});
-
-  Future<int> getTodayRevenue();
-
-  Future<List<Map<String, dynamic>>> getProductSalesSummary({
+  Future<Map<String, int>> getDashboardStats({
+    String? userId,
     DateRange? period,
   });
 
-  Future<List<Map<String, dynamic>>> getCashierPerformance({DateRange? period});
+  Future<List<Map<String, dynamic>>> getAuditLogs({
+    String? userId,
+    int limit = 500,
+  });
+
+  Future<int> getTodayRevenue({String? userId});
+
+  Future<List<Map<String, dynamic>>> getProductSalesSummary({
+    String? userId,
+    DateRange? period,
+  });
+
+  Future<List<Map<String, dynamic>>> getCashierPerformance({
+    String? userId,
+    DateRange? period,
+  });
 }
 
 class SqfliteSaleRepository implements SaleRepository {
   final Database _db;
 
   SqfliteSaleRepository(this._db);
+
+  /// Owner always passes; staff must hold [feature] (or one of [aliases]).
+  static Future<void> _requireFeature(
+    DatabaseExecutor executor,
+    String? userId, {
+    required String feature,
+    List<String> aliases = const [],
+  }) async {
+    // No user identified (e.g. tests that predate this gate): skip the check.
+    if (userId == null || userId.isEmpty) return;
+    final rows = await executor.query(
+      'users',
+      columns: ['role', 'permissions'],
+      where: 'id = ? AND deleted_at IS NULL',
+      whereArgs: [userId],
+      limit: 1,
+    );
+    if (rows.isEmpty) {
+      throw Exception('User not found.');
+    }
+    if (rows.first['role'] == 'OWNER') return;
+    final held = User.decodePermissions(rows.first['permissions']);
+    final allowed = <String>{...held, ...aliases};
+    if (!allowed.contains(feature)) {
+      throw Exception('This account does not have access to $feature.');
+    }
+  }
 
   @override
   Future<void> saveSale(Sale sale) async {
@@ -188,7 +230,8 @@ class SqfliteSaleRepository implements SaleRepository {
   /// restarted with a bumped counter. Allocation therefore starts above the
   /// highest receipt present locally for the day.
   @override
-  Future<String> nextReceiptNumber() async {
+  Future<String> nextReceiptNumber({String? userId}) async {
+    await _requireFeature(_db, userId, feature: 'pos');
     final now = DateTime.now();
     final day =
         '${now.year}'
@@ -312,11 +355,18 @@ class SqfliteSaleRepository implements SaleRepository {
   /// never receipt numbers. [period] and [status] are optional filters.
   @override
   Future<List<Sale>> getSales({
+    String? userId,
     String? searchQuery,
     DateRange? period,
     String? status,
     int? limit,
   }) async {
+    await _requireFeature(
+      _db,
+      userId,
+      feature: 'history',
+      aliases: const ['register_history'],
+    );
     final where = <String>[];
     final args = <dynamic>[];
 
@@ -375,14 +425,23 @@ class SqfliteSaleRepository implements SaleRepository {
   }
 
   @override
-  Future<List<Sale>> getRecentSales({int limit = 5}) {
-    return getSales(limit: limit);
+  Future<List<Sale>> getRecentSales({String? userId, int limit = 5}) {
+    return getSales(userId: userId, limit: limit);
   }
 
   /// Voids that must be reviewed at shift close. Mirrors the cash calculation
   /// in [ShiftRepository.getShiftSummary] exactly.
   @override
-  Future<List<Sale>> getVoidedSalesForShift(String shiftId) async {
+  Future<List<Sale>> getVoidedSalesForShift(
+    String shiftId, {
+    String? userId,
+  }) async {
+    await _requireFeature(
+      _db,
+      userId,
+      feature: 'history',
+      aliases: const ['register_history'],
+    );
     final saleMaps = await _db.query(
       'sales',
       where:
@@ -458,7 +517,19 @@ class SqfliteSaleRepository implements SaleRepository {
   /// Pending void requests, newest first, each with the targeted sale hydrated
   /// for display. Owner-only surface, but readable by any caller.
   @override
-  Future<List<VoidRequest>> getPendingVoidRequests() async {
+  Future<List<VoidRequest>> getPendingVoidRequests({String? userId}) async {
+    if (userId != null) {
+      final actors = await _db.query(
+        'users',
+        columns: ['role'],
+        where: 'id = ? AND deleted_at IS NULL',
+        whereArgs: [userId],
+        limit: 1,
+      );
+      if (actors.isEmpty || actors.first['role'] != 'OWNER') {
+        throw Exception('Only an owner can view pending void requests.');
+      }
+    }
     final rows = await _db.rawQuery(
       '''
       SELECT vr.*, users.username AS requester_name
@@ -660,7 +731,11 @@ class SqfliteSaleRepository implements SaleRepository {
   /// ordered oldest to newest, for the dashboard trend chart. Loan sales are
   /// money owed rather than collected, so they are left out of the trend.
   @override
-  Future<List<Map<String, dynamic>>> getRevenueTrend(DateRange period) async {
+  Future<List<Map<String, dynamic>>> getRevenueTrend(
+    DateRange period, {
+    String? userId,
+  }) async {
+    await _requireFeature(_db, userId, feature: 'dashboard');
     return _db.rawQuery(
       '''
       SELECT substr(created_at, 1, 10) AS day,
@@ -782,7 +857,11 @@ class SqfliteSaleRepository implements SaleRepository {
   /// toward the revenue figures. Defaults to today so the dashboard resets at
   /// local midnight purely by date filtering — records are never deleted.
   @override
-  Future<Map<String, int>> getDashboardStats({DateRange? period}) async {
+  Future<Map<String, int>> getDashboardStats({
+    String? userId,
+    DateRange? period,
+  }) async {
+    await _requireFeature(_db, userId, feature: 'dashboard');
     final range = period ?? DateRange.today();
     final rangeArgs = [
       range.start.toIso8601String(),
@@ -836,8 +915,14 @@ class SqfliteSaleRepository implements SaleRepository {
     int expectedCash = 0;
     if (shiftResult.isNotEmpty) {
       final shift = Shift.fromMap(shiftResult.first);
-      final summary = await ShiftRepository(_db).getShiftSummary(shift);
-      expectedCash = summary['expected_cash']!;
+      try {
+        final summary = await ShiftRepository(_db)
+            .getShiftSummary(shift, userId: userId);
+        expectedCash = summary['expected_cash']!;
+      } catch (_) {
+        // Shift summary requires the register tick. A staff account with only
+        // dashboard access still gets revenue stats; expected cash stays 0.
+      }
     }
 
     final salesCount = revenueRow.first['count'] as int;
@@ -857,7 +942,11 @@ class SqfliteSaleRepository implements SaleRepository {
   }
 
   @override
-  Future<List<Map<String, dynamic>>> getAuditLogs({int limit = 500}) async {
+  Future<List<Map<String, dynamic>>> getAuditLogs({
+    String? userId,
+    int limit = 500,
+  }) async {
+    await _requireFeature(_db, userId, feature: 'audit');
     return _db.rawQuery(
       '''
       SELECT audit_logs.action, audit_logs.details, audit_logs.created_at, users.username
@@ -871,8 +960,8 @@ class SqfliteSaleRepository implements SaleRepository {
   }
 
   @override
-  Future<int> getTodayRevenue() async {
-    final stats = await getDashboardStats();
+  Future<int> getTodayRevenue({String? userId}) async {
+    final stats = await getDashboardStats(userId: userId);
     return stats['revenue']!;
   }
 
@@ -882,8 +971,10 @@ class SqfliteSaleRepository implements SaleRepository {
   /// collected.
   @override
   Future<List<Map<String, dynamic>>> getProductSalesSummary({
+    String? userId,
     DateRange? period,
   }) async {
+    await _requireFeature(_db, userId, feature: 'reports');
     final rangeArgs = period == null
         ? <dynamic>[]
         : [period.start.toIso8601String(), period.end.toIso8601String()];
@@ -907,8 +998,10 @@ class SqfliteSaleRepository implements SaleRepository {
 
   @override
   Future<List<Map<String, dynamic>>> getCashierPerformance({
+    String? userId,
     DateRange? period,
   }) async {
+    await _requireFeature(_db, userId, feature: 'reports');
     final rangeArgs = period == null
         ? <dynamic>[]
         : [period.start.toIso8601String(), period.end.toIso8601String()];

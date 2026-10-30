@@ -377,11 +377,60 @@ void main() {
         whereArgs: ['cloud-shift'],
       )).single;
       expect(shift['status'], 'CLOSED');
+      // A closed container still has to carry a close time and a figure, or
+      // every drawer report silently drops the session.
+      expect(shift['closed_at'], isNotNull);
+      expect(shift['closing_cash_minor_units'], isNotNull);
       // The till's own drawer is untouched.
       expect(
         (await db.query('shifts', where: 'status = ?', whereArgs: ['OPEN'])),
         hasLength(1),
       );
+    });
+
+    test('a CLOSED shift arriving without a closing count is filled in', () async {
+      // The cloud can send a closed shift with no figure (a till closed while
+      // its outbox row carried none). Reports sum that column, so a null would
+      // remove the whole session from the day's totals.
+      await SyncPullApplier(db)
+          .apply(pageOf('shifts', [cloudShift(id: 'cloud-shift')]));
+
+      final shift = (await db.query(
+        'shifts',
+        where: 'id = ?',
+        whereArgs: ['cloud-shift'],
+      )).single;
+      expect(shift['status'], 'CLOSED');
+      // Falls back to the figure the cloud does have, then to zero.
+      expect(shift['closing_cash_minor_units'], 0);
+      expect(shift['closed_at'], isNotNull);
+    });
+
+    test('closing a drawer elsewhere keeps this till\'s own count', () async {
+      await seedLocalSale(
+        db,
+        saleId: 'local-sale',
+        receipt: 'REC-L',
+        shiftStatus: 'OPEN',
+      );
+      // This register already counted its drawer.
+      await db.update(
+        'shifts',
+        {'closing_cash_minor_units': 12345},
+        where: 'id = ?',
+        whereArgs: ['local-shift'],
+      );
+
+      await SyncPullApplier(db)
+          .apply(pageOf('shifts', [cloudShift(id: 'local-shift')]));
+
+      final shift = (await db.query(
+        'shifts',
+        where: 'id = ?',
+        whereArgs: ['local-shift'],
+      )).single;
+      expect(shift['status'], 'CLOSED');
+      expect(shift['closing_cash_minor_units'], 12345);
     });
 
     test('a void decided on another device reaches this one', () async {

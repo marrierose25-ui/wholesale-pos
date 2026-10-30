@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
@@ -463,6 +464,66 @@ void main() {
         'register',
         'reports',
       ]);
+    },
+  );
+
+  // F-001: restoring a backup must not leave stale unsynced outbox rows,
+  // orphaned proof photos, or stale sync cursors that would cause the next
+  // drain to re-push pre-restore state to the cloud.
+  test(
+    'restore clears the sync outbox, movement photos and sync cursors',
+    () async {
+      // Stale pre-restore state that must not survive the restore.
+      await db.insert('sync_outbox', {
+        'id': 'outbox-1',
+        'entity_type': 'sale',
+        'entity_id': 'sale-1',
+        'operation': 'UPSERT',
+        'payload': '{}',
+        'created_at': DateTime.now().toIso8601String(),
+        'synced_at': null,
+      });
+      await db.insert('shifts', {
+        'id': 'shift-1',
+        'cashier_id': 'owner-1',
+        'opening_cash_minor_units': 0,
+        'status': 'OPEN',
+        'opened_at': DateTime.now().toIso8601String(),
+      });
+      await db.insert('cash_movements', {
+        'id': 'move-1',
+        'shift_id': 'shift-1',
+        'type': 'DEPOSIT',
+        'amount_minor_units': 1000,
+        'reason': 'Float top-up',
+        'created_at': DateTime.now().toIso8601String(),
+      });
+      await db.insert('cash_movement_photos', {
+        'movement_id': 'move-1',
+        'jpeg_bytes': Uint8List.fromList([1, 2, 3]),
+        'created_at': DateTime.now().toIso8601String(),
+      });
+      await db.insert('settings', {
+        'key': 'sync_cursor.sales',
+        'value': '{"received_at":"2026-01-01T00:00:00Z","id":"sale-1"}',
+      });
+
+      final path = await writeBackup(buildBackup(version: 8));
+      await DataImporter.importFromJson(db, path, requestingUserId: 'owner-1');
+
+      expect(await db.query('sync_outbox'), isEmpty);
+      expect(await db.query('cash_movement_photos'), isEmpty);
+      final cursors = await db.query(
+        'settings',
+        where: 'key LIKE ?',
+        whereArgs: ['sync_cursor.%'],
+      );
+      expect(cursors, isEmpty);
+      // Non-secret theme setting survives.
+      expect(
+        (await db.query("settings", where: "key = 'theme_mode'")).isNotEmpty,
+        isTrue,
+      );
     },
   );
 }

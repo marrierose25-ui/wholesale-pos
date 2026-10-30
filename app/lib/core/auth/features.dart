@@ -34,6 +34,7 @@ const List<FeatureDef> kFeatures = [
   FeatureDef('users', 'Users', Icons.people),
   FeatureDef('audit', 'Audit Logs', Icons.security),
   FeatureDef('register_history', 'Register History', Icons.account_tree),
+  FeatureDef('history', 'Sales History', Icons.history),
 ];
 
 /// The features a brand-new staff account receives when the owner adds it
