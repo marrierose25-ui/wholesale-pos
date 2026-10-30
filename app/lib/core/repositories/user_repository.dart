@@ -481,13 +481,102 @@ class SqfliteUserRepository implements UserRepository {
     return phone;
   }
 
-  void _recordFailedAttempt(String guardKey) {
+  /// Settings row holding one account's failed-attempt state.
+  ///
+  /// In memory alone the cooldown was a suggestion: quit the app and the five
+  /// attempts were five more. A cashier guessing a PIN should not get a fresh
+  /// budget from a restart, so the counter and the lockout deadline live in the
+  /// same SQLite file as the accounts.
+  static const String _guardPrefix = 'login_guard:';
+
+  String _guardSettingsKey(String guardKey) => '$_guardPrefix$guardKey';
+
+  /// The live guard for [guardKey], rehydrated from the database the first time
+  /// this process asks about an account.
+  Future<_LoginGuard> _guardFor(String guardKey) async {
+    final memo = _loginGuards[guardKey];
+    if (memo != null) return memo;
+    final guard = await _loadGuard(guardKey) ?? _LoginGuard();
+    _loginGuards[guardKey] = guard;
+    return guard;
+  }
+
+  Future<_LoginGuard?> _loadGuard(String guardKey) async {
+    try {
+      final rows = await _db.query(
+        'settings',
+        columns: ['value'],
+        where: 'key = ?',
+        whereArgs: [_guardSettingsKey(guardKey)],
+        limit: 1,
+      );
+      if (rows.isEmpty) return null;
+      final raw = rows.first['value'];
+      if (raw is! String || raw.isEmpty) return null;
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      final until = map['locked_until'] as String?;
+      return _LoginGuard()
+        ..failures = (map['failures'] as num?)?.toInt() ?? 0
+        ..lockedUntil = until == null ? null : DateTime.tryParse(until);
+    } catch (_) {
+      // A corrupt or unreadable row must never lock a real owner out.
+      return null;
+    }
+  }
+
+  Future<void> _persistGuard(String guardKey, _LoginGuard guard) async {
+    try {
+      final until = guard.lockedUntil;
+      final lockLive = until != null && DateTime.now().isBefore(until);
+      if (guard.failures == 0 && !lockLive) {
+        await _db.delete(
+          'settings',
+          where: 'key = ?',
+          whereArgs: [_guardSettingsKey(guardKey)],
+        );
+        return;
+      }
+      await _db.insert('settings', {
+        'key': _guardSettingsKey(guardKey),
+        'value': jsonEncode({
+          'failures': guard.failures,
+          'locked_until': lockLive ? until.toIso8601String() : null,
+        }),
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    } catch (_) {
+      // Failing to remember an attempt must not fail the attempt itself; the
+      // in-memory guard still holds for this session.
+    }
+  }
+
+  /// A successful sign-in wipes the account's history, in memory and on disk.
+  Future<void> _clearGuard(String guardKey) async {
+    _loginGuards.remove(guardKey);
+    try {
+      await _db.delete(
+        'settings',
+        where: 'key = ?',
+        whereArgs: [_guardSettingsKey(guardKey)],
+      );
+    } catch (_) {
+      // See _persistGuard.
+    }
+  }
+
+  Future<void> _recordFailedAttempt(String guardKey) async {
     final guard = _loginGuards.putIfAbsent(guardKey, () => _LoginGuard());
+    final until = guard.lockedUntil;
+    // A lockout that has already run out is history; start a fresh window
+    // rather than carrying the old deadline into the new count.
+    if (until != null && !DateTime.now().isBefore(until)) {
+      guard.lockedUntil = null;
+    }
     guard.failures += 1;
     if (guard.failures >= UserRepository.maxFailedAttempts) {
       guard.lockedUntil = DateTime.now().add(UserRepository.loginCooldown);
       guard.failures = 0;
     }
+    await _persistGuard(guardKey, guard);
   }
 
   @override
@@ -542,12 +631,13 @@ class SqfliteUserRepository implements UserRepository {
     if (name.isEmpty) return null;
 
     // Cooldown check first: don't even verify while the account is locked.
-    final guard = _loginGuards[guardKey];
+    // The guard is rehydrated from the settings table, so the lockout survives
+    // an app restart instead of resetting on every launch.
+    final guard = await _guardFor(guardKey);
     final now = DateTime.now();
-    if (guard != null &&
-        guard.lockedUntil != null &&
-        now.isBefore(guard.lockedUntil!)) {
-      final secs = guard.lockedUntil!.difference(now).inSeconds + 1;
+    final lockedUntil = guard.lockedUntil;
+    if (lockedUntil != null && now.isBefore(lockedUntil)) {
+      final secs = lockedUntil.difference(now).inSeconds + 1;
       throw Exception(
         'Too many failed attempts. Try again in '
         '$secs second${secs == 1 ? '' : 's'}.',
@@ -563,13 +653,13 @@ class SqfliteUserRepository implements UserRepository {
     );
     if (maps.isEmpty) {
       await _audit(action: 'LOGIN_FAILED', details: 'Unknown username: $name');
-      _recordFailedAttempt(guardKey);
+      await _recordFailedAttempt(guardKey);
       return null;
     }
 
     final user = User.fromMap(maps.first);
     if (await _verifyRowPassword(maps.first, password)) {
-      _loginGuards.remove(guardKey);
+      await _clearGuard(guardKey);
       if (_isLegacyCredential(user.passwordHash)) {
         await _upgradePasswordHash(user, password);
         await _audit(
@@ -590,7 +680,7 @@ class SqfliteUserRepository implements UserRepository {
       action: 'LOGIN_FAILED',
       details: 'Wrong password for username: $name',
     );
-    _recordFailedAttempt(guardKey);
+    await _recordFailedAttempt(guardKey);
     return null;
   }
 

@@ -1185,10 +1185,35 @@ class _ShellDestination {
 /// shop operator cannot open a terminal: the trace is selectable on screen, and
 /// one tap puts the path of the rolling log file (which holds this failure and
 /// everything that led up to it) on the clipboard to send to support.
-class _StartupErrorApp extends StatelessWidget {
+class _StartupErrorApp extends StatefulWidget {
   final Object error;
   final StackTrace stackTrace;
   const _StartupErrorApp(this.error, this.stackTrace);
+
+  @override
+  State<_StartupErrorApp> createState() => _StartupErrorAppState();
+}
+
+class _StartupErrorAppState extends State<_StartupErrorApp> {
+  bool _retrying = false;
+
+  /// Boots the app again in place.
+  ///
+  /// The failure this screen reports is usually transient — a database lock
+  /// still held by the previous process, a licence call that timed out, a file
+  /// the antivirus had open — and asking the operator to find and kill the
+  /// window was the only recovery we offered. [main] rebuilds the whole start-up
+  /// path and calls `runApp` with the real shell on success or with a fresh
+  /// error screen on a second failure, so it replaces this tree either way.
+  Future<void> _retry() async {
+    if (_retrying) return;
+    setState(() => _retrying = true);
+    AppLogger.info('Startup retry requested from the error screen');
+    await AppLogger.flush();
+    await main();
+    // Reached only if main() returned without replacing the root widget.
+    if (mounted) setState(() => _retrying = false);
+  }
 
   Future<void> _copyLogPath(BuildContext context) async {
     final logPath = AppLogger.logFilePath;
@@ -1227,10 +1252,24 @@ class _StartupErrorApp extends StatelessWidget {
                     'the button below copies its location.',
                   ),
                   const SizedBox(height: 16),
-                  SelectableText('$error'),
+                  SelectableText('${widget.error}'),
                   const SizedBox(height: 16),
                   Row(
                     children: [
+                      ElevatedButton.icon(
+                        icon: _retrying
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.refresh, size: 18),
+                        label: Text(_retrying ? 'Retrying…' : 'Retry'),
+                        onPressed: _retrying ? null : _retry,
+                      ),
+                      const SizedBox(width: 12),
                       ElevatedButton.icon(
                         icon: const Icon(Icons.copy, size: 18),
                         label: const Text('Copy log file location'),
@@ -1253,7 +1292,7 @@ class _StartupErrorApp extends StatelessWidget {
                   // part that used to be cut off.
                   Flexible(
                     child: SingleChildScrollView(
-                      child: SelectableText('$stackTrace'),
+                      child: SelectableText('${widget.stackTrace}'),
                     ),
                   ),
                 ],

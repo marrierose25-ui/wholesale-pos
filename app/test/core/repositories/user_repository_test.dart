@@ -1,3 +1,10 @@
+// Every login here derives a 210k-round PBKDF2 key on purpose, and several of
+// these tests derive a dozen of them. Under a full-suite run the default 30s
+// per-test budget is a coin toss, so the whole file gets headroom rather than
+// the few tests that happened to time out first.
+@Timeout(Duration(minutes: 3))
+library;
+
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
@@ -579,4 +586,96 @@ void main() {
       throwsA(predicate((e) => e.toString().contains('active owner'))),
     );
   });
+
+  test('A lockout survives a restart', () async {
+    await repository.createFirstOwner('0911111111', 'long-strong-password');
+    for (var i = 0; i < UserRepository.maxFailedAttempts; i++) {
+      await repository.authenticate('0911111111', 'nope');
+    }
+
+    final guards = await db.query(
+      'settings',
+      where: "key LIKE 'login_guard:%'",
+    );
+    expect(guards, hasLength(1));
+
+    // A second repository on the same file stands in for a relaunch: the
+    // in-memory map is empty, and only the persisted row can hold the lock.
+    final relaunched = UserRepository(db);
+    await expectLater(
+      relaunched.authenticate('0911111111', 'long-strong-password'),
+      throwsA(predicate((e) => e.toString().contains('Too many failed'))),
+    );
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('A successful login deletes the persisted counter', () async {
+    await repository.createFirstOwner('0911111111', 'long-strong-password');
+    await repository.authenticate('0911111111', 'nope');
+    expect(
+      await db.query('settings', where: "key LIKE 'login_guard:%'"),
+      hasLength(1),
+    );
+
+    expect(
+      await repository.authenticate('0911111111', 'long-strong-password'),
+      isNotNull,
+    );
+
+    expect(
+      await db.query('settings', where: "key LIKE 'login_guard:%'"),
+      isEmpty,
+    );
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('Every mutating account method writes an audit row', () async {
+    final owner = await repository.createFirstOwner(
+      '0911111111',
+      'long-strong-password',
+    );
+    await repository.createUser('0933333333', 'password123', 'CASHIER');
+    final cashier = (await repository.authenticate(
+      '0933333333',
+      'password123',
+    ))!;
+
+    await repository.changePassword(
+      userId: cashier.id,
+      currentPassword: 'password123',
+      newPassword: 'password456',
+    );
+    await repository.setUserPhone(
+      userId: cashier.id,
+      phone: '0944444444',
+      actingUserId: owner.id,
+    );
+    await repository.resetPassword(
+      targetUserId: cashier.id,
+      newPassword: 'password789',
+      actingUserId: owner.id,
+    );
+    await repository.setUserActive(
+      targetUserId: cashier.id,
+      active: false,
+      actingUserId: owner.id,
+    );
+    await repository.deleteUser(
+      targetUserId: cashier.id,
+      actingUserId: owner.id,
+    );
+
+    // The Audit Log screen reads this table, so a change that does not land
+    // here never appears on it.
+    final rows = await db.query('audit_logs', columns: ['action']);
+    final actions = rows.map((r) => r['action'] as String).toSet();
+    expect(
+      actions,
+      containsAll(<String>[
+        'PASSWORD_CHANGED',
+        'USER_PHONE_CHANGED',
+        'PASSWORD_RESET',
+        'USER_DEACTIVATED',
+        'USER_DELETED',
+      ]),
+    );
+  }, timeout: const Timeout(Duration(minutes: 3)));
 }

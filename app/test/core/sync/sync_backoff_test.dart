@@ -93,6 +93,28 @@ class _SlowBackend implements SyncBackend {
   }
 }
 
+/// A backend that is unreachable: every `pull` throws the way a dropped
+/// connection or a refused request does.
+class _ThrowingBackend implements SyncBackend {
+  int pulls = 0;
+
+  @override
+  bool get isConfigured => true;
+
+  @override
+  Future<Set<String>> push(List<SyncOutboxEntry> entries) async => const {};
+
+  @override
+  Future<SyncPullResult> pull({
+    Map<String, String>? cursor,
+    int limit = 1000,
+    List<String>? tables,
+  }) async {
+    pulls++;
+    throw Exception('Network is unreachable');
+  }
+}
+
 void main() {
   late Database db;
 
@@ -204,6 +226,32 @@ void main() {
       await service.syncNow();
       await service.syncNow();
       expect(service.nextDelay, const Duration(seconds: 30));
+    });
+
+    test('a throwing backend still climbs the ladder', () async {
+      // The case this file was missing: a real exception on the wire, not an
+      // empty page. `CloudSyncPuller` reports a failed pull in its result rather
+      // than rethrowing, so the cycle completes having moved nothing — which is
+      // exactly why the cadence must read a failed cycle as idle. Otherwise an
+      // offline till retries every three seconds all night.
+      final backend = _ThrowingBackend();
+      final service = SyncService(
+        SyncOutboxRepository(db),
+        backend,
+        puller: CloudSyncPuller(backend: backend, db: db),
+      );
+
+      expect(service.nextDelay, SyncIntervals.cycle);
+
+      await service.syncNow();
+      expect(backend.pulls, greaterThan(0));
+      expect(service.nextDelay, const Duration(seconds: 10));
+
+      await service.syncNow();
+      expect(service.nextDelay, const Duration(seconds: 30));
+
+      await service.syncNow();
+      expect(service.nextDelay, SyncIntervals.max);
     });
 
     test(
