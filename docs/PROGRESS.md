@@ -518,6 +518,75 @@ what it had actually taken.
   `pos-api` and the RPCs. Those are live: the SQL is applied, and `pos-api` is
   redeployed as part of shipping this phase.
 
+### Production hardening: backoff, backups and a log file (Phase 32)
+
+The audit that followed Phase 31 listed the things that would hurt a real shop in
+week one rather than at scale. Four of them were client-side and all four are now
+closed. None of it changes what a cashier sees on a busy day.
+
+- **The 3-second poll is now a ladder.** A flat cycle pulled nine cloud tables
+every three seconds — 28,800 pulls a day per till, and on three registers plus a
+phone that is ~90k requests a day to move nothing overnight. It is the battery
+drain that makes a cashier turn sync off. `SyncIntervals` now owns the cadence
+(3s floor, 10/30/60s rungs) and `main.dart`'s loop re-schedules a one-shot timer
+from `SyncService.nextDelay` — a `Timer.periodic` is pinned to the interval it
+was created with and cannot back off. A cycle that pushes or applies a row, or a
+local write via `notifyLocalActivity()`, drops to the floor and holds it for 30
+seconds so the shop stays instant, then the ladder resumes. A failed cycle
+counts as idle on purpose: a dead network does not improve because we asked
+every three seconds, and the outbox still holds every row, so the first success
+snaps back to the floor and drains the backlog at full speed. The single-flight
+guard is unchanged — a second `syncNow` while one is running still returns idle.
+- **A sale no longer waits for the timer.** The loop subscribes to the engine's
+`onWake` hook, and `onSaleCompleted` / `onShiftUpdated` call `notifyLocalActivity()`
+first. A ring now leaves the till in ~250ms instead of up to a minute, which is
+what makes backing off at all acceptable. The 250ms settle also lets one sale's
+row, its line items and its cash movement travel in a single request.
+- **The database is copied aside before every migration.**
+`LocalDatabase._backupBeforeSchemaChange` runs in `onConfigure`, which sqflite
+calls *before* it reads `user_version` and writes the new one — the only point
+where the true on-disk version is still known. If the file is neither fresh
+(`version 0`) nor already current, it is copied to `till.db.bak` byte for byte.
+A transaction rollback is not enough here: the historical failure mode is a
+migration that *completes* and is wrong, and only a copy of the pre-change file
+recovers from that. An already-current file is skipped so a bad migration cannot
+clobber last week's good backup, and a *newer* file is backed up too, because
+sqflite with `onDowngrade == null` silently stamps `user_version` down without
+running any migration. A failed backup fails open with a warning: a till must
+still trade.
+- **`print()` is gone; there is a file to send us.** `AppLogger` writes
+`logs/app.log` under the support directory, rotating at 5 MB into `app.log.1`.
+It never throws (a locked log file must not fail a sale), never blocks the
+caller (one serialised write chain), and buffers before the sink is installed
+so start-up lines survive. All ten `print()` calls in `main.dart`, `LocalDatabase`,
+the sync backend and the web shell go through it. The sink lives in
+`app_logger_io.dart` and the facade in `app_logger.dart` because `app_shell.dart`
+is in the dart2js graph — importing `dart:io` there would break the PWA build.
+The start-up error screen now says how to find the log and copies its path to
+the clipboard.
+- **CI is a gate, not a coverage report.** `.github/workflows/ci.yml` runs
+`flutter analyze --fatal-infos`, the suite, and `flutter build web -t
+lib/main_web.dart` on every push and PR. `build.yml` only ran the tests for
+SonarQube, so a lint regression or a web graph that stopped linking reached
+`main` unverified. The web build is the one that proves the PWA entry point
+still compiles in release mode.
+- **17 new tests**: the ladder climbing 3s → 10 → 30 → 60 and staying there, a
+cycle that lands a row dropping to the floor, the 30-second window expiring,
+`notifyLocalActivity()` waking the loop, a failed cycle backing off, single
+flight under a blocked pull, the log line format, lines buffered before install
+flushing in order, a throwing sink never reaching the caller, 5 MB rotation into
+`app.log.1` with the older copy dropped, `tryCreate` returning null on an
+unusable directory, and a pre-migration `.bak` that is byte-identical to the
+file as it stood (plus no `.bak` on a fresh install and an existing `.bak` left
+alone on an ordinary restart).
+- `flutter analyze --fatal-infos` clean, `flutter build web` succeeded, **385
+tests passing** (+17). L3 deep review: 0 findings.
+- **Artifacts**: `app-release.apk` rebuilt on this code (59.6 MB) and verified
+*from inside the APK* — `lib/arm64-v8a/libapp.so` carries the migration-backup,
+`app.log`, sync-recovery and copy-log-path strings, so the shipped binary is the
+one described above and not a stale build. The Windows zip was deliberately left
+alone: this phase ships Android and Web only.
+
 ## Next Up
 
 - Stock/inventory movements and low-stock alerts.
