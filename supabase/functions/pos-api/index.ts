@@ -683,7 +683,7 @@ async function searchSales(db: any, ctx: Ctx, body: any): Promise<Response> {
   // The demo login practises on this tenant's own products and people, so its
   // receipts would otherwise be listed beside the shop's real ones. Mirrors the
   // native getSales filter.
-  q = await excludeDemoRows(q, db, ctx, 'cashier_id');
+  q = excludeDemoRows(q, await demoUserIds(db, ctx), 'cashier_id');
   const limit = pageLimit(body);
   q = q.limit(limit);
   const { data, error } = await q;
@@ -745,7 +745,7 @@ async function listVoidRequests(db: any, ctx: Ctx, body: any): Promise<Response>
     .order('created_at', { ascending: false });
   // A practice sale the owner cannot see in Sales History must not turn up in
   // their approval queue either. Mirrors the native getPendingVoidRequests.
-  q = await excludeDemoRows(q, db, ctx, 'requested_by');
+  q = excludeDemoRows(q, await demoUserIds(db, ctx), 'requested_by');
   const { data, error } = await q.limit(limit);
   if (error) throw new Error(error.message);
   const reqs = strip(data);
@@ -839,7 +839,7 @@ async function shiftHistory(db: any, ctx: Ctx, body: any): Promise<Response> {
   if (body.status) q = q.eq('status', body.status);
   if (body.period_start) q = q.gte('opened_at', body.period_start);
   if (body.period_end) q = q.lt('opened_at', body.period_end);
-  q = await excludeDemoRows(q, db, ctx, 'cashier_id');
+  q = excludeDemoRows(q, await demoUserIds(db, ctx), 'cashier_id');
   const limit = pageLimit(body);
   const { data, error } = await q.limit(limit);
   if (error) throw new Error(error.message);
@@ -951,7 +951,7 @@ async function listCashMovements(db: any, ctx: Ctx, body: any): Promise<Response
   if (body.shift_id != null && String(body.shift_id) !== '') {
     q = q.eq('shift_id', String(body.shift_id));
   }
-  q = await excludeDemoRows(q, db, ctx, 'user_id');
+  q = excludeDemoRows(q, await demoUserIds(db, ctx), 'user_id');
   const limit = pageLimit(body);
   const { data, error } = await q.order('created_at', { ascending: false }).limit(limit);
   if (error) throw new Error(error.message);
@@ -1714,13 +1714,21 @@ async function usernamesById(db: any, ctx: Ctx, ids: (string | null)[]): Promise
 // demo ids are resolved first — one row per tenant, so the inline list stays
 // short, and a tenant without a demo account is returned untouched. The report
 // aggregates do the same exclusion inside their SQL RPCs.
-async function excludeDemoRows(
-  q: any, db: any, ctx: Ctx, column: string,
-): Promise<any> {
+//
+// The id lookup and the filter application are deliberately split. `excludeDemoRows`
+// returns a PostgREST builder, which is a *thenable*; if it were `async`, callers
+// writing `q = await excludeDemoRows(q, …)` would adopt that thenable and execute
+// the query early, leaving `q` as a `{data, error}` result with no `.limit()`. So
+// the async half (`demoUserIds`) returns a plain id array and the sync half just
+// chains `.not()` onto the still-live builder.
+async function demoUserIds(db: any, ctx: Ctx): Promise<string[]> {
   const { data, error } = await db.from('pos_users').select('id')
     .eq('customer_id', ctx.customerId).eq('is_demo', true);
   if (error) throw new Error(error.message);
-  const ids = strip(data).map((r: any) => r.id) as string[];
+  return strip(data).map((r: any) => r.id) as string[];
+}
+
+function excludeDemoRows(q: any, ids: string[], column: string): any {
   if (!ids.length) return q;
   return q.not(column, 'in', `(${ids.map((id) => `"${id}"`).join(',')})`);
 }
