@@ -434,6 +434,90 @@ the code does, so both halves of the failure had to be fixed separately.
   re-pinned at `web-xi-seven-15.vercel.app`, byte-verified (3,157,883 bytes
   served = the fresh bundle).
 
+### Training-account money stays on its own till (Phase 31)
+
+The demo login exists so a new cashier can practise on the shop's real products
+and people. Nothing anywhere stopped its rows from being queued, so every
+practice sale was pushed like real money: measured live, **1,702 of 2,152 cloud
+sales belonged to training accounts** (4,252 line items, 80 shifts, 76 cash
+movements, 4 void requests), and one shop's dashboard reported roughly four times
+what it had actually taken.
+
+- **Three doors, not one.** The client's outbox is the obvious place, but it only
+  covers tills that update. `pos_sync_apply` is the door that works against old
+  builds too. The one nobody expected was `pos_create_sale`: the PWA has no local
+  store, so a browser session logged in as the demo account wrote straight into
+  `sales`. Three more practice receipts (`REC-20261030-0001..0003`, the largest
+  10,224,070.00 Br) arrived through that door *after* the gateway guard went in —
+  that is how the hole was found rather than assumed.
+- **Client (`SyncOutbox`).** A `_ledgerOwners` map names the table and actor
+  column per entity, and `upsert`/`delete` return before queueing when the row's
+  operator has `is_demo = 1`. Central, so a future writer cannot forget it. It
+  answers false when the row or the operator is unknown — a sale whose cashier
+  has no account row is real money and must still sync. Master data is
+  deliberately unguarded: the demo's own `user` row is how its login reaches
+  every device, and products and people are shared on purpose.
+- **A collection is two rows.** The deposit that pays it is written by whoever
+  completed the entry, so a finance entry is judged on `created_by` **or**
+  `completed_by` in both the client and the gateway. Judging only `created_by`
+  would let a demo completion push the entry and hold its money — reopening the
+  "completed collection with no deposit" hole Phase 30 closed.
+- **The shared drawer is the reason reports had to change too.** One till keeps
+  exactly one `OPEN` shift (`ensureActiveShift` plus the
+  `prevent_second_open_shift_insert` trigger) and every login books onto it, so
+  practice money lands in the real cashier's session. `getShiftSummary`,
+  `getRegisterSnapshot` and the cash-refund sum exclude it alongside the five
+  named reports, and the cloud equivalents do the same
+  (`pos_shift_counters`, `pos_shift_summary`, `pos_close_shift`,
+  `pos_expected_cash`) — otherwise the dashboard's revenue and its expected cash
+  would disagree with each other.
+- **One definition per side**: `notDemoOperator()` (`core/utils/report_filters.dart`)
+  for SQLite, `pos_is_demo(uuid, text)` (`STABLE SECURITY DEFINER`, empty
+  `search_path`, service_role only) for the eight report and drawer RPCs, and
+  `excludeDemoRows()` in `pos-api` for the four hand-built lists, because
+  PostgREST cannot express `NOT IN (SELECT …)`. The aggregates needed no
+  TypeScript — `dashboard_summary`, `revenue_trend` and `report_summary` already
+  call the SQL.
+- **`docs/verify_demo_isolation.sql`** proves the live behaviour instead of
+  asserting it: it stages a 100 Br demo sale and a demo-completed collection,
+  runs the gateway, and checks nothing landed and both mirror rows were filed
+  `APPLIED` with the reason (a till whose queue holds a refused entry must be
+  able to drain it). Then it posts at `pos_create_sale` twice, because a refusal
+  only means something next to a control: as the demo it is refused, as the owner
+  it fails later on `Sale requires an open shift.` Live: `deferred: 2`, every
+  `*_landed=false`, `revenue_match=true` at 46,273.10 Br, `demo_sale=refused`,
+  `owner_sale=passed the flag`.
+- **The cloud rows** (`docs/supabase_demo_data_cleanup.sql`) are gone: 1,703
+  sales, 4,253 line items, 78 cash movements, 80 shifts, 4 void requests across
+  three tenants, `kept_demo_movements: 0` — no demo deposit paid a real person's
+  collection, so no completed collection lost its money (`entries_without_deposit`
+  unchanged at 1, the pre-existing orphan from Phase 30). Real rows are
+  untouched: 450 sales left, and the purge totals match the dry report exactly.
+- **And the honest part: that purge deleted without its archive.** The rewrite
+  that copies every row into `demo_purge_rows` as jsonb before deleting was
+  written into the file, but the copy *installed in the database* was the earlier
+  draft, because the file had not been re-applied since. The user approved "run
+  it now, archive kept" and got a plain delete. The script now leads with that
+  rule — a one-time SQL file IS the function, and an edit to it does nothing
+  until it is applied again — with the query that shows which version is live.
+  The rows themselves came from the tills that pushed them and those tills still
+  hold their own SQLite copies; the three receipts that were browser-only had no
+  second copy. Re-running the purge now is a no-op, and the archive table stays
+  in place for anything else that needs it.
+- **A training session in the browser now gets told**, rather than silently
+  polluting: the five ledger RPCs raise
+  `Training-account data stays on the till that made it.`
+- `flutter analyze` clean, `dart format --set-exit-if-changed` clean, **368
+  tests passing** (+16: nothing queued for a demo sale, void request, movement,
+  shift or collection; a real one on the same shift still queues; the master-data
+  and positive-control cases; and every report and drawer sum showing the shop's
+  money only).
+- **Artifacts**: `app-release.apk` rebuilt on this code (59.5 MB). The web bundle
+  came out byte-identical (3,157,883 bytes) because the SQLite repositories are
+  not reachable from `main_web.dart` — the PWA's exclusion is server-side, in
+  `pos-api` and the RPCs. Those are live: the SQL is applied, and `pos-api` is
+  redeployed as part of shipping this phase.
+
 ## Next Up
 
 - Stock/inventory movements and low-stock alerts.
