@@ -86,9 +86,13 @@ class RegisterHistoryScreenState extends State<RegisterHistoryScreen> {
         userId: widget.currentUser.id,
       );
       _all = movements;
-      // Completed cash sales feed each day's net drawer change (money that
-      // physically entered the drawer), so the card number matches the day
-      // detail's "Net drawer change" rather than only the movement totals.
+
+      // Fetch shifts so we can show days that had a register opened/closed
+      // even if there were zero cash movements.
+      final shifts = await widget.shiftRepository.getShiftHistory(
+        userId: widget.currentUser.id,
+      );
+
       final sales = await widget.saleRepository.getSales(
         userId: widget.currentUser.id,
         status: 'COMPLETED',
@@ -100,8 +104,10 @@ class RegisterHistoryScreenState extends State<RegisterHistoryScreen> {
         final key = DateTime(t.year, t.month, t.day);
         cashByDay[key] = (cashByDay[key] ?? 0) + s.totalMinorUnits;
       }
+
       final text = _searchController.text.trim().toLowerCase();
       final window = _activeWindow;
+
       final visible = movements.where((m) {
         if (window != null && !window.contains(m.createdAt)) {
           return false;
@@ -116,17 +122,33 @@ class RegisterHistoryScreenState extends State<RegisterHistoryScreen> {
         }
         return true;
       }).toList();
+
       final buckets = <DateTime, List<CashMovement>>{};
+      final allDays = <DateTime>{};
+
+      // 1. Add days from cash movements
       for (final m in visible) {
         final t = m.createdAt;
-        (buckets[DateTime(t.year, t.month, t.day)] ??= []).add(m);
+        final key = DateTime(t.year, t.month, t.day);
+        (buckets[key] ??= []).add(m);
+        allDays.add(key);
       }
-      final keys = buckets.keys.toList()..sort((a, b) => b.compareTo(a));
+
+      // 2. Add days from shifts (even if they have 0 movements)
+      for (final shift in shifts) {
+        if (window != null && !window.contains(shift.openedAt)) continue;
+        if (text.isNotEmpty) continue;
+        final t = shift.openedAt;
+        allDays.add(DateTime(t.year, t.month, t.day));
+      }
+
+      final keys = allDays.toList()..sort((a, b) => b.compareTo(a));
+
       if (!mounted) return;
       setState(() {
         _days = [
           for (final k in keys)
-            _MovementDayGroup(k, buckets[k]!, cashByDay[k] ?? 0),
+            _MovementDayGroup(k, buckets[k] ?? [], cashByDay[k] ?? 0),
         ];
         _isLoading = false;
       });
@@ -249,7 +271,7 @@ class RegisterHistoryScreenState extends State<RegisterHistoryScreen> {
           child: Text(
             _hasActiveFilters
                 ? 'No movements match these filters.'
-                : 'No cash movements recorded yet.',
+                : 'No register history recorded yet.',
             textAlign: TextAlign.center,
             style: TextStyle(color: AppDesign.textLo),
           ),
