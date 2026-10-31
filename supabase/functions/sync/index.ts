@@ -47,11 +47,22 @@
 import { ed25519 } from 'https://esm.sh/@noble/curves@1.4.0/ed25519';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 
-const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
-const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+// A missing secret used to surface as a key of "undefined": a license signed
+// over a known string would then verify. Fail at start-up instead of quietly
+// serving an insecure function.
+function requireEnv(name: string, minLength = 16): string {
+  const v = Deno.env.get(name);
+  if (!v || v.length < minLength) {
+    throw new Error(`Env var ${name} missing or too short (min ${minLength}).`);
+  }
+  return v;
+}
+
+const SUPABASE_URL = requireEnv('SUPABASE_URL');
+const SERVICE_KEY = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
 // Hex, exactly as tools/print_public_key.dart prints it and as the Dart app
 // bakes into WHOLESALE_POS_LICENSE_PUBLIC_KEY.
-const PUBLIC_KEY_HEX = Deno.env.get('SYNC_LICENSE_PUBLIC_KEY')!;
+const PUBLIC_KEY_HEX = requireEnv('SYNC_LICENSE_PUBLIC_KEY', 64);
 
 // Operational tables a pull may read, keyed by the name the client uses. A
 // push cannot touch them: it only appends to `sync_mirror` and lets

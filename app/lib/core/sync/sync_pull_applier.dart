@@ -499,7 +499,7 @@ class SyncPullApplier {
       }
       final values = <String, Object?>{
         'id': id,
-        'cashier_id': _str(row['cashier_id']) ?? '',
+        'cashier_id': await _ensureUser(txn, row['cashier_id']),
         'opening_cash_minor_units': _int(row['opening_cash_minor_units']),
         'closing_cash_minor_units': _nullableInt(
           row['closing_cash_minor_units'],

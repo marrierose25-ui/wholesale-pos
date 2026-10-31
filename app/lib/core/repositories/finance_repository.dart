@@ -122,7 +122,7 @@ class SqfliteFinanceRepository implements FinanceRepository {
     final rows = await executor.query(
       'users',
       columns: ['role', 'is_active', 'permissions'],
-      where: 'id = ?',
+      where: 'id = ? AND deleted_at IS NULL',
       whereArgs: [userId],
       limit: 1,
     );
@@ -672,7 +672,10 @@ class SqfliteFinanceRepository implements FinanceRepository {
       await _enqueueEntry(txn, entryId);
       // A cash collection physically puts money into the drawer, so deposit it
       // onto the open (perpetual) shift. Bank/non-cash collections never touch
-      // the register. If no shift is open we create one so the deposit lands.
+      // the register. With no drawer open there is nowhere for the money to
+      // land: minting a shift here would leave the shop with a register the
+      // owner never opened and a day no one can count, so the collection is
+      // refused until the drawer is opened.
       if (entry.paymentMethod == 'CASH') {
         final shiftRows = await txn.query(
           'shifts',
@@ -680,33 +683,12 @@ class SqfliteFinanceRepository implements FinanceRepository {
           where: "status = 'OPEN'",
           limit: 1,
         );
-        String shiftId;
         if (shiftRows.isEmpty) {
-          shiftId = const Uuid().v4();
-          await txn.insert('shifts', {
-            'id': shiftId,
-            'cashier_id': ownerId,
-            'opening_cash_minor_units': 0,
-            'status': 'OPEN',
-            'opened_at': now.toIso8601String(),
-          });
-          await SyncOutbox.upsert(
-            txn,
-            entityType: SyncEntities.shift,
-            entityId: shiftId,
-            payload: {
-              'shift': {
-                'id': shiftId,
-                'cashier_id': ownerId,
-                'opening_cash_minor_units': 0,
-                'status': 'OPEN',
-                'opened_at': now.toIso8601String(),
-              },
-            },
+          throw Exception(
+            'Open the register before completing a cash collection.',
           );
-        } else {
-          shiftId = shiftRows.first['id'] as String;
         }
+        final shiftId = shiftRows.first['id'] as String;
         final movementId = const Uuid().v4();
         final movement = {
           'id': movementId,

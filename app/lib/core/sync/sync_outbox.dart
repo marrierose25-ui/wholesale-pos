@@ -68,7 +68,26 @@ class SyncOutbox {
       ''',
       [entityId],
     );
-    return rows.isNotEmpty;
+    if (rows.isNotEmpty) return true;
+    // A deposit is the second half of a collection: it names the operator who
+    // carried the cash, but it was the finance entry's hands that made the
+    // money a training exercise. Looking only at the movement's own user_id
+    // let a demo collection leave the till through a deposit written by a real
+    // account.
+    if (entityType == SyncEntities.cashMovement) {
+      final entryCheck = await txn.rawQuery(
+        '''
+        SELECT 1 FROM cash_movements cm
+        JOIN finance_entries fe ON fe.id = cm.source_finance_entry_id
+        JOIN users u ON u.id IN (fe.created_by, fe.completed_by)
+        WHERE cm.id = ? AND u.is_demo = 1
+        LIMIT 1
+        ''',
+        [entityId],
+      );
+      return entryCheck.isNotEmpty;
+    }
+    return false;
   }
 
   /// Queues a whole row, filed under the key its entity type uses.

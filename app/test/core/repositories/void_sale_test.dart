@@ -131,6 +131,30 @@ void main() {
     expect(sales.first.status, 'COMPLETED');
   });
 
+  test('A direct owner void queues the request it settles', () async {
+    await seedSale('sale-with-request');
+    await db.insert('void_requests', {
+      'id': 'request-1',
+      'sale_id': 'sale-with-request',
+      'requested_by': 'cashier-1',
+      'reason': 'wrong item scanned',
+      'status': 'PENDING',
+      'created_at': DateTime.now().toIso8601String(),
+    });
+
+    await repository.voidSale('sale-with-request', 'owner-1', 'mistake');
+
+    // Settling the request locally is only half of it: without a queue entry
+    // the cloud keeps it PENDING forever and the owner's web queue shows a
+    // request against a sale that is already voided.
+    final outbox = await db.query(
+      'sync_outbox',
+      where: "entity_type = 'void_request'",
+    );
+    expect(outbox.length, 1);
+    expect(outbox.first['entity_id'], equals('request-1'));
+  });
+
   test('A void reason is required', () async {
     await seedSale('sale-noreason');
 

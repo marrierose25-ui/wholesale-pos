@@ -51,9 +51,7 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
     // and queries are untouched).
     final buckets = <DateTime, List<Map<String, dynamic>>>{};
     for (final log in logs) {
-      final t = toAddisAbabaTime(
-        DateTime.parse(log['created_at'] as String),
-      );
+      final t = toAddisAbabaTime(DateTime.parse(log['created_at'] as String));
       (buckets[DateTime(t.year, t.month, t.day)] ??= []).add(log);
     }
     final keys = buckets.keys.toList()..sort((a, b) => b.compareTo(a));
@@ -163,11 +161,7 @@ class AuditDayScreen extends StatelessWidget {
   final DateTime day;
   final List<Map<String, dynamic>> logs;
 
-  const AuditDayScreen({
-    super.key,
-    required this.day,
-    required this.logs,
-  });
+  const AuditDayScreen({super.key, required this.day, required this.logs});
 
   @override
   Widget build(BuildContext context) {

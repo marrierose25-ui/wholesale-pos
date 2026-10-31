@@ -30,9 +30,20 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 
-const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
-const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-const JWT_SECRET = Deno.env.get('POS_API_JWT_SECRET')!;
+// A missing secret used to surface as a key of "undefined": every session JWT
+// was then forgeable with a known string. Fail at start-up instead of quietly
+// serving an insecure function.
+function requireEnv(name: string, minLength = 16): string {
+  const v = Deno.env.get(name);
+  if (!v || v.length < minLength) {
+    throw new Error(`Env var ${name} missing or too short (min ${minLength}).`);
+  }
+  return v;
+}
+
+const SUPABASE_URL = requireEnv('SUPABASE_URL');
+const SERVICE_KEY = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
+const JWT_SECRET = requireEnv('POS_API_JWT_SECRET', 32);
 
 const PBKDF2_ITERATIONS = 210000;
 // Persistent sign-in: the JWT is the browser's sole credential, so its
@@ -547,7 +558,7 @@ async function duplicateName(db: any, ctx: Ctx, name: string, excludeId: string 
   // `.filter('lower(name)')` expression form PostgREST cannot parse — which
   // previously errored and was silently read back as "no duplicate" (audit #10).
   let q = db.from('pos_products').select('id')
-    .eq('customer_id', ctx.customerId).ilike('name', trimmed);
+    .eq('customer_id', ctx.customerId).eq('is_active', 1).ilike('name', trimmed);
   if (excludeId) q = q.neq('id', excludeId);
   const { data, error } = await q.maybeSingle();
   if (error) throw new Error(`duplicate name check: ${error.message}`);
@@ -648,6 +659,9 @@ async function searchSales(db: any, ctx: Ctx, body: any): Promise<Response> {
   if (body.period_start) q = q.gte('created_at', body.period_start);
   if (body.period_end) q = q.lt('created_at', body.period_end);
   const query = str(body.search_query);
+  // Set when an intermediate lookup filled its page: the sale-id list is then
+  // incomplete, so the caller is told the result may be partial.
+  let matchedIdsHitCap = false;
   if (query) {
     // Mirror the native getSales search: match customer name and void reason on
     // the sale, cashier username on pos_users, and product / quantity / notes on
@@ -659,10 +673,12 @@ async function searchSales(db: any, ctx: Ctx, body: any): Promise<Response> {
     // search quietly returned fewer sales than matched (audit 2 #18).
     const { data: itemRows, error: itemErr } = await db.from('sale_items').select('sale_id')
       .eq('customer_id', ctx.customerId)
-      .or(`product_name_snapshot.ilike.%${esc}%,quantity_text.ilike.%${esc}%,notes.ilike.%${esc}%`);
+      .or(`product_name_snapshot.ilike.%${esc}%,quantity_text.ilike.%${esc}%,notes.ilike.%${esc}%`)
+      .limit(1000);
     if (itemErr) throw new Error(itemErr.message);
     const { data: userRows, error: userErr } = await db.from('pos_users').select('id')
-      .eq('customer_id', ctx.customerId).ilike('username', `%${esc}%`);
+      .eq('customer_id', ctx.customerId).ilike('username', `%${esc}%`)
+      .limit(1000);
     if (userErr) throw new Error(userErr.message);
     const userIds = strip(userRows).map((r: any) => r.id);
     let cashierSaleIds: string[] = [];
@@ -677,8 +693,16 @@ async function searchSales(db: any, ctx: Ctx, body: any): Promise<Response> {
       ...cashierSaleIds,
     ]));
     const orParts = [`customer_name.ilike.%${esc}%`, `void_reason.ilike.%${esc}%`];
-    if (matchedIds.length) orParts.push(`id.in.(${matchedIds.map((id) => `"${id}"`).join(',')})`);
+    if (matchedIds.length) {
+      // A common term can match thousands of lines, and 1000 ids is a 40KB URL
+      // fragment that exceeds the 8KB request limit and 414s the whole search.
+      const CAPPED = matchedIds.slice(0, 200);
+      orParts.push(`id.in.(${CAPPED.map((id) => `"${id}"`).join(',')})`);
+    }
     q = q.or(orParts.join(','));
+    // PostgREST cannot OR an id list with the sale's own columns without the
+    // cap above, so a search that filled any intermediate page may be partial.
+    matchedIdsHitCap = (itemRows?.length ?? 0) >= 1000 || (userRows?.length ?? 0) >= 1000;
   }
   // The demo login practises on this tenant's own products and people, so its
   // receipts would otherwise be listed beside the shop's real ones. Mirrors the
@@ -698,7 +722,11 @@ async function searchSales(db: any, ctx: Ctx, body: any): Promise<Response> {
     s.cashier_name = names[s.cashier_id] ?? null;
     s.has_pending_void_request = pending.has(s.id);
   }
-  return json({ ok: true, sales, truncated: sales.length >= limit });
+  return json({
+    ok: true,
+    sales,
+    truncated: sales.length >= limit || matchedIdsHitCap,
+  });
 }
 
 async function voidSale(db: any, ctx: Ctx, body: any): Promise<Response> {
@@ -1015,7 +1043,7 @@ async function createUser(db: any, ctx: Ctx, body: any): Promise<Response> {
   // Owners bypass the tick list (store []); a staff account keeps only the
   // validated feature keys it was given, de-duplicated, in registry order.
   const rawPerms = Array.isArray(body.permissions) ? body.permissions.map(String) : [];
-  const perms = role === OWNER ? [] : Array.from(new Set(rawPerms.filter((k) => FEATURE_KEYS.has(k))));
+  const perms = role === OWNER ? [] : Array.from(new Set(rawPerms.filter((k: string) => FEATURE_KEYS.has(k))));
   const { data: dup, error: dupErr } = await db.from('pos_users').select('id, deleted_at')
     .eq('customer_id', ctx.customerId).ilike('username', username.toLowerCase().replace(/[%_]/g, '')).maybeSingle();
   if (dupErr) throw new Error(`duplicate username check: ${dupErr.message}`);
@@ -1139,7 +1167,7 @@ async function ensureDemoUser(db: any, customerId: string, ownerSession: boolean
 async function setUserPermissions(db: any, ctx: Ctx, body: any): Promise<Response> {
   const target = String(body.target_user_id ?? '');
   const rawPerms = Array.isArray(body.permissions) ? body.permissions.map(String) : [];
-  const perms = Array.from(new Set(rawPerms.filter((k) => FEATURE_KEYS.has(k))));
+  const perms = Array.from(new Set(rawPerms.filter((k: string) => FEATURE_KEYS.has(k))));
   const { data: t } = await db.from('pos_users').select('role, username')
     .eq('customer_id', ctx.customerId).eq('id', target).is('deleted_at', null).maybeSingle();
   if (!t) return json({ ok: false, error: 'User not found.' }, 404);
@@ -1402,8 +1430,22 @@ async function financeAddEntry(db: any, ctx: Ctx, body: any): Promise<Response> 
   const now = new Date().toISOString();
   const description = body.description == null ? null : str(body.description) || null;
   const paymentMethod = body.payment_method == null ? null : str(body.payment_method).toUpperCase() || null;
+  // A category is a person (supplier/customer) the money belongs to. An unknown
+  // or other-tenant id used to be written straight into the row, leaving an
+  // entry nothing could attribute.
+  const categoryId = String(body.category_id ?? '');
+  if (!categoryId) {
+    return json({ ok: false, error: 'Category is required.' }, 400);
+  }
+  const { data: cat, error: catErr } = await db.from('pos_finance_categories')
+    .select('id').eq('customer_id', ctx.customerId).eq('id', categoryId)
+    .is('deleted_at', null).maybeSingle();
+  if (catErr) throw new Error(catErr.message);
+  if (!cat) {
+    return json({ ok: false, error: 'Person not found.' }, 404);
+  }
   const { data, error } = await db.from('pos_finance_entries').insert({
-    id, customer_id: ctx.customerId, category_id: body.category_id, source: str(body.source),
+    id, customer_id: ctx.customerId, category_id: categoryId, source: str(body.source),
     amount_minor_units: amount, description, status: 'PENDING', payment_method: paymentMethod,
     entry_date: body.entry_date ?? now, created_at: now, created_by: ctx.userId, updated_at: now,
   }).select().single();
@@ -1690,10 +1732,18 @@ function tenantRow(ctx: Ctx, src: any, defaults: Record<string, unknown>): any {
 async function hydrateItems(db: any, ctx: Ctx, sales: any[]) {
   if (!sales.length) return;
   const ids = sales.map((s) => s.id);
-  const { data: items } = await db.from('sale_items').select('*')
-    .eq('customer_id', ctx.customerId).in('sale_id', ids);
   const bySale: Record<string, any[]> = {};
-  for (const it of strip(items)) (bySale[it.sale_id] ??= []).push(it);
+  // PostgREST caps a response at 1000 rows. One page of 120 sales with nine
+  // lines each is past that, and the tail sales lost their items silently, so
+  // the lines are fetched in chunks the cap cannot reach.
+  const CHUNK = 500;
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const chunk = ids.slice(i, i + CHUNK);
+    const { data: items, error } = await db.from('sale_items').select('*')
+      .eq('customer_id', ctx.customerId).in('sale_id', chunk);
+    if (error) throw new Error(`hydrateItems: ${error.message}`);
+    for (const it of strip(items)) (bySale[it.sale_id] ??= []).push(it);
+  }
   for (const s of sales) s.items = bySale[s.id] ?? [];
 }
 
@@ -1752,7 +1802,7 @@ async function audit(db: any, customerId: string, userId: string | null, action:
       id: crypto.randomUUID(), customer_id: customerId, user_id: userId,
       action, details, created_at: new Date().toISOString(),
     });
-    if (error) console.error('audit insert failed:', action, error.message);
+    if (error) console.error('AUXILIARY audit insert failed:', action, error.message);
   } catch (err) {
     console.error('audit insert threw:', action, err);
   }

@@ -1,4 +1,8 @@
-﻿# Database Schema (SQLite, schema version 9)
+﻿> ⚠️ This document is stale. The system has 3 Edge Functions, 16+ SQL
+> migrations, and active cloud sync. Verify claims against code before
+> trusting them. Last full audit: 2026-10-31.
+
+# Database Schema (SQLite, schema version 9)
 
 This document describes the local SQLite database used by the desktop app. There is no backend in this repository.
 

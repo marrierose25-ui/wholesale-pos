@@ -48,3 +48,10 @@ walkthrough_shots/
 
 # IDE agent workspace state (its own screenshots, caches).
 .qoder/
+
+_audit/
+audit.sh
+batch_*.txt
+WholesalePOS_Windows_Release.zip
+app/.dart_tool/
+.dart_tool/

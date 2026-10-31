@@ -516,6 +516,25 @@ void main() {
       expect(drawer['status'], 'CLOSED');
     });
 
+    test('a pulled drawer names its cashier even when the account is new', () async {
+      // The drawer's cashier used to be copied verbatim (or written as an empty
+      // string), so a shift whose operator this device had never seen left the
+      // audit trail blank. The placeholder resolves the key and stays inert.
+      final report = await SyncPullApplier(db)
+          .apply(pageOf('shifts', [cloudShift(cashierId: 'till-only-user')]));
+      expect(report.shifts, 1);
+
+      final shift = (await db.query('shifts')).single;
+      expect(shift['cashier_id'], 'till-only-user');
+      final cashier = (await db.query(
+        'users',
+        where: 'id = ?',
+        whereArgs: ['till-only-user'],
+      )).single;
+      expect(cashier['is_active'], 0);
+      expect(cashier['deleted_at'], isNotNull);
+    });
+
     test('a drawer closed in the cloud closes this one too', () async {
       await seedLocalSale(
         db,

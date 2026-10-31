@@ -143,6 +143,13 @@ class SqfliteUserRepository implements UserRepository {
 
   final Map<String, _LoginGuard> _loginGuards = {};
 
+  /// Stamps the row for the newest-wins rule the cloud applies on `updated_at`.
+  /// Every write to `users` has to carry it, or an older edit pulled from the
+  /// browser can overwrite a newer one made on the till.
+  static Map<String, Object?> _stamp(Map<String, Object?> values) {
+    return {...values, 'updated_at': DateTime.now().toIso8601String()};
+  }
+
   static const String _pbkdf2Prefix = 'pbkdf2-sha256\$v=1\$';
   static const int _legacyIterations = 10000;
   static const int _minimumIterations = 1000;
@@ -352,7 +359,7 @@ class SqfliteUserRepository implements UserRepository {
     await _db.transaction((txn) async {
       await txn.update(
         'users',
-        {'password_hash': hash, 'salt': salt, ...cloud},
+        _stamp({'password_hash': hash, 'salt': salt, ...cloud}),
         where: 'id = ?',
         whereArgs: [user.id],
       );
@@ -610,7 +617,7 @@ class SqfliteUserRepository implements UserRepository {
       if ((existing.first['count'] as int) > 0) {
         throw Exception('An owner account already exists.');
       }
-      await txn.insert('users', {...user.toMap(), ...cloud});
+      await txn.insert('users', _stamp({...user.toMap(), ...cloud}));
       await _enqueueUser(txn, user.id);
     });
 
@@ -738,14 +745,14 @@ class SqfliteUserRepository implements UserRepository {
           ..addAll(cloud);
         await txn.update(
           'users',
-          revived,
+          _stamp(revived),
           where: 'id = ?',
           whereArgs: [row['id']],
         );
         await _enqueueUser(txn, row['id'] as String);
         return;
       }
-      await txn.insert('users', {...user.toMap(), ...cloud});
+      await txn.insert('users', _stamp({...user.toMap(), ...cloud}));
       await _enqueueUser(txn, user.id);
     });
 
@@ -811,7 +818,7 @@ class SqfliteUserRepository implements UserRepository {
       permissions: kDefaultStaffPermissions,
       isDemo: true,
     );
-    await _db.insert('users', user.toMap());
+    await _db.insert('users', _stamp(user.toMap()));
     await _markDemoPasswordVersion();
     await _audit(
       userId: user.id,
@@ -894,7 +901,7 @@ class SqfliteUserRepository implements UserRepository {
       final hash = await _hashPassword(_randomDemoPassword(), salt);
       await _db.update(
         'users',
-        {'password_hash': hash, 'salt': salt},
+        _stamp({'password_hash': hash, 'salt': salt}),
         where: 'id = ?',
         whereArgs: [demoId],
       );
@@ -938,7 +945,7 @@ class SqfliteUserRepository implements UserRepository {
     await _db.transaction((txn) async {
       await txn.update(
         'users',
-        {'permissions': jsonEncode(normalized)},
+        _stamp({'permissions': jsonEncode(normalized)}),
         where: 'id = ?',
         whereArgs: [userId],
       );
@@ -996,7 +1003,7 @@ class SqfliteUserRepository implements UserRepository {
     await _db.transaction((txn) async {
       await txn.update(
         'users',
-        {'username': canonical},
+        _stamp({'username': canonical}),
         where: 'id = ?',
         whereArgs: [userId],
       );
@@ -1116,7 +1123,7 @@ class SqfliteUserRepository implements UserRepository {
       }
       await txn.update(
         'users',
-        {'is_active': active ? 1 : 0},
+        _stamp({'is_active': active ? 1 : 0}),
         where: 'id = ?',
         whereArgs: [targetUserId],
       );
@@ -1200,7 +1207,7 @@ class SqfliteUserRepository implements UserRepository {
       if (kept) {
         await txn.update(
           'users',
-          {'deleted_at': DateTime.now().toIso8601String()},
+          _stamp({'deleted_at': DateTime.now().toIso8601String()}),
           where: 'id = ?',
           whereArgs: [targetUserId],
         );

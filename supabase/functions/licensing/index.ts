@@ -29,19 +29,27 @@
 import { ed25519 } from 'https://esm.sh/@noble/curves@1.4.0/ed25519';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 
-const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
-const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-const SEED_B64URL = Deno.env.get('LICENSE_SIGNING_SEED_B64URL')!;
+// A missing secret used to surface as a key of "undefined": every activation
+// would then mint an unverifiable license. Fail at start-up instead of quietly
+// serving an insecure function.
+function requireEnv(name: string, minLength = 16): string {
+  const v = Deno.env.get(name);
+  if (!v || v.length < minLength) {
+    throw new Error(`Env var ${name} missing or too short (min ${minLength}).`);
+  }
+  return v;
+}
 
-// Fail loudly in the logs (not to the client) when the signing seed is missing
-// or malformed: every activation would otherwise mint an unverifiable license.
+const SUPABASE_URL = requireEnv('SUPABASE_URL');
+const SERVICE_KEY = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
+const SEED_B64URL = requireEnv('LICENSE_SIGNING_SEED_B64URL', 32);
+
+// Fail loudly (not to the client) when the signing seed is malformed: every
+// activation would otherwise mint a license that cannot verify.
 {
   const seedBytes = SEED_B64URL ? base64UrlDecode(SEED_B64URL) : new Uint8Array();
   if (seedBytes.length !== 32) {
-    console.error(
-      'LICENSE_SIGNING_SEED_B64URL is missing or not a 32-byte base64url value ' +
-      `(decoded ${seedBytes.length} bytes); signed licenses will not verify.`,
-    );
+    throw new Error('LICENSE_SIGNING_SEED_B64URL is invalid.');
   }
 }
 
@@ -291,9 +299,14 @@ async function redeemVoucher(db: any, body: any): Promise<Response> {
 // Helpers
 // ---------------------------------------------------------------------------
 async function writeAudit(db: any, code: string, fp: string | null, event: string, detail: any) {
-  await db.from('license_audit').insert({
+  // No RPC writes this line for us, so a silent failure would lose the trail.
+  const { error } = await db.from('license_audit').insert({
     activation_code: code, device_fingerprint: fp, event, detail,
   });
+  if (error) {
+    console.error('license_audit insert failed:', error.message);
+    throw new Error('Audit write failed.');
+  }
 }
 
 function str(v: unknown): string {

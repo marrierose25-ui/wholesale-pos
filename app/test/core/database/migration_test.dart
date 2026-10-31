@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
+import 'package:sqflite/sqflite.dart' show DatabaseException;
 import 'package:wholesale_pos_app/core/database/local_database.dart';
 import 'package:wholesale_pos_app/core/models/user.dart';
 import 'package:wholesale_pos_app/core/repositories/shift_repository.dart';
@@ -763,6 +764,109 @@ void main() {
       )).single;
       expect(movement['source_finance_entry_id'], isNull);
       expect(movement['amount_minor_units'], 10000);
+
+      await db.close();
+    },
+  );
+
+  test(
+    'Upgrades a v17 database to v18, binding each drawer to an account',
+    () async {
+      var db = await LocalDatabase.openAt(dbPath);
+      final now = DateTime.now().toIso8601String();
+      // v17 shape: no guard on shifts.cashier_id, no users.updated_at.
+      await db.execute(
+        'DROP TRIGGER IF EXISTS shifts_cashier_must_exist_insert',
+      );
+      await db.execute(
+        'DROP TRIGGER IF EXISTS shifts_cashier_must_exist_update',
+      );
+      await db.execute('ALTER TABLE users DROP COLUMN updated_at');
+      await db.insert('users', {
+        'id': 'user-1',
+        'username': 'owner',
+        'password_hash': 'x',
+        'salt': 'x',
+        'role': 'OWNER',
+        'created_at': now,
+      });
+      await db.insert('shifts', {
+        'id': 'shift-1',
+        'cashier_id': 'user-1',
+        'opening_cash_minor_units': 10000,
+        'status': 'CLOSED',
+        'opened_at': now,
+        'closed_at': now,
+      });
+      // A drawer whose operator was never created on this till, exactly what a
+      // pull writes when the shift lands before its cashier. v17 had no way to
+      // refuse it, so it is on disk before the upgrade runs.
+      await db.insert('shifts', {
+        'id': 'shift-2',
+        'cashier_id': 'user-away',
+        'opening_cash_minor_units': 0,
+        'status': 'CLOSED',
+        'opened_at': now,
+        'closed_at': now,
+      });
+      await db.execute('PRAGMA user_version = 17');
+      await db.close();
+
+      db = await LocalDatabase.openAt(dbPath);
+      final version = await db.rawQuery('PRAGMA user_version');
+      expect(version.first.values.first, LocalDatabase.schemaVersion);
+
+      // The history survives, including the drawer with no local operator.
+      final shifts = await db.query('shifts', orderBy: 'id');
+      expect(shifts, hasLength(2));
+      expect(shifts.first['opening_cash_minor_units'], 10000);
+      expect(shifts.last['cashier_id'], 'user-away');
+
+      final triggers = (await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type = 'trigger'",
+      )).map((row) => row['name'] as String).toSet();
+      expect(
+        triggers,
+        containsAll([
+          'shifts_cashier_must_exist_insert',
+          'shifts_cashier_must_exist_update',
+        ]),
+      );
+      // The rebuild-free guard must not have cost the open-shift protection.
+      final indexes = (await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type = 'index'",
+      )).map((row) => row['name'] as String).toSet();
+      expect(indexes, contains('one_open_shift'));
+
+      // The constraint is live: an unknown cashier can no longer be stored...
+      await expectLater(
+        db.insert('shifts', {
+          'id': 'shift-3',
+          'cashier_id': 'nobody',
+          'opening_cash_minor_units': 0,
+          'status': 'CLOSED',
+          'opened_at': now,
+        }),
+        throwsA(isA<DatabaseException>()),
+      );
+      // ...while the empty placeholder the pull writes still lands, so a sale
+      // that arrives before its drawer is not dropped.
+      await db.insert('shifts', {
+        'id': 'shift-4',
+        'cashier_id': '',
+        'opening_cash_minor_units': 0,
+        'status': 'CLOSED',
+        'opened_at': now,
+      });
+
+      // v19 backfills the stamp the cloud compares, from the creation time.
+      final owner = (await db.query(
+        'users',
+        where: 'id = ?',
+        whereArgs: ['user-1'],
+      )).single;
+      expect(owner['updated_at'], isNotNull);
+      expect(owner['updated_at'], owner['created_at']);
 
       await db.close();
     },

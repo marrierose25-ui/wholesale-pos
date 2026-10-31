@@ -28,6 +28,19 @@ void main() {
     });
   }
 
+  /// Opens the drawer a cash collection is allowed to deposit into.
+  Future<String> openShift() async {
+    final id = 'shift-${DateTime.now().microsecondsSinceEpoch}';
+    await db.insert('shifts', {
+      'id': id,
+      'cashier_id': 'owner-1',
+      'opening_cash_minor_units': 0,
+      'status': 'OPEN',
+      'opened_at': DateTime.now().toIso8601String(),
+    });
+    return id;
+  }
+
   setUp(() async {
     db = await LocalDatabase.openInMemory();
     repository = FinanceRepository(db);
@@ -247,6 +260,8 @@ void main() {
           amountMinorUnits: 10000,
           paymentMethod: 'CASH',
         );
+        // A cash collection can only land on a drawer that is actually open.
+        final shiftId = await openShift();
         await repository.markCompleted(ownerId: 'owner-1', entryId: entry.id);
 
         final deposits = await db.query(
@@ -256,6 +271,7 @@ void main() {
         expect(deposits, hasLength(1));
         expect(deposits.single['amount_minor_units'], 10000);
         expect(deposits.single['source_finance_entry_id'], entry.id);
+        expect(deposits.single['shift_id'], shiftId);
 
         // Completing it again is refused outright, so no second deposit exists.
         await expectLater(
@@ -622,6 +638,7 @@ void main() {
         paymentMethod: 'CASH',
       );
 
+      await openShift();
       await repository.markCompleted(ownerId: 'owner-1', entryId: entry.id);
 
       final deposits = await db.query(
@@ -633,10 +650,44 @@ void main() {
       expect(deposits.single['user_id'], 'owner-1');
       expect(deposits.single['reason'], contains('Alem'));
 
-      // A perpetual OPEN shift exists to receive the deposit.
+      // The deposit belongs to the drawer that was open, and no second one was
+      // invented to receive it.
       final shifts = await db.query('shifts', where: "status = 'OPEN'");
       expect(shifts, hasLength(1));
       expect(deposits.single['shift_id'], shifts.single['id']);
+    });
+
+    test('a CASH collection is refused while the drawer is closed', () async {
+      // Completing one used to mint an opening_cash=0 shift, which left the
+      // shop with a register nobody opened and a session that never closed.
+      final category = await repository.createCategory(
+        ownerId: 'owner-1',
+        name: 'Alem',
+      );
+      final entry = await repository.addEntry(
+        ownerId: 'owner-1',
+        categoryId: category.id,
+        source: 'Cash at door',
+        amountMinorUnits: 250000,
+        paymentMethod: 'CASH',
+      );
+
+      await expectLater(
+        repository.markCompleted(ownerId: 'owner-1', entryId: entry.id),
+        throwsException,
+      );
+
+      expect(await db.query('shifts'), isEmpty);
+      expect(
+        await db.query('cash_movements', where: "type = 'DEPOSIT'"),
+        isEmpty,
+      );
+      final stored = await db.query(
+        'finance_entries',
+        where: 'id = ?',
+        whereArgs: [entry.id],
+      );
+      expect(stored.single['status'], FinanceEntry.statusPending);
     });
 
     test('a BANK collection never touches the drawer', () async {

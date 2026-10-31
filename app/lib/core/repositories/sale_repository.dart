@@ -30,6 +30,11 @@ abstract class SaleRepository {
         .replaceAll('_', '\\_');
   }
 
+  /// Persists a completed sale.
+  ///
+  /// **Caller must verify the `pos` feature first.** Typically by calling
+  /// [nextReceiptNumber] with the same user id, which requires the `pos`
+  /// tick. This method does NOT re-check the permission — one write, one gate.
   Future<void> saveSale(Sale sale);
 
   Future<String> nextReceiptNumber({String? userId});
@@ -110,8 +115,8 @@ class SqfliteSaleRepository implements SaleRepository {
     }
     if (rows.first['role'] == 'OWNER') return;
     final held = User.decodePermissions(rows.first['permissions']);
-    final allowed = <String>{...held, ...aliases};
-    if (!allowed.contains(feature)) {
+    final required = <String>{feature, ...aliases};
+    if (!held.any(required.contains)) {
       throw Exception('This account does not have access to $feature.');
     }
   }
@@ -249,10 +254,11 @@ class SqfliteSaleRepository implements SaleRepository {
         limit: 1,
       );
       var value = rows.isEmpty ? 1 : (rows.first['value'] as int) + 1;
-      // `substr(...,n,4)` reads the padded run of digits only, so a receipt the
-      // pull tagged (`REC-…-0004#bf4aca21`) still counts as used.
+      // `substr(...,n,8)` reads the padded run of digits only, so a receipt the
+      // pull tagged (`REC-…-0004#bf4aca21`) still counts as used, and the run
+      // keeps counting past 9,999 instead of folding 10000 back onto 1000.
       final used = await txn.rawQuery(
-        'SELECT MAX(CAST(substr(receipt_number, ?, 4) AS INTEGER)) AS top '
+        'SELECT MAX(CAST(substr(receipt_number, ?, 8) AS INTEGER)) AS top '
         'FROM sales WHERE receipt_number LIKE ?',
         [prefix.length + 1, '$prefix%'],
       );
@@ -324,7 +330,16 @@ class SqfliteSaleRepository implements SaleRepository {
       }
 
       // A direct owner void also settles any pending cashier request for the
-      // same sale so it stops showing up in the approval queue.
+      // same sale so it stops showing up in the approval queue. The rows are
+      // read first, because each settled request still has to reach the cloud:
+      // the local queue would otherwise drain while the server kept it PENDING
+      // forever and kept showing a decision that has already been made.
+      final settled = await txn.query(
+        'void_requests',
+        columns: ['id'],
+        where: "sale_id = ? AND status = ?",
+        whereArgs: [saleId, VoidRequest.statusPending],
+      );
       await txn.update(
         'void_requests',
         {
@@ -335,6 +350,9 @@ class SqfliteSaleRepository implements SaleRepository {
         where: "sale_id = ? AND status = ?",
         whereArgs: [saleId, VoidRequest.statusPending],
       );
+      for (final row in settled) {
+        await _enqueueVoidRequest(txn, row['id'] as String);
+      }
 
       final voidedTotal = saleMaps.first['total_minor_units'] as int? ?? 0;
       await txn.insert('audit_logs', {
@@ -535,7 +553,9 @@ class SqfliteSaleRepository implements SaleRepository {
       SELECT vr.*, users.username AS requester_name
       FROM void_requests vr
       LEFT JOIN users ON vr.requested_by = users.id
+      INNER JOIN sales ON vr.sale_id = sales.id
       WHERE vr.status = ?
+        AND sales.status = 'COMPLETED'
         AND ${notDemoOperator('vr.requested_by')}
       ORDER BY vr.created_at DESC
     ''',

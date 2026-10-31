@@ -127,6 +127,45 @@ void main() {
     expect(await repository.nextReceiptNumber(), '${prefix}0006');
   });
 
+  test('Counts past 9,999 receipts in one day', () async {
+    // The counter read only four digits, so receipt 10001 looked like 1000 and
+    // every allocation after 9,999 was already used: saveSale died on the
+    // UNIQUE index and the till could not take a payment until midnight.
+    final now = DateTime.now();
+    final day =
+        '${now.year}'
+        '${now.month.toString().padLeft(2, '0')}'
+        '${now.day.toString().padLeft(2, '0')}';
+    final prefix = 'REC-$day-';
+
+    await db.insert('shifts', {
+      'id': 'shift-1',
+      'cashier_id': 'owner-1',
+      'opening_cash_minor_units': 0,
+      'status': 'OPEN',
+      'opened_at': DateTime.now().toIso8601String(),
+    });
+    await db.insert('sales', {
+      'id': 'sale-remote-10001',
+      'receipt_number': '${prefix}10001',
+      'cashier_id': 'owner-1',
+      'device_id': 'device-1',
+      'shift_id': 'shift-1',
+      'payment_method': 'CASH',
+      'subtotal_minor_units': 1000,
+      'discount_minor_units': 0,
+      'total_minor_units': 1000,
+      'amount_paid_minor_units': 1000,
+      'change_minor_units': 0,
+      'status': 'COMPLETED',
+      'created_at': DateTime.now().toIso8601String(),
+    });
+    // Nothing remembered by the counter: the number has to come from the book.
+    await db.delete('counters');
+
+    expect(await repository.nextReceiptNumber(), '${prefix}10002');
+  });
+
   test('Dashboard reports whether a register shift is open', () async {
     var stats = await repository.getDashboardStats();
     expect(stats['is_shift_open'], 0);

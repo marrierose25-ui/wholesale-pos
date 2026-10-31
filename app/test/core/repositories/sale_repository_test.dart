@@ -357,6 +357,22 @@ void main() {
       expect((await repository.getSales(userId: 'user-1')).isEmpty, isTrue);
     });
 
+    test('a register_history tick also opens the history reads', () async {
+      // The alias was added to the allowed set *beside* the required tick, so a
+      // staff account holding only register_history — the tick the web admin
+      // grants for the Register History tab — was admitted by `search_sales`
+      // and refused here. Same account, two answers.
+      await insertStaff(
+        id: 'staff-register-history',
+        username: 'sak6',
+        permissions: const ['register_history'],
+      );
+      expect(
+        (await repository.getSales(userId: 'staff-register-history')).isEmpty,
+        isTrue,
+      );
+    });
+
     test('getDashboardStats requires the dashboard tick', () async {
       await insertStaff(
         id: 'staff-no-ticks',

@@ -13,7 +13,7 @@ import '../utils/app_logger.dart';
 
 class LocalDatabase {
   static const String databaseName = 'wholesale_pos.db';
-  static const int schemaVersion = 17;
+  static const int schemaVersion = 19;
   static const String deviceIdFileName = 'device_id.txt';
   static const String themeSettingKey = 'theme_mode';
 
@@ -521,6 +521,22 @@ class LocalDatabase {
         );
       }
     }
+    if (oldVersion < 18) {
+      // A drawer belongs to an account (see [_createShiftCashierGuards]).
+      await _createShiftCashierGuards(db);
+    }
+    if (oldVersion < 19) {
+      // The stamp the cloud compares before it lets one surface overwrite
+      // another. Without it, an older edit pulled from the browser could
+      // replace a newer one made on the till.
+      final userCols = await db.rawQuery('PRAGMA table_info(users)');
+      if (!userCols.any((column) => column['name'] == 'updated_at')) {
+        await db.execute('ALTER TABLE users ADD COLUMN updated_at TEXT');
+      }
+      await db.execute(
+        'UPDATE users SET updated_at = created_at WHERE updated_at IS NULL',
+      );
+    }
   }
 
   /// Proof photos are BLOBs in their own table (schema 16), one per movement.
@@ -673,6 +689,36 @@ class LocalDatabase {
       AND EXISTS (SELECT 1 FROM shifts WHERE status = 'OPEN' AND id != NEW.id)
       BEGIN SELECT RAISE(ABORT, 'A shift is already open'); END
     ''');
+    await _createShiftCashierGuards(db);
+  }
+
+  /// A drawer belongs to an account. A pulled shift could otherwise name an
+  /// operator this file has never heard of, and the ledger then showed a blank
+  /// cashier for the whole session.
+  ///
+  /// This is enforced with guards rather than a `cashier_id` foreign key:
+  /// SQLite cannot attach one with ALTER TABLE, and rebuilding `shifts` is not
+  /// an option because `sales` and `cash_movements` reference it — dropping it
+  /// fails the deferred foreign key check at COMMIT even once the copy is
+  /// renamed back into place. The guards apply the same rule on the way in and
+  /// leave every stored row untouched.
+  ///
+  /// The empty cashier stays allowed: it is the placeholder the pull writes
+  /// when a sale lands before its drawer, and it is replaced when the shift row
+  /// itself arrives.
+  static Future<void> _createShiftCashierGuards(DatabaseExecutor db) async {
+    await db.execute('''
+      CREATE TRIGGER IF NOT EXISTS shifts_cashier_must_exist_insert
+      BEFORE INSERT ON shifts WHEN NEW.cashier_id != ''
+      AND NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.cashier_id)
+      BEGIN SELECT RAISE(ABORT, 'shifts.cashier_id must reference a known user'); END
+    ''');
+    await db.execute('''
+      CREATE TRIGGER IF NOT EXISTS shifts_cashier_must_exist_update
+      BEFORE UPDATE OF cashier_id ON shifts WHEN NEW.cashier_id != ''
+      AND NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.cashier_id)
+      BEGIN SELECT RAISE(ABORT, 'shifts.cashier_id must reference a known user'); END
+    ''');
   }
 
   static Future<void> _onCreate(Database db, int version) async {
@@ -691,7 +737,8 @@ class LocalDatabase {
         permissions TEXT NOT NULL DEFAULT '[]',
         is_demo INTEGER NOT NULL DEFAULT 0,
         deleted_at TEXT,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        updated_at TEXT
       )
     ''');
 

@@ -212,6 +212,27 @@ void main() {
     );
   });
 
+  test(
+    'a request left pending on a voided sale drops out of the queue',
+    () async {
+      await seedSale('sale-stale');
+      await repository.requestVoid('sale-stale', 'cashier-1', 'oops');
+      final requestId = (await repository.getPendingVoidRequests()).first.id;
+      await repository.voidSale('sale-stale', 'owner-1', 'mistake');
+
+      // An older build left this behind: the sale is voided but the request is
+      // still PENDING, so the owner sees a row they can never act on.
+      await db.update(
+        'void_requests',
+        {'status': VoidRequest.statusPending},
+        where: 'id = ?',
+        whereArgs: [requestId],
+      );
+
+      expect(await repository.getPendingVoidRequests(), isEmpty);
+    },
+  );
+
   test('a direct owner void auto-closes any pending request', () async {
     await seedSale('sale-direct-void');
     await repository.requestVoid('sale-direct-void', 'cashier-1', 'oops');

@@ -6,6 +6,7 @@ import 'package:wholesale_pos_app/core/database/local_database.dart';
 import 'package:wholesale_pos_app/core/repositories/sale_repository.dart';
 import 'package:wholesale_pos_app/core/repositories/shift_repository.dart';
 import 'package:wholesale_pos_app/core/sync/sync_backend.dart';
+import 'package:wholesale_pos_app/core/sync/sync_outbox.dart';
 import 'package:wholesale_pos_app/core/sync/sync_outbox_entry.dart';
 import 'package:wholesale_pos_app/core/sync/sync_outbox_repository.dart';
 import 'package:wholesale_pos_app/core/sync/sync_service.dart';
@@ -292,5 +293,65 @@ void main() {
     final pending = await outbox.pending();
     expect(pending, hasLength(1));
     expect(pending.single.entityId, 'sale-3');
+  });
+
+  test('a deposit behind a training collection never leaves the till', () async {
+    // The movement names whoever carried the cash; the collection behind it
+    // names the training account. Reading only the movement's own operator let
+    // demo money leave as a deposit that looked entirely real.
+    final now = DateTime.now().toIso8601String();
+    await db.insert('users', {
+      'id': 'demo-1',
+      'username': 'demo',
+      'password_hash': 'x',
+      'salt': 'x',
+      'role': 'CASHIER',
+      'is_active': 1,
+      'is_demo': 1,
+      'created_at': now,
+    });
+    await db.insert('finance_categories', {
+      'id': 'cat-1',
+      'name': 'Alem',
+      'created_at': now,
+      'updated_at': now,
+    });
+    await db.insert('finance_entries', {
+      'id': 'entry-1',
+      'category_id': 'cat-1',
+      'source': 'Counter',
+      'amount_minor_units': 10000,
+      'status': 'COMPLETED',
+      'entry_date': now,
+      'created_at': now,
+      'created_by': 'demo-1',
+      'completed_at': now,
+      'completed_by': 'demo-1',
+      'updated_at': now,
+      'payment_method': 'CASH',
+    });
+    await db.insert('cash_movements', {
+      'id': 'movement-1',
+      'shift_id': 'shift-1',
+      'user_id': 'user-1',
+      'type': 'DEPOSIT',
+      'amount_minor_units': 10000,
+      'reason': 'Collected from Alem',
+      'created_at': now,
+      'source_finance_entry_id': 'entry-1',
+    });
+
+    await db.transaction((txn) async {
+      await SyncOutbox.upsert(
+        txn,
+        entityType: SyncEntities.cashMovement,
+        entityId: 'movement-1',
+        payload: {
+          'cash_movement': {'id': 'movement-1'},
+        },
+      );
+    });
+
+    expect(await outbox.pending(), isEmpty);
   });
 }
