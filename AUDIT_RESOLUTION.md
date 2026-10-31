@@ -1,7 +1,7 @@
 # Audit Resolution Log
 **Date:** 2026-10-31
 **Commit:** cc45662
-**Follow-up commit:** PENDING (filled in immediately after this file is committed — see the note under "Verification Commands Run")
+**Follow-up commit:** 984184a (this file records its own hash one commit later — see the note under "Verification Commands Run")
 
 ## Executive Summary
 - 21 findings fixed and verified in production
