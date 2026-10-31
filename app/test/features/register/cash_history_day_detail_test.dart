@@ -217,19 +217,20 @@ void main() {
       expect(inDay('Item'), findsOneWidget);
       expect(inDay('Sugar 50kg'), findsOneWidget);
       expect(inDay('1 bag'), findsOneWidget);
-      // Unit price, total and the 'Cash sales' summary all carry 120.00.
-      expect(inDayContaining('120.00'), findsNWidgets(3));
-      expect(inDayContaining('Cash'), findsWidgets);
+      // Unit price and total columns carry 120.00 — nothing else on this tab.
+      expect(inDayContaining('120.00'), findsNWidgets(2));
       expect(inDay('Float top-up'), findsNothing);
       expect(inDay('Bank drop'), findsNothing);
       // Other days' movements stay out.
       expect(inDay('Taxi fare'), findsNothing);
-      // Summary: cash sales 120 + deposits 50 - withdrawals 20 = net 150.00.
-      expect(inDay('Cash sales'), findsOneWidget);
-      expect(inDay('Net drawer change'), findsOneWidget);
-      expect(inDayContaining('150.00'), findsOneWidget);
+      // The Sales tab renders no summary card at all.
+      expect(inDay('Cash sales'), findsNothing);
+      expect(inDay('Bank sales'), findsNothing);
+      expect(inDay('Net drawer change'), findsNothing);
+      expect(inDayContaining('150.00'), findsNothing);
 
-      // Credits tab, then Debits tab — each shows only its own rows.
+      // Credits tab, then Debits tab — each shows only its own rows, plus the
+      // single-figure summary card (summary value + movement row = 2 hits).
       await tester.runAsync(() async {
         await tapTab(tester, 'Credits');
         await settle(tester);
@@ -237,6 +238,7 @@ void main() {
       expect(inDay('Float top-up'), findsOneWidget);
       expect(inDay('Bank drop'), findsNothing);
       expect(inDay('Sugar 50kg'), findsNothing);
+      expect(inDayContaining('50.00'), findsNWidgets(2));
 
       await tester.runAsync(() async {
         await tapTab(tester, 'Debits');
@@ -244,6 +246,7 @@ void main() {
       });
       expect(inDay('Bank drop'), findsOneWidget);
       expect(inDay('Float top-up'), findsNothing);
+      expect(inDayContaining('20.00'), findsNWidgets(2));
     },
   );
 

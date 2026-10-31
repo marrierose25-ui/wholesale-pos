@@ -319,22 +319,11 @@ class _RegisterDayScreenState extends State<RegisterDayScreen> {
   Widget build(BuildContext context) {
     final deposits = widget.movements.where((m) => m.isDeposit).toList();
     final withdrawals = widget.movements.where((m) => !m.isDeposit).toList();
-    final cashSales = _sales
-        .where((s) => s.paymentMethod == 'CASH')
-        .fold(0, (a, s) => a + s.totalMinorUnits);
-    // Only real bank transfers count as bank sales. Loan sales are rung up on
-    // credit — recorded in history but collecting nothing — so they sit out of
-    // both money buckets (and, via cashSales-only net, out of the drawer).
-    final bankSales = _sales
-        .where((s) => s.paymentMethod == 'BANK')
-        .fold(0, (a, s) => a + s.totalMinorUnits);
     final depositsTotal = deposits.fold(0, (a, m) => a + m.amountMinorUnits);
     final withdrawalsTotal = withdrawals.fold(
       0,
       (a, m) => a + m.amountMinorUnits,
     );
-    // Bank sales never touch the drawer, so they stay out of the net.
-    final net = cashSales + depositsTotal - withdrawalsTotal;
 
     return Scaffold(
       backgroundColor: AppDesign.bg,
@@ -352,55 +341,32 @@ class _RegisterDayScreenState extends State<RegisterDayScreen> {
                       selected: _tab,
                       onSelect: (i) => setState(() => _tab = i),
                     ),
-                    const SizedBox(height: 12),
-                    // The summary follows the open tab: Credits and Debits each
-                    // condense to their one figure; Sales keeps the drawer view.
-                    GlassCard(
-                      radius: AppDesign.radiusCardSm,
-                      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-                      child: Column(
-                        children: [
-                          ...switch (_tab) {
-                            1 => [
+                    // The summary card belongs to the money-movement tabs only:
+                    // Credits shows its single figure, Debits shows its single
+                    // figure. The Sales tab renders no summary at all.
+                    if (_tab != 0) ...[
+                      const SizedBox(height: 12),
+                      GlassCard(
+                        radius: AppDesign.radiusCardSm,
+                        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                        child: Column(
+                          children: [
+                            if (_tab == 1)
                               _summaryRow(
                                 'Credits',
                                 depositsTotal,
                                 AppTheme.success,
-                              ),
-                            ],
-                            2 => [
+                              )
+                            else
                               _summaryRow(
                                 'Debits',
                                 -withdrawalsTotal,
                                 AppTheme.danger,
                               ),
-                            ],
-                            _ => [
-                              _summaryRow(
-                                'Cash sales',
-                                cashSales,
-                                AppTheme.success,
-                              ),
-                              _summaryRow(
-                                'Bank sales',
-                                bankSales,
-                                AppDesign.blue,
-                              ),
-                              const Padding(
-                                padding: EdgeInsets.symmetric(vertical: 6),
-                                child: Divider(height: 1),
-                              ),
-                              _summaryRow(
-                                'Net drawer change',
-                                net,
-                                net < 0 ? AppTheme.danger : AppTheme.success,
-                                bold: true,
-                              ),
-                            ],
-                          },
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
+                    ],
                     // One tab at a time: the tapped day's sales, credits or
                     // debits, each with its own empty state.
                     ...switch (_tab) {
