@@ -1,3 +1,9 @@
+-- ⚠️ SUPERSEDED. Current version lives in supabase/migrations/.
+-- Applied in production via supabase/migrations/20261031000001_sync_user_privilege_check.sql
+-- Do not apply this file to production. Last synced: 2026-10-31.
+-- The pos_sync_apply function below is PRE-FIX. Production has the
+-- privilege check and updated_at guard applied.
+
 -- Wholesale POS — sync every master-data entity, and stop rejecting shifts
 -- ---------------------------------------------------------------------------
 -- Two gaps this file closes:

@@ -1,3 +1,9 @@
+-- ⚠️ SUPERSEDED. Current version lives in supabase/migrations/.
+-- Applied in production via supabase/migrations/20261031000000_void_owner_check.sql
+-- Do not apply this file to production. Last synced: 2026-10-31.
+-- The pos_void_sale, pos_approve_void, pos_reject_void functions below
+-- are PRE-FIX bodies. Production has the owner check applied.
+
 -- Wholesale POS — Cloud Integrity Migration (audit remediation)
 -- ---------------------------------------------------------------------------
 -- Brings the shared Postgres tables (used by pos-api AND native tills) toward

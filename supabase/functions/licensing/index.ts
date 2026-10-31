@@ -299,13 +299,14 @@ async function redeemVoucher(db: any, body: any): Promise<Response> {
 // Helpers
 // ---------------------------------------------------------------------------
 async function writeAudit(db: any, code: string, fp: string | null, event: string, detail: any) {
-  // No RPC writes this line for us, so a silent failure would lose the trail.
   const { error } = await db.from('license_audit').insert({
     activation_code: code, device_fingerprint: fp, event, detail,
   });
   if (error) {
-    console.error('license_audit insert failed:', error.message);
-    throw new Error('Audit write failed.');
+    console.error('license_audit insert failed:', error.message, { event, code });
+    // Do not throw — a buyer whose activation succeeded must receive their
+    // license even if the audit row failed to insert. The failure is logged
+    // for operators; the license is returned normally.
   }
 }
 

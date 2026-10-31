@@ -1,3 +1,9 @@
+-- ⚠️ SUPERSEDED. Current version lives in supabase/migrations/.
+-- The pos_sync_apply function below was replaced by
+-- docs/supabase_sync_master_data.sql and then by
+-- supabase/migrations/20261031000001_sync_user_privilege_check.sql.
+-- Do not apply this file to production. Last synced: 2026-10-31.
+
 -- Wholesale POS — device sync staging (Phase 23, wave B / audit 2 #2)
 -- ---------------------------------------------------------------------------
 -- The `sync` gateway authenticates a device with its SIGNED LICENSE, not with a
