@@ -6,6 +6,7 @@ import '../../core/models/user.dart';
 import '../../core/repositories/sale_repository.dart';
 import '../../core/theme/app_design.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/date_formatter.dart';
 import '../../core/utils/date_range.dart';
 import '../../core/utils/money_utils.dart';
 import '../dashboard/sales_by_day_screen.dart';
@@ -13,10 +14,7 @@ import '../sales/sale.dart';
 import '../sales/sale_details.dart';
 import '../sales/shift.dart';
 
-String _hhmm(DateTime date) {
-  return '${date.hour.toString().padLeft(2, '0')}:'
-      '${date.minute.toString().padLeft(2, '0')}';
-}
+String _hhmm(DateTime date) => formatAddisTime(date);
 
 /// One compact ledger line for a cash movement: time · reason · type · user,
 /// with a signed amount on the right. When a proof photo was attached, the

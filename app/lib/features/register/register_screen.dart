@@ -5,6 +5,7 @@ import '../../core/repositories/sale_repository.dart';
 import '../../core/repositories/shift_repository.dart';
 import '../../core/theme/app_design.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/date_formatter.dart';
 import '../../core/utils/date_range.dart';
 import '../../core/utils/money_utils.dart';
 import '../sales/shift.dart';
@@ -523,10 +524,7 @@ class RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  String _formatTime(DateTime time) {
-    return '${time.hour.toString().padLeft(2, '0')}:'
-        '${time.minute.toString().padLeft(2, '0')}';
-  }
+  String _formatTime(DateTime time) => formatAddisTime(time);
 }
 
 class _RegStat {

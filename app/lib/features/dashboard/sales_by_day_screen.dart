@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/models/user.dart';
 import '../../core/repositories/sale_repository.dart';
 import '../../core/theme/app_design.dart';
+import '../../core/utils/date_formatter.dart';
 import '../../core/utils/date_range.dart';
 import '../../core/utils/money_utils.dart';
 import '../sales/sale.dart';
@@ -525,11 +526,7 @@ class SaleLedgerRow extends StatelessWidget {
 
   const SaleLedgerRow({super.key, required this.sale, this.onTap});
 
-  String get _time {
-    final t = sale.createdAt;
-    return '${t.hour.toString().padLeft(2, '0')}:'
-        '${t.minute.toString().padLeft(2, '0')}';
-  }
+  String get _time => formatAddisTime(sale.createdAt);
 
   @override
   Widget build(BuildContext context) {

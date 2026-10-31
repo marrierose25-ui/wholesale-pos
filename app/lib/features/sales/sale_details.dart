@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/models/user.dart';
 import '../../core/repositories/sale_repository.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/date_formatter.dart';
 import '../../core/utils/money_utils.dart';
 import 'sale.dart';
 
@@ -50,18 +51,6 @@ class _SaleDetailsDialog extends StatefulWidget {
 
 class _SaleDetailsDialogState extends State<_SaleDetailsDialog> {
   bool _busy = false;
-
-  String _formatDate(DateTime date) {
-    return '${date.year.toString().padLeft(4, '0')}-'
-        '${date.month.toString().padLeft(2, '0')}-'
-        '${date.day.toString().padLeft(2, '0')}';
-  }
-
-  String _formatDateTime(DateTime date) {
-    return '${_formatDate(date)} '
-        '${date.hour.toString().padLeft(2, '0')}:'
-        '${date.minute.toString().padLeft(2, '0')}';
-  }
 
   Future<void> _voidSale() async {
     final reason = await showDialog<String>(
@@ -139,7 +128,7 @@ class _SaleDetailsDialogState extends State<_SaleDetailsDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _detailRow('Date', _formatDateTime(sale.createdAt)),
+              _detailRow('Date', formatAddisDateTime(sale.createdAt)),
               _detailRow('Cashier', sale.cashierName ?? 'Unknown'),
               if (sale.customerName != null &&
                   sale.customerName!.trim().isNotEmpty)
@@ -213,7 +202,7 @@ class _SaleDetailsDialogState extends State<_SaleDetailsDialog> {
                 ),
                 if (sale.voidedAt != null)
                   Text(
-                    'Voided at ${_formatDateTime(sale.voidedAt!)}',
+                    'Voided at ${formatAddisDateTime(sale.voidedAt!)}',
                     style: TextStyle(
                       color: Theme.of(context).textTheme.bodySmall?.color,
                       fontSize: 12,
