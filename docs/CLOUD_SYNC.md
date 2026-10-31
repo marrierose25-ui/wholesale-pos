@@ -368,3 +368,24 @@ a swappable interface. Every hard, irreversible, or externally-dependent piece
 (real cloud, conflict merging, push, new clients, new roles) was consciously
 deferred until the prerequisites and accounts exist. The live POS behaviour is
 unchanged and un-risked by this increment.
+
+## Rate Limiting — Best Effort Only
+
+Login attempts are rate-limited by an in-memory counter inside the
+`pos-api` Edge Function (see `loginThrottle` in `index.ts`). This is
+best-effort by design:
+
+- **Does not span isolates.** If Supabase scales the function to N
+  containers, each container has its own counter. Effective rate limit
+  is N × the configured maximum.
+- **Resets on container recycle.** A cold start zeroes the counter.
+- **Not durable.** No database, no Redis — only the process's memory.
+
+The mitigation layered on top is PBKDF2-HMAC-SHA256 at 210,000
+iterations per attempt (~50ms of CPU on modest hardware). A brute-force
+attacker is slowed but not stopped.
+
+**Current posture is acceptable** for a single-tenant shop with a small
+isolate pool. If the tenant is targeted by sustained credential
+stuffing, deploy a durable rate limiter (Redis, or a Postgres-based
+counter with TTL). This is a real decision for scale, not a bug.

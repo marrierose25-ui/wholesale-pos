@@ -228,7 +228,7 @@ Deno.serve(async (req) => {
       case 'list_cash_movements': return await listCashMovements(db, ctx, body);
 
       // Users
-      case 'list_users': return await listUsers(db, ctx);
+      case 'list_users': return await listUsers(db, ctx, body);
       case 'create_user': return await createUser(db, ctx, body);
       case 'set_user_permissions': return await setUserPermissions(db, ctx, body);
       case 'set_user_phone': return await setUserPhone(db, ctx, body);
@@ -1000,11 +1000,15 @@ async function listCashMovements(db: any, ctx: Ctx, body: any): Promise<Response
 // ===========================================================================
 // Users (OWNER_ONLY enforced above)
 // ===========================================================================
-async function listUsers(db: any, ctx: Ctx): Promise<Response> {
+async function listUsers(db: any, ctx: Ctx, body: any): Promise<Response> {
+  // Bounded like every other list: PostgREST's 1000-row cap would otherwise
+  // truncate a large roll silently (C-7).
+  const limit = pageLimit(body, 1000);
   const { data, error } = await db.from('pos_users')
     .select('id, username, role, active, created_at, permissions, is_demo').eq('customer_id', ctx.customerId)
     .is('deleted_at', null)
-    .order('username');
+    .order('username')
+    .limit(limit);
   if (error) throw new Error(error.message);
   return json({ ok: true, users: strip(data) });
 }
@@ -1056,7 +1060,14 @@ async function createUser(db: any, ctx: Ctx, body: any): Promise<Response> {
       username, role, pw_salt: salt, pw_hash: hash, active: true,
       permissions: perms, is_demo: false, deleted_at: null,
     })).eq('customer_id', ctx.customerId).eq('id', dup.id);
-    if (up.error) throw new Error(up.error.message);
+    if (up.error) {
+      // A race between the duplicate check above and this write lands here as a
+      // raw unique violation; answer it as the conflict it is (C-5).
+      if (/duplicate key|unique/i.test(up.error.message)) {
+        return json({ ok: false, error: 'That phone number is already in use.' }, 409);
+      }
+      throw new Error(up.error.message);
+    }
     await audit(db, ctx.customerId, ctx.userId, 'USER_CREATED', `Deleted account "${username}" reused (${role}).`);
     return json({ ok: true, id: dup.id });
   }
@@ -1064,7 +1075,12 @@ async function createUser(db: any, ctx: Ctx, body: any): Promise<Response> {
   const ins = await db.from('pos_users').insert({
     id, customer_id: ctx.customerId, username, role, pw_salt: salt, pw_hash: hash, active: true, permissions: perms,
   });
-  if (ins.error) throw new Error(ins.error.message);
+  if (ins.error) {
+    if (/duplicate key|unique/i.test(ins.error.message)) {
+      return json({ ok: false, error: 'That phone number is already in use.' }, 409);
+    }
+    throw new Error(ins.error.message);
+  }
   await audit(db, ctx.customerId, ctx.userId, 'USER_CREATED', `User "${username}" (${role}).`);
   return json({ ok: true, id });
 }
@@ -1286,7 +1302,12 @@ async function deleteUser(db: any, ctx: Ctx, body: any): Promise<Response> {
     (await counted('shifts', 'cashier_id')) +
     (await counted('cash_movements', 'user_id')) +
     (await counted('void_requests', 'requested_by')) +
-    (await counted('pos_finance_entries', 'created_by'));
+    // Secondary references count too: a user who only decided a void or only
+    // completed a finance entry is still FK-referenced and must be soft-deleted,
+    // not hard-deleted into a constraint error (C-6).
+    (await counted('void_requests', 'decided_by')) +
+    (await counted('pos_finance_entries', 'created_by')) +
+    (await counted('pos_finance_entries', 'completed_by'));
 
   if (records > 0) {
     const up = await db.from('pos_users').update(userStamp({
@@ -1337,10 +1358,12 @@ async function financeSummaries(db: any, ctx: Ctx): Promise<Response> {
   // Both reads are checked: an ignored error used to return zeroed totals, so
   // the owner read "nothing pending" off a failed query (audit 2 #12).
   const { data: cats, error: catErr } = await db.from('pos_finance_categories').select('id, name')
-    .eq('customer_id', ctx.customerId).is('deleted_at', null).order('name');
+    .eq('customer_id', ctx.customerId).is('deleted_at', null).order('name')
+    .limit(500);
   if (catErr) throw new Error(catErr.message);
   const { data: entries, error: entErr } = await db.from('pos_finance_entries').select('category_id, amount_minor_units')
-    .eq('customer_id', ctx.customerId).eq('status', 'PENDING');
+    .eq('customer_id', ctx.customerId).eq('status', 'PENDING')
+    .limit(5000);
   if (entErr) throw new Error(entErr.message);
   const totals: Record<string, { count: number; total: number }> = {};
   for (const e of entries ?? []) {
