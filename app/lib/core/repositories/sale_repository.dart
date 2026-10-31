@@ -853,9 +853,10 @@ class SqfliteSaleRepository implements SaleRepository {
   }
 
   /// Revenue figures for the dashboard. Voided sales are always excluded.
-  /// Loan sales are recorded but collected no money, so they never count
-  /// toward the revenue figures. Defaults to today so the dashboard resets at
-  /// local midnight purely by date filtering — records are never deleted.
+  /// Loan sales collect no money, so they stay out of every revenue figure,
+  /// but they are real completed sales and DO count toward the sales count.
+  /// Defaults to today so the dashboard resets at local midnight purely by
+  /// date filtering — records are never deleted.
   @override
   Future<Map<String, int>> getDashboardStats({
     String? userId,
@@ -873,10 +874,14 @@ class SqfliteSaleRepository implements SaleRepository {
         "created_at >= ? AND created_at < ? AND status = 'COMPLETED' "
         'AND ${notDemoOperator('cashier_id')}';
 
+    // Count every completed sale (loans included); sum money only from the
+    // methods that actually collected it (CASH, BANK).
     final revenueRow = await _db.rawQuery('''
-      SELECT COUNT(*) AS count, COALESCE(SUM(total_minor_units), 0) AS total
+      SELECT COUNT(*) AS count,
+             COALESCE(SUM(CASE WHEN payment_method IN ('CASH', 'BANK')
+                               THEN total_minor_units ELSE 0 END), 0) AS total
       FROM sales
-      WHERE $completed AND payment_method IN ('CASH', 'BANK')
+      WHERE $completed
     ''', rangeArgs);
 
     final cashRow = await _db.rawQuery('''

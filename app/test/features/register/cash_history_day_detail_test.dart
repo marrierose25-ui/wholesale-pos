@@ -209,11 +209,16 @@ void main() {
         await settle(tester);
       });
 
-      // Sales tab (default): the day's completed sale, tagged Cash with its
-      // receipt ('Sales' appears twice — the pill and the section header).
+      // Sales tab (default): the day's completed sale in the shared ledger
+      // format — Item/Quantity/Unit Price/Total columns like the Dashboard's
+      // day drill-down ('Sales' appears twice: the pill and the section
+      // header).
       expect(inDay('Sales'), findsWidgets);
+      expect(inDay('Item'), findsOneWidget);
       expect(inDay('Sugar 50kg'), findsOneWidget);
-      expect(inDayContaining('REC-20260808-0001'), findsOneWidget);
+      expect(inDay('1 bag'), findsOneWidget);
+      // Unit price, total and the 'Cash sales' summary all carry 120.00.
+      expect(inDayContaining('120.00'), findsNWidgets(3));
       expect(inDayContaining('Cash'), findsWidgets);
       expect(inDay('Float top-up'), findsNothing);
       expect(inDay('Bank drop'), findsNothing);

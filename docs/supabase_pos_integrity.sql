@@ -1115,10 +1115,10 @@ GRANT EXECUTE ON FUNCTION pos_expected_cash TO service_role;
 -- Dashboard headline numbers for a created_at window (nulls = unbounded).
 -- Returns revenue / counts / cash+bank split / void count / pending void
 -- requests whose target sale falls in the window, all computed in SQL.
--- Loan sales are recorded but collect no money, so they never count toward
--- any revenue figure and are not part of sales_count either — the average
--- sale is revenue / sales_count, so counting them would dilute it (mirrors
--- the native dashboard queries exactly).
+-- Loan sales collect no money, so they stay out of every revenue figure, but
+-- they are real completed sales and DO count toward sales_count (4 sales of
+-- which 1 is a loan: count 4, revenue from 3). Mirrors the native dashboard
+-- queries exactly.
 --
 -- Training-account money is left out of every figure below. A till running an
 -- older build still pushes its demo sales, and rows that arrived before the
@@ -1135,7 +1135,7 @@ DECLARE res jsonb;
 BEGIN
   SELECT jsonb_build_object(
     'revenue', COALESCE(sum(CASE WHEN status = 'COMPLETED' AND payment_method IN ('CASH', 'BANK') THEN total_minor_units ELSE 0 END), 0),
-    'sales_count', COALESCE(count(*) FILTER (WHERE status = 'COMPLETED' AND payment_method IN ('CASH', 'BANK')), 0),
+    'sales_count', COALESCE(count(*) FILTER (WHERE status = 'COMPLETED'), 0),
     'cash_revenue', COALESCE(sum(CASE WHEN status = 'COMPLETED' AND payment_method = 'CASH' THEN total_minor_units ELSE 0 END), 0),
     'bank_revenue', COALESCE(sum(CASE WHEN status = 'COMPLETED' AND payment_method = 'BANK' THEN total_minor_units ELSE 0 END), 0),
     'void_count', COALESCE(count(*) FILTER (WHERE status = 'VOIDED'), 0),

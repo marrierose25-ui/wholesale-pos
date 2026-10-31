@@ -123,8 +123,8 @@ void main() {
       expect(stats['revenue'], 5000);
       expect(stats['cash_revenue'], 5000);
       expect(stats['bank_revenue'], 0);
-      // It is not even counted as a completed sale on the dashboard.
-      expect(stats['sales_count'], 1);
+      // The loan is still a completed sale, so the dashboard counts it.
+      expect(stats['sales_count'], 2);
 
       // The trend and the product mix both drop the loan line too.
       final trend = await repository.getRevenueTrend(DateRange.today());

@@ -10,6 +10,7 @@ import '../../core/utils/date_range.dart';
 import '../../core/utils/money_utils.dart';
 import '../dashboard/sales_by_day_screen.dart';
 import '../sales/sale.dart';
+import '../sales/sale_details.dart';
 import '../sales/shift.dart';
 
 String _hhmm(DateTime date) {
@@ -232,13 +233,6 @@ class _RegisterDayScreenState extends State<RegisterDayScreen> {
     }
   }
 
-  String _headline(Sale sale) {
-    if (sale.items.isEmpty) return sale.customerName ?? 'Sale';
-    final names = sale.items.map((item) => item.productNameSnapshot).toList();
-    if (names.length == 1) return names.first;
-    return '${names.first} +${names.length - 1} more';
-  }
-
   Widget _sectionHeader(String label) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(6, 14, 6, 6),
@@ -300,68 +294,23 @@ class _RegisterDayScreenState extends State<RegisterDayScreen> {
     );
   }
 
+  // Same ledger line the Dashboard's Completed Sales drill-down uses — time,
+  // item, quantity, unit price, total — tapping it opens the Sale Details
+  // dialog when a signed-in user is available to authorise the void actions.
   Widget _saleRow(Sale s) {
-    final method = s.paymentMethod;
-    final isCash = method == 'CASH';
-    final isLoan = method == 'LOAN';
-    // Cash feeds the drawer (green +), Bank and Loan never touch it: Bank is
-    // an outside transfer, a Loan is money owed. Both are shown neutrally.
-    final color = isCash
-        ? AppTheme.success
-        : isLoan
-        ? AppTheme.muted
-        : AppDesign.blue;
-    final icon = isCash
-        ? Icons.payments_rounded
-        : isLoan
-        ? Icons.handshake_outlined
-        : Icons.account_balance_rounded;
-    final label = isCash
-        ? 'Cash'
-        : isLoan
-        ? 'Loan'
-        : 'Bank';
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: GlassCard(
-        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-        radius: AppDesign.radiusCardSm,
-        child: Row(
-          children: [
-            Icon(icon, size: 18, color: color),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _headline(s),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '${s.receiptNumber}  •  ${_hhmm(s.createdAt)}  •  $label',
-                    style: TextStyle(fontSize: 11.5, color: AppTheme.muted),
-                  ),
-                ],
+      child: SaleLedgerRow(
+        sale: s,
+        onTap: widget.currentUser == null
+            ? null
+            : () => showSaleDetails(
+                context: context,
+                sale: s,
+                repository: widget.saleRepository,
+                currentUser: widget.currentUser!,
+                onChanged: _load,
               ),
-            ),
-            const SizedBox(width: 10),
-            Text(
-              '${isCash ? '+' : ''}${MoneyUtils.formatBr(s.totalMinorUnits)}',
-              style: TextStyle(
-                fontSize: 13.5,
-                fontWeight: FontWeight.w700,
-                color: color,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -404,37 +353,51 @@ class _RegisterDayScreenState extends State<RegisterDayScreen> {
                       onSelect: (i) => setState(() => _tab = i),
                     ),
                     const SizedBox(height: 12),
+                    // The summary follows the open tab: Credits and Debits each
+                    // condense to their one figure; Sales keeps the drawer view.
                     GlassCard(
                       radius: AppDesign.radiusCardSm,
                       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
                       child: Column(
                         children: [
-                          _summaryRow(
-                            'Cash sales',
-                            cashSales,
-                            AppTheme.success,
-                          ),
-                          _summaryRow('Bank sales', bankSales, AppDesign.blue),
-                          _summaryRow(
-                            'Credits',
-                            depositsTotal,
-                            AppTheme.success,
-                          ),
-                          _summaryRow(
-                            'Debits',
-                            -withdrawalsTotal,
-                            AppTheme.danger,
-                          ),
-                          const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 6),
-                            child: Divider(height: 1),
-                          ),
-                          _summaryRow(
-                            'Net drawer change',
-                            net,
-                            net < 0 ? AppTheme.danger : AppTheme.success,
-                            bold: true,
-                          ),
+                          ...switch (_tab) {
+                            1 => [
+                              _summaryRow(
+                                'Credits',
+                                depositsTotal,
+                                AppTheme.success,
+                              ),
+                            ],
+                            2 => [
+                              _summaryRow(
+                                'Debits',
+                                -withdrawalsTotal,
+                                AppTheme.danger,
+                              ),
+                            ],
+                            _ => [
+                              _summaryRow(
+                                'Cash sales',
+                                cashSales,
+                                AppTheme.success,
+                              ),
+                              _summaryRow(
+                                'Bank sales',
+                                bankSales,
+                                AppDesign.blue,
+                              ),
+                              const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 6),
+                                child: Divider(height: 1),
+                              ),
+                              _summaryRow(
+                                'Net drawer change',
+                                net,
+                                net < 0 ? AppTheme.danger : AppTheme.success,
+                                bold: true,
+                              ),
+                            ],
+                          },
                         ],
                       ),
                     ),
@@ -457,6 +420,8 @@ class _RegisterDayScreenState extends State<RegisterDayScreen> {
                       ],
                       _ => [
                         _sectionHeader('Sales'),
+                        if (_error == null && _sales.isNotEmpty)
+                          const SaleLedgerHeader(),
                         if (_error != null)
                           Padding(
                             padding: const EdgeInsets.fromLTRB(6, 2, 6, 8),

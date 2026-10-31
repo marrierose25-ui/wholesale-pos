@@ -406,12 +406,6 @@ class DaySalesScreen extends StatelessWidget {
     this.onVoided,
   });
 
-  String _timeOfDay(Sale sale) {
-    final t = sale.createdAt;
-    return '${t.hour.toString().padLeft(2, '0')}:'
-        '${t.minute.toString().padLeft(2, '0')}';
-  }
-
   @override
   Widget build(BuildContext context) {
     final ordered = [...sales]
@@ -455,19 +449,7 @@ class DaySalesScreen extends StatelessWidget {
               ),
             ),
             // Bold column captions aligned with the ledger rows below.
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 6, 24, 6),
-              child: Row(
-                children: [
-                  const SizedBox(width: 34),
-                  Expanded(child: _headerCell('Item', TextAlign.start)),
-                  _headerCell('Quantity', TextAlign.end, width: 64),
-                  _headerCell('Unit Price', TextAlign.end, width: 78),
-                  const SizedBox(width: 8),
-                  _headerCell('Total', TextAlign.end, width: 90),
-                ],
-              ),
-            ),
+            const SaleLedgerHeader(),
             Expanded(
               child: ListView.separated(
                 padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
@@ -475,9 +457,8 @@ class DaySalesScreen extends StatelessWidget {
                 separatorBuilder: (_, _) => const SizedBox(height: 8),
                 itemBuilder: (context, index) {
                   final sale = ordered[index];
-                  return _LedgerRow(
+                  return SaleLedgerRow(
                     sale: sale,
-                    time: _timeOfDay(sale),
                     onTap: () => showSaleDetails(
                       context: context,
                       sale: sale,
@@ -494,8 +475,14 @@ class DaySalesScreen extends StatelessWidget {
       ),
     );
   }
+}
 
-  static Widget _headerCell(String label, TextAlign align, {double? width}) {
+/// Bold Item / Quantity / Unit Price / Total captions that sit above a list of
+/// [SaleLedgerRow]s so the fixed columns read as a ledger.
+class SaleLedgerHeader extends StatelessWidget {
+  const SaleLedgerHeader({super.key});
+
+  static Widget _cell(String label, TextAlign align, {double? width}) {
     return SizedBox(
       width: width,
       child: Text(
@@ -510,20 +497,39 @@ class DaySalesScreen extends StatelessWidget {
       ),
     );
   }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 6, 24, 6),
+      child: Row(
+        children: [
+          const SizedBox(width: 34),
+          Expanded(child: _cell('Item', TextAlign.start)),
+          _cell('Quantity', TextAlign.end, width: 64),
+          _cell('Unit Price', TextAlign.end, width: 78),
+          const SizedBox(width: 8),
+          _cell('Total', TextAlign.end, width: 90),
+        ],
+      ),
+    );
+  }
 }
 
 /// One ledger line: time · item · quantity · unit price · total. Voided sales
-/// are greyed with a strike-through.
-class _LedgerRow extends StatelessWidget {
+/// are greyed with a strike-through. Shared by the Dashboard's day drill-down
+/// and the Register History day screen so both list sales identically.
+class SaleLedgerRow extends StatelessWidget {
   final Sale sale;
-  final String time;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
-  const _LedgerRow({
-    required this.sale,
-    required this.time,
-    required this.onTap,
-  });
+  const SaleLedgerRow({super.key, required this.sale, this.onTap});
+
+  String get _time {
+    final t = sale.createdAt;
+    return '${t.hour.toString().padLeft(2, '0')}:'
+        '${t.minute.toString().padLeft(2, '0')}';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -543,7 +549,7 @@ class _LedgerRow extends StatelessWidget {
             SizedBox(
               width: 34,
               child: Text(
-                time,
+                _time,
                 style: TextStyle(fontSize: 11.5, color: AppDesign.textLo),
               ),
             ),
