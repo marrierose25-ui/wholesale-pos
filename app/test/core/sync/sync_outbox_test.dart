@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:wholesale_pos_app/core/database/local_database.dart';
@@ -168,6 +170,55 @@ void main() {
       isTrue,
     );
   });
+
+  test(
+    'a cash movement push payload carries its proof photo to the cloud',
+    () async {
+      await db.delete('shifts');
+      await shiftRepository.openShift('user-1', 1000);
+      final shift = (await shiftRepository.getActiveShift())!;
+      final photo = base64Encode(utf8.encode('jpeg-bytes-here'));
+      await shiftRepository.addCashMovement(
+        shift.id,
+        'WITHDRAWAL',
+        500,
+        'bank drop',
+        userId: 'user-1',
+        photo: photo,
+      );
+
+      final entry = (await outbox.pending()).lastWhere(
+        (e) => e.entityType == SyncEntities.cashMovement,
+      );
+      final movement = entry.payload['cash_movement'] as Map;
+      // The proof lives as a BLOB in cash_movement_photos, not the row's empty
+      // TEXT column, so the push has to re-attach it — otherwise the PWA (and
+      // every other till) never sees an app-captured photo.
+      expect(movement['photo'], photo);
+    },
+  );
+
+  test(
+    'a cash movement push payload omits photo when none was attached',
+    () async {
+      await db.delete('shifts');
+      await shiftRepository.openShift('user-1', 1000);
+      final shift = (await shiftRepository.getActiveShift())!;
+      await shiftRepository.addCashMovement(
+        shift.id,
+        'DEPOSIT',
+        500,
+        'float top-up',
+        userId: 'user-1',
+      );
+
+      final entry = (await outbox.pending()).lastWhere(
+        (e) => e.entityType == SyncEntities.cashMovement,
+      );
+      final movement = entry.payload['cash_movement'] as Map;
+      expect(movement.containsKey('photo'), isFalse);
+    },
+  );
 
   test('SyncService with no backend leaves everything queued', () async {
     await saleRepository.saveSale(buildSale('sale-1'));

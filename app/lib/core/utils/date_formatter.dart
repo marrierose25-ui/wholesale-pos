@@ -14,7 +14,8 @@ library;
 /// and cloud rows (UTC '...Z' strings): `toUtc()` normalises either to UTC
 /// first, then the fixed +3 offset lands on the shop's clock. On a till that
 /// already runs on EAT this is an identity — the displayed time never shifts.
-DateTime toAddisAbabaTime(DateTime dt) => dt.toUtc().add(const Duration(hours: 3));
+DateTime toAddisAbabaTime(DateTime dt) =>
+    dt.toUtc().add(const Duration(hours: 3));
 
 /// '16:12' — the time-of-day part of [dt] on the Addis Ababa clock.
 String formatAddisTime(DateTime dt) {

@@ -1,9 +1,12 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:wholesale_pos_app/core/database/local_database.dart';
 import 'package:wholesale_pos_app/core/models/product.dart';
 import 'package:wholesale_pos_app/core/repositories/finance_repository.dart';
 import 'package:wholesale_pos_app/core/repositories/product_repository.dart';
+import 'package:wholesale_pos_app/core/repositories/shift_repository.dart';
 import 'package:wholesale_pos_app/core/repositories/user_repository.dart';
 import 'package:wholesale_pos_app/core/sync/sync_backend.dart';
 import 'package:wholesale_pos_app/core/sync/sync_outbox.dart';
@@ -76,6 +79,7 @@ Map<String, dynamic> cloudMovement({
   String id = 'mv-1',
   String? sourceEntry = 'entry-1',
   int amount = 10000,
+  String? photo,
 }) => {
   'id': id,
   'shift_id': 'shift-1',
@@ -85,6 +89,7 @@ Map<String, dynamic> cloudMovement({
   'reason': 'Collected from Alemu',
   'created_at': '2026-10-28T10:00:00+00:00',
   'source_finance_entry_id': sourceEntry,
+  'photo': ?photo,
 };
 
 void main() {
@@ -611,6 +616,34 @@ void main() {
         'entry-1',
         reason:
             'the tag has to survive the pull, or the next copy is a duplicate',
+      );
+    });
+
+    test('a pulled PWA proof photo is stored as a BLOB and read back', () async {
+      // A browser-recorded movement with a photo reaches this till over the
+      // pull feed (cash_movements select:'*'). It must land in the schema-16
+      // BLOB table so getCashMovements hands the ledger a base64 proof again —
+      // the PWA-to-app half of bidirectional photo sync.
+      final photo = base64Encode(utf8.encode('pwa-jpeg-bytes'));
+      await SyncPullApplier(db).apply(
+        pageOf('cash_movements', [
+          cloudMovement(id: 'pwa-mv', sourceEntry: null, photo: photo),
+        ]),
+      );
+
+      final blob = (await db.query(
+        'cash_movement_photos',
+        where: 'movement_id = ?',
+        whereArgs: ['pwa-mv'],
+      )).single;
+      expect(base64Encode(blob['jpeg_bytes'] as List<int>), photo);
+
+      final ledger = await SqfliteShiftRepository(db)
+          .getCashMovements(shiftId: 'shift-1');
+      expect(
+        ledger.firstWhere((m) => m.id == 'pwa-mv').photo,
+        photo,
+        reason: 'the app shows the photo the browser attached',
       );
     });
   });

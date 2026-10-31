@@ -545,14 +545,29 @@ class SqfliteShiftRepository implements ShiftRepository {
       limit: 1,
     );
     if (rows.isEmpty) return;
+    final movement = Map<String, Object?>.from(rows.first);
+    // The legacy TEXT column is empty under schema 16 — the proof lives as a
+    // BLOB in cash_movement_photos. Re-attach it here (base64, the shape the
+    // cloud row and the PWA expect) so an app-captured proof reaches the
+    // browser instead of being stranded on the till that recorded it.
+    final photos = await txn.query(
+      'cash_movement_photos',
+      columns: ['jpeg_bytes'],
+      where: 'movement_id = ?',
+      whereArgs: [movementId],
+      limit: 1,
+    );
+    final bytes = photos.isEmpty ? null : photos.first['jpeg_bytes'];
+    if (bytes is List<int> && bytes.isNotEmpty) {
+      movement['photo'] = base64Encode(bytes);
+    } else {
+      movement.remove('photo');
+    }
     await SyncOutbox.upsert(
       txn,
       entityType: SyncEntities.cashMovement,
       entityId: movementId,
-      payload: {
-        'cash_movement': (Map<String, Object?>.from(rows.first)
-          ..remove('photo')),
-      },
+      payload: {'cash_movement': movement},
     );
   }
 }
