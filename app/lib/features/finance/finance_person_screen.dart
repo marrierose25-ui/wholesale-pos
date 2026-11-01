@@ -426,6 +426,7 @@ class _EntryDialogState extends State<_EntryDialog> {
   late String _paymentMethod;
   String? _error;
   bool _isSaving = false;
+  int _step = 0;
 
   @override
   void initState() {
@@ -464,7 +465,7 @@ class _EntryDialogState extends State<_EntryDialog> {
     }
   }
 
-  void _submit() {
+  void _nextStep() {
     final source = _sourceController.text.trim();
     if (source.isEmpty) {
       setState(() => _error = 'A source is required (e.g., a bank name).');
@@ -475,6 +476,16 @@ class _EntryDialogState extends State<_EntryDialog> {
       setState(() => _error = 'Enter a valid amount in Br.');
       return;
     }
+    setState(() {
+      _error = null;
+      _step = 1;
+    });
+  }
+
+  void _submit() {
+    final source = _sourceController.text.trim();
+    final amount = MoneyUtils.stringToMinorUnits(_amountController.text);
+    if (source.isEmpty || amount == null || amount <= 0) return;
 
     setState(() => _isSaving = true);
     Navigator.of(context).pop({
@@ -489,106 +500,161 @@ class _EntryDialogState extends State<_EntryDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      // Tighter horizontal insets keep the dialog inside a phone's width.
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-      title: Text(widget.initial == null ? 'Add Entry' : 'Edit Entry'),
+      title: Text(
+        widget.initial == null
+            ? (_step == 0 ? 'Add Entry (1/2)' : 'Select Payment (2/2)')
+            : (_step == 0 ? 'Edit Entry (1/2)' : 'Select Payment (2/2)'),
+      ),
       content: ConstrainedBox(
-        // Cap at 420 on wide screens; shrink to the viewport on a phone so the
-        // fixed 420 never overflows a narrow width.
         constraints: const BoxConstraints(maxWidth: 420),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            TextField(
-              controller: _sourceController,
-              autofocus: widget.initial == null,
-              decoration: const InputDecoration(
-                labelText: 'Source (e.g., CBE Bank)',
+        child: _step == 0 ? _buildDetailsStep() : _buildPaymentStep(),
+      ),
+      actions: _step == 0
+          ? [
+              TextButton(
+                onPressed: _isSaving ? null : () => Navigator.of(context).pop(),
+                child: const Text('Cancel'),
               ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _amountController,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
+              FilledButton(onPressed: _nextStep, child: const Text('Next')),
+            ]
+          : [
+              TextButton(
+                onPressed: _isSaving ? null : () => setState(() => _step = 0),
+                child: const Text('Back'),
               ),
-              decoration: const InputDecoration(labelText: 'Amount (Br)'),
-            ),
-            const SizedBox(height: 12),
-            InkWell(
-              onTap: _pickDate,
-              borderRadius: BorderRadius.circular(6),
-              child: InputDecorator(
-                decoration: const InputDecoration(
-                  labelText: 'Date',
-                  suffixIcon: Icon(Icons.calendar_today, size: 18),
-                ),
-                child: Text(
-                  '${_selectedDate.year}-'
-                  '${_selectedDate.month.toString().padLeft(2, '0')}-'
-                  '${_selectedDate.day.toString().padLeft(2, '0')}',
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _descriptionController,
-              decoration: const InputDecoration(
-                labelText: 'Description / Notes (optional)',
-              ),
-            ),
-            const SizedBox(height: 12),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                'Payment Method',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Theme.of(context).textTheme.bodySmall?.color,
-                ),
-              ),
-            ),
-            const SizedBox(height: 6),
-            SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(
-                  value: 'CASH',
-                  label: Text('Cash'),
-                  icon: Icon(Icons.money),
-                ),
-                ButtonSegment(
-                  value: 'BANK',
-                  label: Text('Bank Transfer'),
-                  icon: Icon(Icons.account_balance),
-                ),
-              ],
-              selected: {_paymentMethod},
-              onSelectionChanged: (selection) =>
-                  setState(() => _paymentMethod = selection.first),
-            ),
-            const SizedBox(height: 8),
-            if (_paymentMethod == 'CASH')
-              Text(
-                'Cash collections are added to the register when marked taken.',
-                style: TextStyle(fontSize: 11, color: AppTheme.muted),
-              ),
-            if (_error != null) ...[
-              const SizedBox(height: 12),
-              Text(
-                _error!,
-                style: const TextStyle(color: AppTheme.danger, fontSize: 13),
+              FilledButton(
+                onPressed: _isSaving ? null : _submit,
+                child: _isSaving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Complete'),
               ),
             ],
+    );
+  }
+
+  Widget _buildDetailsStep() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          controller: _sourceController,
+          autofocus: widget.initial == null,
+          decoration: const InputDecoration(
+            labelText: 'Source (e.g., CBE Bank)',
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _amountController,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(labelText: 'Amount (Br)'),
+        ),
+        const SizedBox(height: 12),
+        InkWell(
+          onTap: _pickDate,
+          borderRadius: BorderRadius.circular(6),
+          child: InputDecorator(
+            decoration: const InputDecoration(
+              labelText: 'Date',
+              suffixIcon: Icon(Icons.calendar_today, size: 18),
+            ),
+            child: Text(
+              '${_selectedDate.year}-'
+              '${_selectedDate.month.toString().padLeft(2, '0')}-'
+              '${_selectedDate.day.toString().padLeft(2, '0')}',
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _descriptionController,
+          decoration: const InputDecoration(
+            labelText: 'Description / Notes (optional)',
+          ),
+        ),
+        if (_error != null) ...[
+          const SizedBox(height: 12),
+          Text(
+            _error!,
+            style: const TextStyle(color: AppTheme.danger, fontSize: 13),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildPaymentStep() {
+    final source = _sourceController.text.trim();
+    final amountStr = _amountController.text.trim();
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest
+                .withValues(alpha: 0.3),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Source: $source',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Amount: $amountStr Br',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 24),
+        const Text(
+          'How was this collected?',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final option in const <(String, String)>[
+              ('CASH', 'Cash'),
+              ('BANK', 'Bank Transfer'),
+            ])
+              ChoiceChip(
+                label: Text(option.$2),
+                selected: _paymentMethod == option.$1,
+                onSelected: (_) => setState(() {
+                  _paymentMethod = option.$1;
+                }),
+              ),
           ],
         ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: _isSaving ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(onPressed: _submit, child: const Text('Save')),
+        const SizedBox(height: 16),
+        if (_paymentMethod == 'CASH')
+          Text(
+            'Cash collections are added to the register when marked taken.',
+            style: TextStyle(fontSize: 12, color: AppTheme.muted),
+          ),
+        if (_error != null) ...[
+          const SizedBox(height: 12),
+          Text(
+            _error!,
+            style: const TextStyle(color: AppTheme.danger, fontSize: 13),
+          ),
+        ],
       ],
     );
   }
