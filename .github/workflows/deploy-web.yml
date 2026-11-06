@@ -64,6 +64,12 @@ jobs:
       # Pages production deploy: --branch=main makes this the production build
       # (any other branch would land as an immutable preview URL). Wrangler
       # authenticates from CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID in env.
+      #
+      # Retried because a Pages direct upload batches all files into a few large
+      # POSTs and a single socket/header timeout aborts the whole deploy with an
+      # opaque "Failed to upload files. Error: {}". The asset store is content-
+      # addressed, so a retry re-sends ONLY the files still missing and
+      # converges; a one-shot deploy intermittently left an empty (404) branch.
       - name: Deploy to Cloudflare Pages (production)
         shell: pwsh
         env:
@@ -72,7 +78,13 @@ jobs:
           if (-not $env:CLOUDFLARE_API_TOKEN) {
             throw "CLOUDFLARE_API_TOKEN secret is not set - add it under repo Settings > Secrets and variables > Actions."
           }
-          npx --yes wrangler@4 pages deploy build/web --project-name=$env:PAGES_PROJECT --branch=main --commit-dirty=true
+          $ok = $false
+          for ($attempt = 1; $attempt -le 5 -and -not $ok; $attempt++) {
+              if ($attempt -gt 1) { Write-Host "Retry $attempt - re-sending only the files still missing..." }
+              npx --yes wrangler@4 pages deploy build/web --project-name=$env:PAGES_PROJECT --branch=main --commit-dirty=true 2>&1 | Out-String | Write-Host
+              if ($LASTEXITCODE -eq 0) { $ok = $true } else { Write-Warning "Attempt $attempt failed (large-upload timeout is the usual cause); retrying." }
+          }
+          if (-not $ok) { throw "wrangler pages deploy failed after 5 attempts." }
 
       # Best-effort reachability probe of the stable domain: the upload already
       # committed the deployment, so only a genuine mis-point should 404 here.

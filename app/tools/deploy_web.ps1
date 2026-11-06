@@ -59,13 +59,23 @@ Set-Location $WebDir
 # 3. Upload to Cloudflare Pages. wrangler prints progress to stderr; relax
 #    ErrorActionPreference around the native call so PowerShell does not turn a
 #    benign stderr banner into a terminating NativeCommandError.
+#
+#    Retried (up to 5x): a Pages direct upload batches the files into a few
+#    large POSTs and a single socket/header timeout aborts the whole deploy with
+#    an opaque "Failed to upload files. Error: {}". The asset store is content-
+#    addressed, so each retry re-sends ONLY the still-missing files and the run
+#    converges; without the loop a flaky link leaves an empty (404) branch.
 Write-Host "Deploying to Cloudflare Pages ($ProjectName / branch $Branch)..."
 $ErrorActionPreference = 'Continue'
-npx --yes wrangler@4 pages deploy . --project-name=$ProjectName --branch=$Branch --commit-dirty=true 2>&1 | Out-String | Write-Host
-$exitCode = $LASTEXITCODE
+$ok = $false
+for ($attempt = 1; $attempt -le 5 -and -not $ok; $attempt++) {
+    if ($attempt -gt 1) { Write-Host "Retry $attempt - re-sending only the files still missing..." }
+    npx --yes wrangler@4 pages deploy . --project-name=$ProjectName --branch=$Branch --commit-dirty=true 2>&1 | Out-String | Write-Host
+    if ($LASTEXITCODE -eq 0) { $ok = $true } else { Write-Warning "Attempt $attempt failed (large-upload timeout is the usual cause); retrying." }
+}
 $ErrorActionPreference = 'Stop'
-if ($exitCode -ne 0) {
-    throw "wrangler pages deploy failed (exit $exitCode)."
+if (-not $ok) {
+    throw "wrangler pages deploy failed after 5 attempts."
 }
 
 # 4. Verify the public link actually serves the fresh build. Pages updates the
