@@ -37,6 +37,10 @@ supabase/supabase/.temp/
 # Vercel CLI temp working dir created by the web deploy script.
 app/.vercel-tmp/
 
+# Wrangler (Cloudflare Pages) local deploy cache — never commit.
+.wrangler/
+app/.wrangler/
+
 # Ad-hoc browser walkthrough screenshots (local verification artifacts).
 walkthrough_shots/
 /shots/

@@ -1,0 +1,90 @@
+name: Deploy Web (Cloudflare Pages)
+
+# Replaces the old Vercel publish path. Cloudflare Pages re-points the stable
+# production domain (https://aymen-pos.pages.dev) at the newest deploy of the
+# `main` branch on every upload, so there is none of the alias-drift-to-404
+# failure the hand-pinned *.vercel.app alias kept hitting (see deploy_web.ps1's
+# original rationale). Push to `main` -> automatic production deploy; the
+# `workflow_dispatch` trigger is the "on demand" button to redeploy whenever.
+#
+# ONE-TIME SETUP (GitHub -> repo Settings -> Secrets and variables -> Actions):
+#   * Secret  CLOUDFLARE_API_TOKEN  — a Cloudflare API token with the "Edit
+#       Cloudflare Pages" permission (create at dash.cloudflare.com/profile/api-tokens).
+#       The OAuth login wrangler uses locally is NOT usable in CI, so this token
+#       is the only credential the workflow needs.
+#   * The account id below is not secret (it is wrangler's own whoami output);
+#     if it ever changes, update CLOUDFLARE_ACCOUNT_ID here or add a repo variable.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # Never cancel a deploy mid-upload: two concurrent Pages uploads to the same
+  # branch can interleave and leave the branch on an indeterminate build.
+  group: deploy-web-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Build PWA + publish to Cloudflare Pages
+    runs-on: windows-latest
+    env:
+      CLOUDFLARE_ACCOUNT_ID: 649454cb5d6616042f888499d80b51b7
+      PAGES_PROJECT: aymen-pos
+    defaults:
+      run:
+        working-directory: ./app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      # The single source of truth for the shipped web bundle: it stamps the
+      # licensing/pos-api/sync dart-defines AND runs the post-build cleanliness
+      # check, so a build with a missing backend URL or a leaked license can
+      # never reach Cloudflare. Also copies app/web/_headers into build/web.
+      - name: Build web (PWA) with release defines
+        shell: pwsh
+        run: ./tools/build_release.ps1 web
+
+      # Pages production deploy: --branch=main makes this the production build
+      # (any other branch would land as an immutable preview URL). Wrangler
+      # authenticates from CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID in env.
+      - name: Deploy to Cloudflare Pages (production)
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if (-not $env:CLOUDFLARE_API_TOKEN) {
+            throw "CLOUDFLARE_API_TOKEN secret is not set - add it under repo Settings > Secrets and variables > Actions."
+          }
+          npx --yes wrangler@4 pages deploy build/web --project-name=$env:PAGES_PROJECT --branch=main --commit-dirty=true
+
+      # Best-effort reachability probe of the stable domain: the upload already
+      # committed the deployment, so only a genuine mis-point should 404 here.
+      # Transient 5xx during edge propagation is logged, not a hard failure.
+      - name: Verify production domain
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Start-Sleep -Seconds 5
+          try {
+            $r = Invoke-WebRequest -Uri "https://$env:PAGES_PROJECT.pages.dev/index.html" -UseBasicParsing -TimeoutSec 30
+            Write-Host "OK: https://$env:PAGES_PROJECT.pages.dev served HTTP $($r.StatusCode)."
+          } catch {
+            Write-Warning "Probe of https://$env:PAGES_PROJECT.pages.dev returned an error (may be edge propagation): $($_.Exception.Message)"
+          }

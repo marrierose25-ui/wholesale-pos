@@ -1,24 +1,31 @@
-# Wholesale POS - web/PWA deploy to Vercel.
+# Wholesale POS - web/PWA deploy to Cloudflare Pages.
 #
 # WHY THIS EXISTS
-#   `vercel deploy --prod` publishes a NEW immutable deployment and moves the
-#   project's built-in production domain, but it does NOT move a hand-created
-#   alias such as web-xi-seven-15.vercel.app. That alias stays pinned to the
-#   deployment it was first assigned; once Vercel ages that deployment out the
-#   domain starts returning 404 - which is exactly the recurring breakage we
-#   kept hitting. This script re-points the stable domain at the freshly built
-#   deployment every run, so the public link can never drift to a dead build.
+#   We left Vercel. Cloudflare Pages re-points the stable production domain
+#   (https://<project>.pages.dev) at the newest deploy of the `main` branch on
+#   every upload, so there is none of the alias-drift-to-404 failure the
+#   hand-pinned *.vercel.app alias kept hitting. This script is the LOCAL,
+#   on-demand path ("deploy when I order it"); the automatic path is the
+#   Deploy Web workflow (.github/workflows/deploy-web.yml) that fires on every
+#   push to main. Both build with tools/build_release.ps1 and upload build/web.
+#
+#   Needs wrangler installed and logged in locally (wrangler whoami): the upload
+#   authenticates with your stored OAuth session. CI uses an API token instead.
 #
 # Usage:
-#   powershell -File tools\deploy_web.ps1            # build web + deploy + pin alias
-#   powershell -File tools\deploy_web.ps1 -SkipBuild # redeploy current build/web
-#   powershell -File tools\deploy_web.ps1 -Domain web-marik3.vercel.app
+#   powershell -File tools\deploy_web.ps1                       # build web + deploy (production)
+#   powershell -File tools\deploy_web.ps1 -SkipBuild            # redeploy current build/web
+#   powershell -File tools\deploy_web.ps1 -ProjectName aymen-pos -Branch main
 
 param(
     [switch]$SkipBuild,
 
-    # The stable public domain to keep pointed at the latest build.
-    [string]$Domain = 'web-xi-seven-15.vercel.app'
+    # The Cloudflare Pages project to publish (its stable domain is
+    # https://<ProjectName>.pages.dev).
+    [string]$ProjectName = 'aymen-pos',
+
+    # 'main' => production deploy; any other value lands as an immutable preview.
+    [string]$Branch = 'main'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -35,47 +42,53 @@ $WebDir = Join-Path $AppDir 'build\web'
 if (-not (Test-Path (Join-Path $WebDir 'index.html'))) {
     throw "build\web\index.html not found - run without -SkipBuild first."
 }
+
+# 2. Defensive sweep: a previous Vercel run could have left a live credential
+#    (.env.local, its OIDC token) or Vercel-only files in the output folder.
+#    Pages would serve any of those PUBLICLY, so strip them before uploading.
+foreach ($junk in @('.vercel', '.env.local', 'vercel.json', '.gitignore', '.last_build_id')) {
+    $p = Join-Path $WebDir $junk
+    if (Test-Path $p) {
+        Write-Host "Removing non-deployable artifact from upload: $junk"
+        Remove-Item $p -Recurse -Force
+    }
+}
+
 Set-Location $WebDir
 
-# 2. Deploy to production and capture the new deployment URL from the
-#    "Production  https://..." line (org-agnostic; the alias line is excluded
-#    because it never carries the per-deployment hash form).
-Write-Host 'Deploying to Vercel production...'
-# The Vercel CLI prints its banner/progress to stderr. Under
-# $ErrorActionPreference='Stop' PowerShell turns that stderr into a terminating
-# NativeCommandError, so relax it just around the native vercel invocations and
-# capture both streams into a string we can parse.
+# 3. Upload to Cloudflare Pages. wrangler prints progress to stderr; relax
+#    ErrorActionPreference around the native call so PowerShell does not turn a
+#    benign stderr banner into a terminating NativeCommandError.
+Write-Host "Deploying to Cloudflare Pages ($ProjectName / branch $Branch)..."
 $ErrorActionPreference = 'Continue'
-$deployOut = (vercel deploy --prod --yes 2>&1) | Out-String
-$prodLine = ($deployOut -split "`r?`n" | Where-Object { $_ -match 'Production' } | Select-Object -First 1)
-$DeployUrl = [regex]::Match($prodLine, 'https://\S+\.vercel\.app').Value
-if (-not $DeployUrl) {
-    $ErrorActionPreference = 'Stop'
-    throw "Could not parse the new production deployment URL.`n$deployOut"
-}
-Write-Host "New deployment: $DeployUrl"
-
-# 3. Pin the stable domain to this deployment (the step --prod skips).
-Write-Host "Pinning $Domain -> $DeployUrl"
-vercel alias set $DeployUrl $Domain 2>&1 | Out-String | Write-Host
+npx --yes wrangler@4 pages deploy . --project-name=$ProjectName --branch=$Branch --commit-dirty=true 2>&1 | Out-String | Write-Host
+$exitCode = $LASTEXITCODE
 $ErrorActionPreference = 'Stop'
+if ($exitCode -ne 0) {
+    throw "wrangler pages deploy failed (exit $exitCode)."
+}
 
-# 4. Verify the public link actually serves the fresh build. HTTP 200 alone is
-#    not proof: a stalled `vercel deploy` leaves the alias on the previous
-#    deployment, which still answers 200 - with the OLD bundle. Compare the
-#    served bundle against the one just built, so a silent stale deploy fails
-#    loudly instead of shipping yesterday's code.
-Start-Sleep -Seconds 4
+# 4. Verify the public link actually serves the fresh build. Pages updates the
+#    branch domain almost immediately, but compare the served bundle against the
+#    one just built so a silent mis-point to an older deploy fails loudly.
+$Domain = "$ProjectName.pages.dev"
 $localBundle = Join-Path $WebDir 'main.dart.js'
 $localLen = (Get-Item $localBundle).Length
-try {
-    $probe = Invoke-WebRequest -Uri "https://$Domain/index.html" -UseBasicParsing -TimeoutSec 30
-    if ($probe.StatusCode -ne 200) { throw "HTTP $($probe.StatusCode)" }
-    $served = Invoke-WebRequest -Uri "https://$Domain/main.dart.js" -UseBasicParsing -TimeoutSec 180
-    if ($served.RawContentLength -ne $localLen) {
-        throw "main.dart.js is $($served.RawContentLength) bytes but the build is $localLen - the alias is still pointing at an older deployment."
+Write-Host "Verifying https://$Domain serves the new bundle ($localLen bytes)..."
+$max = 12
+for ($i = 1; $i -le $max; $i++) {
+    try {
+        $probe = Invoke-WebRequest -Uri "https://$Domain/index.html" -UseBasicParsing -TimeoutSec 30
+        if ($probe.StatusCode -eq 200) {
+            $served = Invoke-WebRequest -Uri "https://$Domain/main.dart.js" -UseBasicParsing -TimeoutSec 180
+            if ($served.RawContentLength -eq $localLen) {
+                Write-Host "OK: https://$Domain is live (HTTP $($probe.StatusCode), bundle $localLen bytes)." -ForegroundColor Green
+                return
+            }
+        }
+    } catch {
+        # Transient 5xx / propagation; retry below.
     }
-    Write-Host "OK: https://$Domain is live (HTTP $($probe.StatusCode), bundle $localLen bytes)." -ForegroundColor Green
-} catch {
-    throw "Verification failed for https://$Domain - $($_.Exception.Message)"
+    Start-Sleep -Seconds 5
 }
+throw "Verification failed for https://$Domain - served main.dart.js did not match the $localLen-byte build after $max attempts."
