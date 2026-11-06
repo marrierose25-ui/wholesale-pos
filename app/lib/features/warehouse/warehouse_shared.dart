@@ -52,7 +52,37 @@ class PicklistStatusChip extends StatelessWidget {
 
 /// Short, unambiguous local date stamp (dd/MM/yyyy) for a picklist row. No
 /// `intl` dependency — hand-formatted so it reads the same on every platform.
-String formatPicklistDate(DateTime dt) =>
-    '${dt.day.toString().padLeft(2, '0')}/'
-    '${dt.month.toString().padLeft(2, '0')}/'
-    '${dt.year}';
+/// Cloud rows can arrive in UTC, so the stamp is always converted to the
+/// device's local day first.
+String formatPicklistDate(DateTime dt) {
+  final local = dt.toLocal();
+  return '${local.day.toString().padLeft(2, '0')}/'
+      '${local.month.toString().padLeft(2, '0')}/'
+      '${local.year}';
+}
+
+/// Units offered in the shop's New Sale dialog. The warehouse list uses the
+/// same four so a shop worker can never invent a unit the warehouse does not
+/// recognise, and a picker sees the exact words the POS already uses.
+const List<String> kPicklistUnits = ['Karton', 'Kuntal', 'Derzen', 'Fre'];
+
+/// '6 November 2026' — the day heading used by Warehouse History, matching the
+/// Sales History drill-down.
+String formatPicklistDay(DateTime day) {
+  const months = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  final local = day.toLocal();
+  return '${local.day} ${months[local.month - 1]} ${local.year}';
+}

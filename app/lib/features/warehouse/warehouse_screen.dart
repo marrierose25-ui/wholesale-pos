@@ -6,13 +6,18 @@ import '../../core/repositories/picklist_repository.dart';
 import '../../core/theme/app_design.dart';
 import 'create_picklist_screen.dart';
 import 'picklist_detail_screen.dart';
+import 'warehouse_history_screen.dart';
 import 'warehouse_shared.dart';
 
-/// Directory of Warehouse Picklists — the landing screen for the Warehouse tab.
+/// The Warehouse tab's landing screen. Two clearly different jobs live here:
 ///
-/// Deliberately standalone: it reads only [PicklistRepository] (picklist tables
-/// + outbox) and never touches Sales, Register, or Finance. The layout borrows
-/// the Money Tracking overview so the look is consistent across the app.
+///  * the blue **New List** button (shop worker: add products and send the list
+///    to the warehouse), and
+///  * the list of **orders to fill** (warehouse worker: tap a customer, then
+///    tap TAKE on each product).
+///
+/// Finished lists drop out of the queue and live in [WarehouseHistoryScreen],
+/// so the picker's screen only ever shows work that is still open.
 class WarehouseScreen extends StatefulWidget {
   final PicklistRepository repository;
   final User currentUser;
@@ -79,6 +84,16 @@ class WarehouseScreenState extends State<WarehouseScreen> {
     }
   }
 
+  Future<void> _openHistory() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (context) =>
+            WarehouseHistoryScreen(repository: widget.repository),
+      ),
+    );
+    refresh(silent: true);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -86,66 +101,125 @@ class WarehouseScreenState extends State<WarehouseScreen> {
       appBar: AppBar(
         title: const Text('Warehouse'),
         actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: refresh),
-          const SizedBox(width: 8),
+          TextButton.icon(
+            onPressed: _openHistory,
+            icon: const Icon(Icons.history, size: 19),
+            label: const Text('History'),
+            style: TextButton.styleFrom(foregroundColor: AppDesign.textHi),
+          ),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: 'Refresh',
+            onPressed: refresh,
+          ),
+          const SizedBox(width: 4),
         ],
       ),
       body: AppBackground(
-        child: FutureBuilder<List<Picklist>>(
-          future: _future,
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            if (snapshot.hasError) {
-              final message = (snapshot.error?.toString() ?? '').replaceAll(
-                'Exception: ',
-                '',
-              );
-              return Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      message.isEmpty ? 'Could not load picklists.' : message,
-                    ),
-                    const SizedBox(height: 8),
-                    TextButton(onPressed: refresh, child: const Text('Retry')),
-                  ],
-                ),
-              );
-            }
-            final picklists = snapshot.data ?? const <Picklist>[];
-            if (picklists.isEmpty) {
-              return Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(32),
-                  child: Text(
-                    'No picklists yet. Create one to start fulfilling '
-                    'customer orders.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Theme.of(context).textTheme.bodySmall?.color,
-                    ),
-                  ),
-                ),
-              );
-            }
-            return ListView(
-              padding: const EdgeInsets.all(24),
-              children: [for (final p in picklists) _buildPicklistCard(p)],
-            );
-          },
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+              child: _NewListButton(onTap: _createPicklist),
+            ),
+            Expanded(
+              child: FutureBuilder<List<Picklist>>(
+                future: _future,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (snapshot.hasError) {
+                    final message = (snapshot.error?.toString() ?? '')
+                        .replaceAll('Exception: ', '');
+                    return Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            message.isEmpty ? 'Could not load lists.' : message,
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 8),
+                          TextButton(
+                            onPressed: refresh,
+                            child: const Text('Retry'),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+                  final open = (snapshot.data ?? const <Picklist>[])
+                      .where((p) => !p.isCompleted)
+                      .toList();
+                  return _buildQueue(open);
+                },
+              ),
+            ),
+          ],
         ),
       ),
-      // Only owners / warehouse staff ever reach this screen (the tab is gated
-      // behind the `warehouse` tick), so the create action is offered to
-      // everyone who can open it.
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _createPicklist,
-        icon: const Icon(Icons.add),
-        label: const Text('New Picklist'),
-      ),
+    );
+  }
+
+  Widget _buildQueue(List<Picklist> open) {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Lists to fill',
+                style: TextStyle(
+                  color: AppDesign.textHi,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.2,
+                ),
+              ),
+            ),
+            Text(
+              '${open.length}',
+              style: TextStyle(
+                color: AppDesign.textLo,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        if (open.isEmpty)
+          GlassCard(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 26),
+            child: Column(
+              children: [
+                Icon(
+                  Icons.inventory_2_outlined,
+                  size: 34,
+                  color: AppDesign.textFaint,
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  'No lists to fill.',
+                  style: TextStyle(
+                    color: AppDesign.textHi,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'New lists appear here.',
+                  style: TextStyle(color: AppDesign.textLo, fontSize: 12.5),
+                ),
+              ],
+            ),
+          )
+        else
+          for (final picklist in open) _buildPicklistCard(picklist),
+      ],
     );
   }
 
@@ -155,10 +229,16 @@ class WarehouseScreenState extends State<WarehouseScreen> {
       padding: const EdgeInsets.only(bottom: 10),
       child: GlassCard(
         padding: EdgeInsets.zero,
+        radius: AppDesign.radiusCardSm,
+        onTap: () => _openPicklist(picklist),
         child: ListTile(
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 14,
+            vertical: 6,
+          ),
           leading: Container(
-            width: 40,
-            height: 40,
+            width: 44,
+            height: 44,
             decoration: const BoxDecoration(
               shape: BoxShape.circle,
               gradient: AppDesign.buttonGradient,
@@ -169,18 +249,109 @@ class WarehouseScreenState extends State<WarehouseScreen> {
                 style: const TextStyle(
                   color: AppDesign.onBlue,
                   fontWeight: FontWeight.w700,
-                  fontSize: 14,
+                  fontSize: 16,
                 ),
               ),
             ),
           ),
           title: Text(
             name,
-            style: const TextStyle(fontWeight: FontWeight.w600),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 17),
           ),
-          subtitle: Text(formatPicklistDate(picklist.createdAt)),
-          trailing: PicklistStatusChip(status: picklist.status),
-          onTap: () => _openPicklist(picklist),
+          subtitle: Text(
+            'Tap to fill',
+            style: TextStyle(color: AppDesign.textLo, fontSize: 12.5),
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              PicklistStatusChip(status: picklist.status),
+              const SizedBox(width: 2),
+              Icon(
+                Icons.chevron_right_rounded,
+                color: AppDesign.textFaint,
+                size: 22,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The shop worker's one action: a wide blue card that opens the New List form.
+class _NewListButton extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _NewListButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppDesign.radiusCardSm),
+        child: Ink(
+          decoration: BoxDecoration(
+            gradient: AppDesign.buttonGradient,
+            borderRadius: BorderRadius.circular(AppDesign.radiusCardSm),
+            boxShadow: [AppDesign.blueGlow(alpha: 0.28)],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            child: Row(
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: AppDesign.onBlue.withValues(alpha: 0.18),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.add,
+                    color: AppDesign.onBlue,
+                    size: 26,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: const [
+                      Text(
+                        'NEW LIST',
+                        style: TextStyle(
+                          color: AppDesign.onBlue,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        'Send products to the warehouse',
+                        style: TextStyle(
+                          color: AppDesign.onBlue,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  color: AppDesign.onBlue,
+                  size: 24,
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );

@@ -13,7 +13,7 @@ import '../utils/app_logger.dart';
 
 class LocalDatabase {
   static const String databaseName = 'wholesale_pos.db';
-  static const int schemaVersion = 20;
+  static const int schemaVersion = 21;
   static const String deviceIdFileName = 'device_id.txt';
   static const String themeSettingKey = 'theme_mode';
 
@@ -570,6 +570,42 @@ class LocalDatabase {
         'ON picklist_items(picklist_id)',
       );
     }
+    if (oldVersion < 21) {
+      // Warehouse Picklist upgrade: line pricing (unit, unit price, computed
+      // line total) so a picklist can carry a value, and a reusable customer
+      // directory so the create form can pick a saved customer instead of
+      // retyping it. Purely additive — the existing picklist rows keep working
+      // with the defaulted zero/null pricing, and nothing here touches Sales /
+      // Shifts / Finance.
+      final itemCols = await db.rawQuery('PRAGMA table_info(picklist_items)');
+      if (!itemCols.any((column) => column['name'] == 'unit')) {
+        await db.execute('ALTER TABLE picklist_items ADD COLUMN unit TEXT');
+      }
+      if (!itemCols.any(
+        (column) => column['name'] == 'unit_price_minor_units',
+      )) {
+        await db.execute(
+          'ALTER TABLE picklist_items ADD COLUMN unit_price_minor_units '
+          'INTEGER NOT NULL DEFAULT 0',
+        );
+      }
+      if (!itemCols.any(
+        (column) => column['name'] == 'line_total_minor_units',
+      )) {
+        await db.execute(
+          'ALTER TABLE picklist_items ADD COLUMN line_total_minor_units '
+          'INTEGER NOT NULL DEFAULT 0',
+        );
+      }
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS picklist_customers (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          phone TEXT,
+          created_at TEXT NOT NULL
+        )
+      ''');
+    }
   }
 
   /// Proof photos are BLOBs in their own table (schema 16), one per movement.
@@ -946,8 +982,23 @@ class LocalDatabase {
         product_name TEXT NOT NULL,
         requested_qty INTEGER NOT NULL,
         taken_qty INTEGER NOT NULL DEFAULT 0,
+        unit TEXT,
+        unit_price_minor_units INTEGER NOT NULL DEFAULT 0,
+        line_total_minor_units INTEGER NOT NULL DEFAULT 0,
         updated_at TEXT NOT NULL,
         FOREIGN KEY(picklist_id) REFERENCES picklists(id) ON DELETE CASCADE
+      )
+    ''');
+
+    // Reusable customer directory for the Warehouse create form (schema 21).
+    // Independent of the ledger customers/users tables — it only names who a
+    // picklist is for, so it never touches Sales or Finance.
+    batch.execute('''
+      CREATE TABLE picklist_customers (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        phone TEXT,
+        created_at TEXT NOT NULL
       )
     ''');
 

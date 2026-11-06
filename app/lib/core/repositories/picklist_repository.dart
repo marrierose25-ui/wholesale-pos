@@ -1,6 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 
 import '../models/picklist.dart';
+import '../models/picklist_customer.dart';
 import '../models/picklist_item.dart';
 import '../sync/sync_outbox.dart';
 import '../sync/sync_outbox_entry.dart';
@@ -36,6 +37,17 @@ abstract class PicklistRepository {
     String picklistId,
     List<PicklistItem> updatedItems,
   );
+
+  /// The saved customer directory (schema 21), newest-typed names first.
+  Future<List<PicklistCustomer>> getCustomers();
+
+  /// Persists a new directory entry. Throws when the name is blank.
+  Future<void> addCustomer(PicklistCustomer customer);
+
+  /// Toggles one line fully-taken / untouched and re-derives the header status.
+  /// [isTaken] sets `taken_qty` to the line's `requested_qty` (or back to 0),
+  /// so a single tap fulfills a whole line — the auto-save checkbox path.
+  Future<void> toggleItemTaken(String picklistId, String itemId, bool isTaken);
 }
 
 /// SQLite implementation of [PicklistRepository] for the native tills. Every
@@ -171,6 +183,91 @@ class SqflitePicklistRepository implements PicklistRepository {
     if (items.every((i) => i.isFulfilled)) return Picklist.statusCompleted;
     if (items.every((i) => i.takenQty <= 0)) return Picklist.statusPending;
     return Picklist.statusPartial;
+  }
+
+  // ------------------------------------------------------------------
+  // Customer directory + auto-save toggle (schema 21)
+  // ------------------------------------------------------------------
+
+  @override
+  Future<List<PicklistCustomer>> getCustomers() async {
+    final maps = await _db.query(
+      'picklist_customers',
+      orderBy: 'name COLLATE NOCASE ASC',
+    );
+    return maps.map(PicklistCustomer.fromMap).toList();
+  }
+
+  @override
+  Future<void> addCustomer(PicklistCustomer customer) async {
+    final name = customer.name.trim();
+    if (name.isEmpty) {
+      throw Exception('A customer name is required.');
+    }
+    // The directory is a plain local lookup: it rides no sync outbox and never
+    // touches the ledger customers/users tables.
+    await _db.insert('picklist_customers', customer.toMap());
+  }
+
+  /// One-tap fulfillment: set the line's taken qty to its requested qty (or 0),
+  /// then re-derive the parent status. Mirrors [updateItemQuantities]'s freeze
+  /// on a COMPLETED list so closed history can never be reopened by a stray tap.
+  @override
+  Future<void> toggleItemTaken(
+    String picklistId,
+    String itemId,
+    bool isTaken,
+  ) async {
+    await _db.transaction((txn) async {
+      final headerRows = await txn.query(
+        'picklists',
+        columns: ['status'],
+        where: 'id = ?',
+        whereArgs: [picklistId],
+        limit: 1,
+      );
+      if (headerRows.isEmpty) throw Exception('Picklist not found.');
+      if (headerRows.first['status'] == Picklist.statusCompleted) {
+        throw Exception('A completed picklist can no longer be edited.');
+      }
+
+      final itemRows = await txn.query(
+        'picklist_items',
+        where: 'id = ? AND picklist_id = ?',
+        whereArgs: [itemId, picklistId],
+        limit: 1,
+      );
+      if (itemRows.isEmpty) throw Exception('Item not found.');
+      final requested = (itemRows.first['requested_qty'] as num?)?.toInt() ?? 0;
+
+      final now = DateTime.now();
+      final nowText = now.toIso8601String();
+      await txn.update(
+        'picklist_items',
+        {'taken_qty': isTaken ? requested : 0, 'updated_at': nowText},
+        where: 'id = ? AND picklist_id = ?',
+        whereArgs: [itemId, picklistId],
+      );
+      await _enqueueItem(txn, itemId);
+
+      // Re-read the whole line set so the header status reflects every item,
+      // not just the one tapped.
+      final allRows = await txn.query(
+        'picklist_items',
+        where: 'picklist_id = ?',
+        whereArgs: [picklistId],
+      );
+      final newStatus = _deriveStatus(
+        allRows.map(PicklistItem.fromMap).toList(),
+      );
+      await txn.update(
+        'picklists',
+        {'status': newStatus, 'updated_at': nowText},
+        where: 'id = ?',
+        whereArgs: [picklistId],
+      );
+      await _enqueuePicklist(txn, picklistId);
+    });
   }
 
   // ------------------------------------------------------------------

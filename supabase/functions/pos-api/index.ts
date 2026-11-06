@@ -128,6 +128,8 @@ const ACTION_FEATURES: Record<string, string[]> = {
   // when the owner grants it, mirroring the native repository's own gate.
   list_picklists: ['warehouse'], get_picklist_items: ['warehouse'],
   create_picklist: ['warehouse'], update_picklist_items: ['warehouse'],
+  get_customers: ['warehouse'], add_customer: ['warehouse'],
+  toggle_picklist_item: ['warehouse'],
   // History. search_sales is also needed by the Register History day drill-down
   // (which sales brought cash in that day), so register_history unlocks it too.
   search_sales: ['history', 'register_history'],
@@ -261,6 +263,9 @@ Deno.serve(async (req) => {
       case 'get_picklist_items': return await getPicklistItems(db, ctx, body);
       case 'create_picklist': return await createPicklist(db, ctx, body);
       case 'update_picklist_items': return await updatePicklistItems(db, ctx, body);
+      case 'get_customers': return await getCustomers(db, ctx, body);
+      case 'add_customer': return await addCustomer(db, ctx, body);
+      case 'toggle_picklist_item': return await togglePicklistItem(db, ctx, body);
 
       // Counters, reporting, audit. There is no client-writable key/value
       // surface: tenant settings are server-owned (audit 2 #4).
@@ -1682,10 +1687,17 @@ async function createPicklist(db: any, ctx: Ctx, body: any): Promise<Response> {
       await db.from('picklists').delete().eq('customer_id', ctx.customerId).eq('id', id);
       return json({ ok: false, error: 'Requested quantity must be a positive whole number.' }, 400);
     }
+    // Pricing is a display hint only (never a ledger write). The unit price is
+    // taken in minor units; the line total is recomputed server-side as
+    // price * requested so a crafted body can't post a value that disagrees
+    // with its own quantity.
+    const unit = str(raw.unit) || null;
+    const unitPrice = Math.max(0, Number.isInteger(Number(raw.unit_price_minor_units)) ? Number(raw.unit_price_minor_units) : 0);
     itemRows.push({
       id: str(raw.id) || crypto.randomUUID(),
       customer_id: ctx.customerId, picklist_id: id, product_name: productName,
       requested_qty: requested, taken_qty: Math.max(0, Number(raw.taken_qty ?? 0) || 0),
+      unit, unit_price_minor_units: unitPrice, line_total_minor_units: unitPrice * requested,
       updated_at: now,
     });
   }
@@ -1741,6 +1753,80 @@ async function updatePicklistItems(db: any, ctx: Ctx, body: any): Promise<Respon
   if (upHeader.error) throw new Error(upHeader.error.message);
 
   await audit(db, ctx.customerId, ctx.userId, 'PICKLIST_UPDATED', `Picklist ${picklistId} progress saved (status ${status}).`);
+  return json({ ok: true, status });
+}
+
+// The saved customer directory (schema 21). Names only label a picklist; this
+// table never joins the ledger, so reads/writes are carved to the tenant and
+// nothing here can reach Sales or Finance.
+async function getCustomers(db: any, ctx: Ctx, _body: any): Promise<Response> {
+  const { data, error } = await db.from('picklist_customers').select('*')
+    .eq('customer_id', ctx.customerId)
+    .order('name')
+    .limit(pageLimit(_body));
+  if (error) throw new Error(error.message);
+  return json({ ok: true, customers: strip(data) });
+}
+
+async function addCustomer(db: any, ctx: Ctx, body: any): Promise<Response> {
+  const cust = body.customer ?? {};
+  const name = str(cust.name);
+  if (!name) return json({ ok: false, error: 'A customer name is required.' }, 400);
+  const phone = str(cust.phone) || null;
+  const id = str(cust.id) || crypto.randomUUID();
+  const now = new Date().toISOString();
+  // Ownership is server-authoritative; a client-supplied customer_id is dropped.
+  const { error } = await db.from('picklist_customers').insert({
+    id, customer_id: ctx.customerId, name, phone, created_at: now,
+  });
+  if (error) {
+    if (/duplicate key|unique/i.test(error.message)) {
+      return json({ ok: false, error: 'That customer already exists.' }, 409);
+    }
+    throw new Error(error.message);
+  }
+  return json({ ok: true, id });
+}
+
+// One-tap fulfillment: set a line's taken qty to its requested qty (or 0), then
+// re-derive the parent status. Mirrors the native toggleItemTaken transaction
+// and its COMPLETED freeze, so the PWA checkbox behaves exactly like the till.
+async function togglePicklistItem(db: any, ctx: Ctx, body: any): Promise<Response> {
+  const picklistId = str(body.picklist_id);
+  const itemId = str(body.item_id);
+  const isTaken = body.is_taken === true;
+  if (!picklistId || !itemId) return json({ ok: false, error: 'Picklist not found.' }, 404);
+
+  const { data: header, error: headErr } = await db.from('picklists')
+    .select('id, status').eq('customer_id', ctx.customerId).eq('id', picklistId).maybeSingle();
+  if (headErr) throw new Error(headErr.message);
+  if (!header) return json({ ok: false, error: 'Picklist not found.' }, 404);
+  if (header.status === 'COMPLETED') {
+    return json({ ok: false, error: 'A completed picklist can no longer be edited.' }, 409);
+  }
+
+  const { data: item, error: itemErr } = await db.from('picklist_items')
+    .select('id, requested_qty').eq('customer_id', ctx.customerId)
+    .eq('picklist_id', picklistId).eq('id', itemId).maybeSingle();
+  if (itemErr) throw new Error(itemErr.message);
+  if (!item) return json({ ok: false, error: 'Item not found.' }, 404);
+
+  const now = new Date().toISOString();
+  const taken = isTaken ? Number(item.requested_qty ?? 0) : 0;
+  const up = await db.from('picklist_items').update({ taken_qty: taken, updated_at: now })
+    .eq('customer_id', ctx.customerId).eq('picklist_id', picklistId).eq('id', itemId);
+  if (up.error) throw new Error(up.error.message);
+
+  const { data: itemRows, error: itemsErr } = await db.from('picklist_items')
+    .select('requested_qty, taken_qty').eq('customer_id', ctx.customerId).eq('picklist_id', picklistId);
+  if (itemsErr) throw new Error(itemsErr.message);
+  const status = derivePicklistStatus(itemRows ?? []);
+
+  const upHeader = await db.from('picklists').update({ status, updated_at: now })
+    .eq('customer_id', ctx.customerId).eq('id', picklistId);
+  if (upHeader.error) throw new Error(upHeader.error.message);
+
+  await audit(db, ctx.customerId, ctx.userId, 'PICKLIST_UPDATED', `Picklist ${picklistId} item ${itemId} toggled (status ${status}).`);
   return json({ ok: true, status });
 }
 

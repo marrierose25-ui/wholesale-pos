@@ -1,4 +1,5 @@
 import '../models/picklist.dart';
+import '../models/picklist_customer.dart';
 import '../models/picklist_item.dart';
 import '../repositories/picklist_repository.dart';
 import 'cloud_api_client.dart';
@@ -69,6 +70,35 @@ class CloudPicklistRepository implements PicklistRepository {
         for (final item in updatedItems)
           {'id': item.id, 'taken_qty': item.takenQty},
       ],
+    });
+  }
+
+  @override
+  Future<List<PicklistCustomer>> getCustomers() async {
+    final json = await _api.call('get_customers', const {});
+    final rows = json['customers'];
+    if (rows is! List) return const [];
+    return rows
+        .whereType<Map<String, dynamic>>()
+        .map(PicklistCustomer.fromMap)
+        .toList();
+  }
+
+  @override
+  Future<void> addCustomer(PicklistCustomer customer) async {
+    await _api.call('add_customer', {'customer': customer.toMap()});
+  }
+
+  @override
+  Future<void> toggleItemTaken(
+    String picklistId,
+    String itemId,
+    bool isTaken,
+  ) async {
+    await _api.call('toggle_picklist_item', {
+      'picklist_id': picklistId,
+      'item_id': itemId,
+      'is_taken': isTaken,
     });
   }
 }
