@@ -17,6 +17,11 @@ class FeatureDef {
   final bool ownerOnly;
 
   const FeatureDef(this.key, this.label, this.icon, {this.ownerOnly = false});
+
+  /// Warehouse Picklists (Digital Fulfillment). Named as a constant so the
+  /// Dart nav filter, the cloud `pos-api` FEATURE_KEYS set, and any code that
+  /// checks `User.can('warehouse')` agree on one spelling.
+  static const String warehouse = 'warehouse';
 }
 
 /// Ordered exactly as the navigation renders them. Settings is deliberately
@@ -30,6 +35,10 @@ const List<FeatureDef> kFeatures = [
   // Tickable, but deliberately absent from [kDefaultStaffPermissions]: the
   // owner hands out this area one account at a time, never as a default.
   FeatureDef('finance', 'Money Tracking', Icons.account_balance_wallet),
+  // Independent fulfillment feature (Warehouse Picklists). Ticked per account
+  // like any other staff surface; deliberately not a default, so an upgrade
+  // never hands a cashier a tab they did not have before.
+  FeatureDef(FeatureDef.warehouse, 'Warehouse', Icons.inventory_2),
   FeatureDef('reports', 'Reports', Icons.bar_chart),
   FeatureDef('users', 'Users', Icons.people),
   FeatureDef('audit', 'Audit Logs', Icons.security),

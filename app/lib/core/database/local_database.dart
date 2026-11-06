@@ -13,7 +13,7 @@ import '../utils/app_logger.dart';
 
 class LocalDatabase {
   static const String databaseName = 'wholesale_pos.db';
-  static const int schemaVersion = 19;
+  static const int schemaVersion = 20;
   static const String deviceIdFileName = 'device_id.txt';
   static const String themeSettingKey = 'theme_mode';
 
@@ -537,6 +537,39 @@ class LocalDatabase {
         'UPDATE users SET updated_at = created_at WHERE updated_at IS NULL',
       );
     }
+    if (oldVersion < 20) {
+      // Warehouse Picklists (Digital Fulfillment): an independent feature with
+      // its own tables. A picklist header is created against a customer name
+      // and its line items are ticked up as warehouse workers take stock, so
+      // both tables are mutable and carry an `updated_at` the sync compares.
+      // Kept entirely separate from Sales/Shifts/Finance — nothing here points
+      // at those tables and they point at nothing here.
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS picklists (
+          id TEXT PRIMARY KEY,
+          customer_name TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'PENDING',
+          created_by TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+      ''');
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS picklist_items (
+          id TEXT PRIMARY KEY,
+          picklist_id TEXT NOT NULL,
+          product_name TEXT NOT NULL,
+          requested_qty INTEGER NOT NULL,
+          taken_qty INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(picklist_id) REFERENCES picklists(id) ON DELETE CASCADE
+        )
+      ''');
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS picklist_items_picklist_id '
+        'ON picklist_items(picklist_id)',
+      );
+    }
   }
 
   /// Proof photos are BLOBs in their own table (schema 16), one per movement.
@@ -891,6 +924,30 @@ class LocalDatabase {
         FOREIGN KEY(sale_id) REFERENCES sales(id),
         FOREIGN KEY(requested_by) REFERENCES users(id),
         FOREIGN KEY(decided_by) REFERENCES users(id)
+      )
+    ''');
+
+    // Warehouse Picklists (schema 20): independent of Sales/Shifts/Finance.
+    batch.execute('''
+      CREATE TABLE picklists (
+        id TEXT PRIMARY KEY,
+        customer_name TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE picklist_items (
+        id TEXT PRIMARY KEY,
+        picklist_id TEXT NOT NULL,
+        product_name TEXT NOT NULL,
+        requested_qty INTEGER NOT NULL,
+        taken_qty INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(picklist_id) REFERENCES picklists(id) ON DELETE CASCADE
       )
     ''');
 

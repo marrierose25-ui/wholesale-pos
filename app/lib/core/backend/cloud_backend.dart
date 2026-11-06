@@ -6,12 +6,14 @@ import 'package:uuid/uuid.dart';
 import '../auth/session_store.dart';
 import '../cloud/cloud_api_client.dart';
 import '../cloud/cloud_finance_repository.dart';
+import '../cloud/cloud_picklist_repository.dart';
 import '../cloud/cloud_product_repository.dart';
 import '../cloud/cloud_sale_repository.dart';
 import '../cloud/cloud_shift_repository.dart';
 import '../cloud/cloud_user_repository.dart';
 import '../models/user.dart';
 import '../repositories/finance_repository.dart';
+import '../repositories/picklist_repository.dart';
 import '../repositories/product_repository.dart';
 import '../repositories/sale_repository.dart';
 import '../repositories/shift_repository.dart';
@@ -42,6 +44,7 @@ class CloudBackend extends AppBackend {
   late final CloudSaleRepository _sales = CloudSaleRepository(_api);
   late final CloudShiftRepository _shifts = CloudShiftRepository(_api);
   late final CloudFinanceRepository _finance = CloudFinanceRepository(_api);
+  late final CloudPicklistRepository _picklists = CloudPicklistRepository(_api);
   late final WebSessionStore _session = WebSessionStore(_api);
   late final String _deviceId = _resolveDeviceId();
 
@@ -71,6 +74,8 @@ class CloudBackend extends AppBackend {
   ShiftRepository get shifts => _shifts;
   @override
   FinanceRepository get finance => _finance;
+  @override
+  PicklistRepository? get picklists => _picklists;
   @override
   SessionStore get session => _session;
   @override

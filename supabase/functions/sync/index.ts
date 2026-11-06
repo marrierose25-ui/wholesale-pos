@@ -103,6 +103,10 @@ const PULL_TABLES: Record<string, { from: string; select: string }> = {
       'id, category_id, source, amount_minor_units, description, status, entry_date, ' +
       'created_at, created_by, completed_at, completed_by, updated_at, payment_method, received_at',
   },
+  // Warehouse Picklists (Digital Fulfillment): independent of the ledger, so
+  // their own mirror tables read straight through with no column masking.
+  picklists: { from: 'picklists', select: '*' },
+  picklist_items: { from: 'picklist_items', select: '*' },
 };
 const TABLES = Object.keys(PULL_TABLES);
 
@@ -127,6 +131,10 @@ const ENTITY_ALIAS: Record<string, string> = {
   finance_category: 'finance_category',
   finance_entries: 'finance_entry',
   finance_entry: 'finance_entry',
+  picklists: 'picklist',
+  picklist: 'picklist',
+  picklist_items: 'picklist_item',
+  picklist_item: 'picklist_item',
 };
 
 // Master data, i.e. everything a shop EDITS after creating. A ledger row is
@@ -141,6 +149,10 @@ const MUTABLE_ENTITIES = new Set([
   'product',
   'finance_category',
   'finance_entry',
+  // A picklist's status and its items' taken quantities change as workers tick
+  // stock, so a later edit must replace the earlier mirror copy, not freeze.
+  'picklist',
+  'picklist_item',
 ]);
 
 // Max outbox entries accepted in one push batch (abuse guard).

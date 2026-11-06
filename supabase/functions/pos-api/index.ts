@@ -73,7 +73,7 @@ const CASHIER = 'CASHIER';
 // app/lib/core/auth/features.dart. A staff account's `permissions` column stores
 // a subset of these; the OWNER account bypasses them entirely.
 const FEATURE_KEYS = new Set([
-  'dashboard', 'pos', 'register', 'finance', 'history', 'reports',
+  'dashboard', 'pos', 'register', 'finance', 'warehouse', 'history', 'reports',
   'users', 'audit', 'register_history',
 ]);
 
@@ -123,6 +123,11 @@ const ACTION_FEATURES: Record<string, string[]> = {
   finance_add_entry: ['finance'], finance_update_entry: ['finance'],
   finance_mark_completed: ['finance'], finance_search_entries: ['finance'],
   finance_person_totals: ['finance'],
+  // Warehouse picklists: one tickable feature, all of it. Every picklist action
+  // requires the `warehouse` tick so a staff account reaches fulfillment only
+  // when the owner grants it, mirroring the native repository's own gate.
+  list_picklists: ['warehouse'], get_picklist_items: ['warehouse'],
+  create_picklist: ['warehouse'], update_picklist_items: ['warehouse'],
   // History. search_sales is also needed by the Register History day drill-down
   // (which sales brought cash in that day), so register_history unlocks it too.
   search_sales: ['history', 'register_history'],
@@ -250,6 +255,12 @@ Deno.serve(async (req) => {
       case 'finance_mark_completed': return await financeMarkCompleted(db, ctx, body);
       case 'finance_search_entries': return await financeSearchEntries(db, ctx, body);
       case 'finance_person_totals': return await financePersonTotals(db, ctx, body);
+
+      // Warehouse picklists (guarded by the `warehouse` tick above).
+      case 'list_picklists': return await listPicklists(db, ctx, body);
+      case 'get_picklist_items': return await getPicklistItems(db, ctx, body);
+      case 'create_picklist': return await createPicklist(db, ctx, body);
+      case 'update_picklist_items': return await updatePicklistItems(db, ctx, body);
 
       // Counters, reporting, audit. There is no client-writable key/value
       // surface: tenant settings are server-owned (audit 2 #4).
@@ -1583,6 +1594,154 @@ async function categoryNames(db: any, ctx: Ctx): Promise<Record<string, string>>
   const map: Record<string, string> = {};
   for (const c of data ?? []) map[c.id] = c.name;
   return map;
+}
+
+// ===========================================================================
+// Warehouse Picklists (Digital Fulfillment)
+//
+// Independent of the ledger: these touch only the `picklists` / `picklist_items`
+// tables, never sales / shifts / cash / finance. Every action is gated on the
+// `warehouse` tick above, and reads/writes are always carved to the verified
+// tenant (`ctx.customerId`) so one shop can never read or write another's
+// fulfillment. Client-supplied UUIDs are kept as identity so a header created
+// here lands with the same id the Warehouse tablets pull down.
+// ===========================================================================
+
+// Status re-derived from the full item set, mirroring the native
+// SqflitePicklistRepository: all lines fulfilled -> COMPLETED, none taken ->
+// PENDING, anything in between -> PARTIAL.
+function derivePicklistStatus(items: any[]): string {
+  const takenOf = (i: any) => Number(i.taken_qty ?? 0);
+  const requestedOf = (i: any) => Number(i.requested_qty ?? 0);
+  if (items.every((i) => takenOf(i) >= requestedOf(i))) return 'COMPLETED';
+  if (items.every((i) => takenOf(i) <= 0)) return 'PENDING';
+  return 'PARTIAL';
+}
+
+async function listPicklists(db: any, ctx: Ctx, body: any): Promise<Response> {
+  let q = db.from('picklists').select('*')
+    .eq('customer_id', ctx.customerId)
+    .order('created_at', { ascending: false })
+    .limit(pageLimit(body));
+  if (body.status && body.status !== 'ALL') q = q.eq('status', body.status);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return json({ ok: true, picklists: strip(data) });
+}
+
+async function getPicklistItems(db: any, ctx: Ctx, body: any): Promise<Response> {
+  const picklistId = String(body.picklist_id ?? '');
+  if (!picklistId) return json({ ok: false, error: 'Picklist not found.' }, 404);
+  // Stable order (product name) so the fulfillment screen matches native.
+  const { data, error } = await db.from('picklist_items').select('*')
+    .eq('customer_id', ctx.customerId).eq('picklist_id', picklistId)
+    .order('product_name');
+  if (error) throw new Error(error.message);
+  return json({ ok: true, items: strip(data) });
+}
+
+async function createPicklist(db: any, ctx: Ctx, body: any): Promise<Response> {
+  const header = body.picklist ?? {};
+  const items = Array.isArray(body.items) ? body.items : [];
+  const id = str(header.id);
+  const customerName = str(header.customer_name);
+  if (!id) return json({ ok: false, error: 'Missing picklist id.' }, 400);
+  if (!customerName) return json({ ok: false, error: 'A customer name is required.' }, 400);
+  if (items.length === 0) return json({ ok: false, error: 'A picklist needs at least one item.' }, 400);
+
+  const now = new Date().toISOString();
+  // Ownership + created_by are server-authoritative; the body's created_by /
+  // customer_id are ignored so a crafted call cannot mis-attribute the header.
+  const headerRow = {
+    id, customer_id: ctx.customerId, customer_name: customerName,
+    // A brand-new picklist always starts unfulfilled; status is re-derived on
+    // update, so any client-supplied status is ignored here.
+    status: 'PENDING',
+    created_by: ctx.userId, created_at: now, updated_at: now,
+  };
+  const { error: headErr } = await db.from('picklists').insert(headerRow);
+  if (headErr) {
+    if (/duplicate key|unique/i.test(headErr.message)) {
+      return json({ ok: false, error: 'A picklist with that id already exists.' }, 409);
+    }
+    throw new Error(headErr.message);
+  }
+
+  // Validate + normalise every line before the one atomic batch insert. The
+  // picklist_id is forced to this header so a stray child id can never point a
+  // line at another picklist.
+  const itemRows: any[] = [];
+  for (const raw of items) {
+    const productName = str(raw.product_name);
+    const requested = Number(raw.requested_qty ?? 0);
+    if (!productName) {
+      await db.from('picklists').delete().eq('customer_id', ctx.customerId).eq('id', id);
+      return json({ ok: false, error: 'Every item needs a product name.' }, 400);
+    }
+    if (!Number.isInteger(requested) || requested <= 0) {
+      await db.from('picklists').delete().eq('customer_id', ctx.customerId).eq('id', id);
+      return json({ ok: false, error: 'Requested quantity must be a positive whole number.' }, 400);
+    }
+    itemRows.push({
+      id: str(raw.id) || crypto.randomUUID(),
+      customer_id: ctx.customerId, picklist_id: id, product_name: productName,
+      requested_qty: requested, taken_qty: Math.max(0, Number(raw.taken_qty ?? 0) || 0),
+      updated_at: now,
+    });
+  }
+  // One insert of the whole array is a single PostgREST statement (all rows or
+  // none). If it still fails, the header is removed so no orphan is left behind
+  // — the closest we get to a transaction without a dedicated RPC.
+  const { error: itemsErr } = await db.from('picklist_items').insert(itemRows);
+  if (itemsErr) {
+    await db.from('picklists').delete().eq('customer_id', ctx.customerId).eq('id', id);
+    throw new Error(itemsErr.message);
+  }
+  await audit(db, ctx.customerId, ctx.userId, 'PICKLIST_CREATED', `Picklist for "${customerName}" (${itemRows.length} items).`);
+  return json({ ok: true, id });
+}
+
+async function updatePicklistItems(db: any, ctx: Ctx, body: any): Promise<Response> {
+  const picklistId = String(body.picklist_id ?? '');
+  const updates = Array.isArray(body.items) ? body.items : [];
+  if (!picklistId) return json({ ok: false, error: 'Picklist not found.' }, 404);
+
+  const { data: header, error: headErr } = await db.from('picklists')
+    .select('id, status').eq('customer_id', ctx.customerId).eq('id', picklistId).maybeSingle();
+  if (headErr) throw new Error(headErr.message);
+  if (!header) return json({ ok: false, error: 'Picklist not found.' }, 404);
+  if (header.status === 'COMPLETED') {
+    return json({ ok: false, error: 'A completed picklist can no longer be edited.' }, 409);
+  }
+
+  const now = new Date().toISOString();
+  for (const raw of updates) {
+    const itemId = str(raw.id);
+    if (!itemId) continue;
+    const taken = Number(raw.taken_qty ?? 0);
+    if (!Number.isInteger(taken) || taken < 0) {
+      return json({ ok: false, error: 'Taken quantity must be a non-negative whole number.' }, 400);
+    }
+    // Scoped by tenant AND parent picklist so an id from another list/tenant is
+    // a no-op rather than a cross-list write.
+    const up = await db.from('picklist_items').update({ taken_qty: taken, updated_at: now })
+      .eq('customer_id', ctx.customerId).eq('picklist_id', picklistId).eq('id', itemId);
+    if (up.error) throw new Error(up.error.message);
+  }
+
+  // Re-read the whole line set (not just the edited subset) to re-derive status,
+  // exactly like the native repository's progress pass.
+  const { data: itemRows, error: itemsErr } = await db.from('picklist_items')
+    .select('requested_qty, taken_qty').eq('customer_id', ctx.customerId).eq('picklist_id', picklistId);
+  if (itemsErr) throw new Error(itemsErr.message);
+  const status = derivePicklistStatus(itemRows ?? []);
+
+  const upHeader = await db.from('picklists').update({ status, updated_at: now })
+    .eq('customer_id', ctx.customerId).eq('id', picklistId);
+  if (upHeader.error) throw new Error(upHeader.error.message);
+
+  await audit(db, ctx.customerId, ctx.userId, 'PICKLIST_UPDATED', `Picklist ${picklistId} progress saved (status ${status}).`);
+  return json({ ok: true, status });
 }
 
 // ===========================================================================

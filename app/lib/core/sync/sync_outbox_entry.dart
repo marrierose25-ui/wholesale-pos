@@ -68,6 +68,8 @@ abstract final class SyncEntities {
   static const String product = 'product';
   static const String financeCategory = 'finance_category';
   static const String financeEntry = 'finance_entry';
+  static const String picklist = 'picklist';
+  static const String picklistItem = 'picklist_item';
 
   /// Master data: the newest payload wins, so a later edit of the same id must
   /// replace what is already staged rather than be dropped as a duplicate.
@@ -76,6 +78,10 @@ abstract final class SyncEntities {
     product,
     financeCategory,
     financeEntry,
+    // A picklist's status and its items' taken quantities change over time as
+    // warehouse workers tick stock off, so both are re-staged on every edit.
+    picklist,
+    picklistItem,
   };
 
   /// Payload key each entity type is filed under, so the gateway and the
@@ -89,6 +95,8 @@ abstract final class SyncEntities {
     product: 'product',
     financeCategory: 'finance_category',
     financeEntry: 'finance_entry',
+    picklist: 'picklist',
+    picklistItem: 'picklist_item',
   };
 }
 

@@ -14,6 +14,7 @@ import 'core/licensing/device_fingerprint.dart';
 import 'core/licensing/license_validator.dart';
 import 'core/models/user.dart';
 import 'core/repositories/finance_repository.dart';
+import 'core/repositories/picklist_repository.dart';
 import 'core/repositories/product_repository.dart';
 import 'core/repositories/sale_repository.dart';
 import 'core/repositories/shift_repository.dart';
@@ -38,6 +39,7 @@ import 'features/reports/reports_screen.dart';
 import 'features/sales/sales_screen.dart';
 import 'features/settings/settings_screen.dart';
 import 'features/users/user_management_screen.dart';
+import 'features/warehouse/warehouse_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -658,6 +660,15 @@ class _MainLayoutState extends State<MainLayout> {
   final GlobalKey<FinanceOverviewScreenState> _financeKey =
       GlobalKey<FinanceOverviewScreenState>();
 
+  /// Warehouse tab handle + its SQLite repository. Constructed lazily from the
+  /// shared [widget.db]; the feature is independent, so it only ever touches the
+  /// picklist tables and the sync outbox.
+  final GlobalKey<WarehouseScreenState> _warehouseKey =
+      GlobalKey<WarehouseScreenState>();
+  late final PicklistRepository _picklistRepository = SqflitePicklistRepository(
+    widget.db,
+  );
+
   /// Silent background refreshes so every data screen shows the latest
   /// figures. Each loader is guarded by its GlobalKey, so a screen the account
   /// can't open (null currentState) is simply skipped.
@@ -667,6 +678,7 @@ class _MainLayoutState extends State<MainLayout> {
     _reportsKey.currentState?.loadReports();
     _salesKey.currentState?.loadShift();
     _financeKey.currentState?.load(silent: true);
+    _warehouseKey.currentState?.refresh(silent: true);
   }
 
   /// This till just wrote something the rest of the shop has to hear about.
@@ -687,6 +699,8 @@ class _MainLayoutState extends State<MainLayout> {
         _registerKey.currentState?.loadData(silent: silent);
       case 'finance':
         _financeKey.currentState?.load(silent: silent);
+      case 'warehouse':
+        _warehouseKey.currentState?.refresh(silent: silent);
       case 'reports':
         _reportsKey.currentState?.loadReports();
     }
@@ -764,6 +778,18 @@ class _MainLayoutState extends State<MainLayout> {
         key: _financeKey,
         financeRepository: widget.financeRepository,
         currentUser: user,
+      ),
+    );
+    // Warehouse Picklists: independent of Sales/Register/Finance. The `add`
+    // helper already hides the tab unless the account holds the `warehouse`
+    // tick (owner always passes), so a cashier never sees it.
+    add(
+      FeatureDef.warehouse,
+      WarehouseScreen(
+        key: _warehouseKey,
+        repository: _picklistRepository,
+        currentUser: user,
+        onDataChanged: _wakeSync,
       ),
     );
     add(

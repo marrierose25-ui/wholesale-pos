@@ -27,6 +27,12 @@ class SyncApplyReport {
   final int products;
   final int financeCategories;
   final int financeEntries;
+
+  /// Warehouse Picklists (Digital Fulfillment). Counted separately from the
+  /// ledger because, like master data, a re-applied edit is a normal steady
+  /// state rather than a new transaction.
+  final int picklists;
+  final int picklistItems;
   final int skipped;
 
   const SyncApplyReport({
@@ -40,6 +46,8 @@ class SyncApplyReport {
     this.products = 0,
     this.financeCategories = 0,
     this.financeEntries = 0,
+    this.picklists = 0,
+    this.picklistItems = 0,
     this.skipped = 0,
   });
 
@@ -55,7 +63,9 @@ class SyncApplyReport {
       devices +
       products +
       financeCategories +
-      financeEntries;
+      financeEntries +
+      picklists +
+      picklistItems;
 
   SyncApplyReport operator +(SyncApplyReport other) => SyncApplyReport(
     sales: sales + other.sales,
@@ -68,6 +78,8 @@ class SyncApplyReport {
     products: products + other.products,
     financeCategories: financeCategories + other.financeCategories,
     financeEntries: financeEntries + other.financeEntries,
+    picklists: picklists + other.picklists,
+    picklistItems: picklistItems + other.picklistItems,
     skipped: skipped + other.skipped,
   );
 
@@ -79,6 +91,7 @@ class SyncApplyReport {
       'cash: $cashMovements, voids: $voidRequests, users: $users, '
       'devices: $devices, products: $products, '
       'persons: $financeCategories, entries: $financeEntries, '
+      'picklists: $picklists, picklistItems: $picklistItems, '
       'skipped: $skipped)';
 }
 
@@ -136,6 +149,8 @@ class SyncPullApplier {
         products = 0,
         persons = 0,
         entries = 0,
+        picklists = 0,
+        picklistItems = 0,
         skipped = 0;
 
     await db.transaction((txn) async {
@@ -150,6 +165,17 @@ class SyncPullApplier {
       persons = await _applyFinanceCategories(
         txn,
         page.changes['finance_categories'] ?? const [],
+      );
+      // Warehouse Picklists land here: independent of the ledger, but the
+      // header must exist before its items point at it (the local FK on
+      // `picklist_items.picklist_id` rejects an orphan).
+      picklists = await _applyPicklists(
+        txn,
+        page.changes['picklists'] ?? const [],
+      );
+      picklistItems = await _applyPicklistItems(
+        txn,
+        page.changes['picklist_items'] ?? const [],
       );
       devices = await _ensureDevices(txn, page.changes);
       shifts = await _applyShifts(txn, page.changes['shifts'] ?? const []);
@@ -190,6 +216,8 @@ class SyncPullApplier {
       products: products,
       financeCategories: persons,
       financeEntries: entries,
+      picklists: picklists,
+      picklistItems: picklistItems,
       skipped: skipped,
     );
   }
@@ -1034,6 +1062,113 @@ class SyncPullApplier {
     return count;
   }
 
+  // Warehouse Picklists: mutable master-style rows, applied newest-wins, exactly
+  // like saved names and money persons. A picklist header and its items are
+  // edited from whichever surface is nearest (a worker ticking stock), so the
+  // copy that is simply older loses; `updated_at` decides, and an entity this
+  // device has not finished uploading is left alone.
+
+  Future<int> _applyPicklists(
+    Transaction txn,
+    List<Map<String, dynamic>> rows,
+  ) async {
+    var count = 0;
+    for (final row in rows) {
+      final id = _str(row['id']);
+      if (id == null || id.isEmpty) continue;
+      final customerName = _str(row['customer_name']);
+      if (customerName == null || customerName.isEmpty) continue;
+      final values = <String, Object?>{
+        'id': id,
+        'customer_name': customerName,
+        'status': _str(row['status']) ?? 'PENDING',
+        'created_by': _str(row['created_by']) ?? '',
+        'created_at': _localIso(row['created_at']) ?? _nowIso(),
+        'updated_at': _localIso(row['updated_at']) ?? _nowIso(),
+      };
+
+      if (!await _exists(txn, 'picklists', id)) {
+        count += await _insert(txn, 'picklists', values);
+        continue;
+      }
+      if (await _hasPending(txn, 'picklist', id)) continue;
+      final local = await txn.query(
+        'picklists',
+        columns: const ['updated_at'],
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (local.isEmpty ||
+          !_outdated(local.first['updated_at'], values['updated_at'])) {
+        continue;
+      }
+      await _safely(txn, () async {
+        await txn.update('picklists', values, where: 'id = ?', whereArgs: [id]);
+      });
+      count++;
+    }
+    return count;
+  }
+
+  Future<int> _applyPicklistItems(
+    Transaction txn,
+    List<Map<String, dynamic>> rows,
+  ) async {
+    var count = 0;
+    for (final row in rows) {
+      final id = _str(row['id']);
+      if (id == null || id.isEmpty) continue;
+      final productName = _str(row['product_name']);
+      if (productName == null || productName.isEmpty) continue;
+      // `picklist_id` is a NOT NULL foreign key. [CloudSyncPuller.tableOrder]
+      // walks `picklists` before this table, so a parent the cloud published
+      // has already landed; one that has not is skipped, not invented, and
+      // arrives on a later tick once the header does.
+      final picklistId = _str(row['picklist_id']);
+      if (picklistId == null ||
+          picklistId.isEmpty ||
+          !await _exists(txn, 'picklists', picklistId)) {
+        continue;
+      }
+      final values = <String, Object?>{
+        'id': id,
+        'picklist_id': picklistId,
+        'product_name': productName,
+        'requested_qty': _int(row['requested_qty']),
+        'taken_qty': _int(row['taken_qty']),
+        'updated_at': _localIso(row['updated_at']) ?? _nowIso(),
+      };
+
+      if (!await _exists(txn, 'picklist_items', id)) {
+        count += await _insert(txn, 'picklist_items', values);
+        continue;
+      }
+      if (await _hasPending(txn, 'picklist_item', id)) continue;
+      final local = await txn.query(
+        'picklist_items',
+        columns: const ['updated_at'],
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (local.isEmpty ||
+          !_outdated(local.first['updated_at'], values['updated_at'])) {
+        continue;
+      }
+      await _safely(txn, () async {
+        await txn.update(
+          'picklist_items',
+          values,
+          where: 'id = ?',
+          whereArgs: [id],
+        );
+      });
+      count++;
+    }
+    return count;
+  }
+
   /// True when the row already here was last touched at or before [incoming],
   /// so the incoming copy is the newer one. Both sides are the local naive ISO
   /// form ([_localIso] has already converted the cloud's `timestamptz`), which
@@ -1180,6 +1315,8 @@ class CloudSyncPuller {
   static const List<String> tableOrder = [
     'users',
     'products',
+    'picklists',
+    'picklist_items',
     'shifts',
     'sales',
     'sale_items',

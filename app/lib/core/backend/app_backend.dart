@@ -3,6 +3,7 @@ import 'package:flutter/widgets.dart';
 import '../auth/session_store.dart';
 import '../models/user.dart';
 import '../repositories/finance_repository.dart';
+import '../repositories/picklist_repository.dart';
 import '../repositories/product_repository.dart';
 import '../repositories/sale_repository.dart';
 import '../repositories/shift_repository.dart';
@@ -28,6 +29,13 @@ abstract class AppBackend {
   UserRepository get users;
   ShiftRepository get shifts;
   FinanceRepository get finance;
+
+  /// Warehouse Picklists (Digital Fulfillment). Null by default: the browser
+  /// build reads everything through `pos-api`, which has no picklist endpoints,
+  /// so the web shell simply does not render the Warehouse tab. A native /
+  /// SQLite-backed seam would supply a real repository here. Keeping it null is
+  /// the deliberate isolation that guarantees picklists can never reach Sales.
+  PicklistRepository? get picklists => null;
 
   /// Persists the opaque "stay signed in" session.
   SessionStore get session;

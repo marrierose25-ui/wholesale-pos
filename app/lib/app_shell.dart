@@ -20,6 +20,7 @@ import 'features/sales/sale_item.dart';
 import 'features/sales/sales_screen.dart';
 import 'features/users/user_management_screen.dart';
 import 'features/audit/audit_log_screen.dart';
+import 'features/warehouse/warehouse_screen.dart';
 
 /// The adaptive, storage-agnostic application shell shared by the native and
 /// web builds. It owns only theming + the auth gate + the navigation layout;
@@ -267,6 +268,12 @@ class _MainScaffoldState extends State<MainScaffold>
   final GlobalKey<FinanceOverviewScreenState> _financeKey =
       GlobalKey<FinanceOverviewScreenState>();
 
+  /// Warehouse tab handle. Only mounted when the seam supplies a repository
+  /// (native); the browser build leaves it null, so this GlobalKey's
+  /// currentState is always null there and every hook below is a no-op.
+  final GlobalKey<WarehouseScreenState> _warehouseKey =
+      GlobalKey<WarehouseScreenState>();
+
   /// Drives the quick fade-in that plays whenever a tab becomes visible.
   late final AnimationController _tabFadeController = AnimationController(
     vsync: this,
@@ -356,6 +363,7 @@ class _MainScaffoldState extends State<MainScaffold>
     _salesKey.currentState?.loadShift();
     _registerKey.currentState?.loadData(silent: true);
     _financeKey.currentState?.load(silent: true);
+    _warehouseKey.currentState?.refresh(silent: true);
     _reportsKey.currentState?.loadReports();
   }
 
@@ -372,6 +380,8 @@ class _MainScaffoldState extends State<MainScaffold>
         _registerKey.currentState?.loadData(silent: silent);
       case 'finance':
         _financeKey.currentState?.load(silent: silent);
+      case 'warehouse':
+        _warehouseKey.currentState?.refresh(silent: silent);
       case 'reports':
         _reportsKey.currentState?.loadReports();
     }
@@ -449,6 +459,21 @@ class _MainScaffoldState extends State<MainScaffold>
         currentUser: user,
       ),
     );
+    // Warehouse Picklists. Only rendered when the seam has a repository; the
+    // pos-api web build returns null, so this tab never appears in the browser
+    // and can never surface alongside Sales. `add` additionally hides it for
+    // any account lacking the `warehouse` tick, so a cashier never sees it.
+    final picklists = backend.picklists;
+    if (picklists != null) {
+      add(
+        FeatureDef.warehouse,
+        WarehouseScreen(
+          key: _warehouseKey,
+          repository: picklists,
+          currentUser: user,
+        ),
+      );
+    }
     add(
       'reports',
       ReportsScreen(
