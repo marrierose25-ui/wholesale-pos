@@ -780,18 +780,26 @@ class _MainLayoutState extends State<MainLayout> {
         currentUser: user,
       ),
     );
-    // Warehouse Picklists: independent of Sales/Register/Finance. The `add`
-    // helper already hides the tab unless the account holds the `warehouse`
-    // tick (owner always passes), so a cashier never sees it.
-    add(
-      FeatureDef.warehouse,
-      WarehouseScreen(
-        key: _warehouseKey,
-        repository: _picklistRepository,
-        currentUser: user,
-        onDataChanged: _wakeSync,
-      ),
-    );
+    // Warehouse Picklists: independent of Sales/Register/Finance. Shown when
+    // the account holds either warehouse tick (create or fill); the screen
+    // renders only the job that account is allowed to do, owner sees both.
+    if (user.can(FeatureDef.warehouse) ||
+        user.can(FeatureDef.warehouseFill)) {
+      final def = kFeatures.firstWhere((f) => f.key == FeatureDef.warehouse);
+      entries.add(
+        _ShellDestination(
+          FeatureDef.warehouse,
+          def.label,
+          def.icon,
+          WarehouseScreen(
+            key: _warehouseKey,
+            repository: _picklistRepository,
+            currentUser: user,
+            onDataChanged: _wakeSync,
+          ),
+        ),
+      );
+    }
     add(
       'reports',
       ReportsScreen(

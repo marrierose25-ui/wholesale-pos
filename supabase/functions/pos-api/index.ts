@@ -73,7 +73,7 @@ const CASHIER = 'CASHIER';
 // app/lib/core/auth/features.dart. A staff account's `permissions` column stores
 // a subset of these; the OWNER account bypasses them entirely.
 const FEATURE_KEYS = new Set([
-  'dashboard', 'pos', 'register', 'finance', 'warehouse', 'history', 'reports',
+  'dashboard', 'pos', 'register', 'finance', 'warehouse', 'warehouse_fill', 'history', 'reports',
   'users', 'audit', 'register_history',
 ]);
 
@@ -123,13 +123,15 @@ const ACTION_FEATURES: Record<string, string[]> = {
   finance_add_entry: ['finance'], finance_update_entry: ['finance'],
   finance_mark_completed: ['finance'], finance_search_entries: ['finance'],
   finance_person_totals: ['finance'],
-  // Warehouse picklists: one tickable feature, all of it. Every picklist action
-  // requires the `warehouse` tick so a staff account reaches fulfillment only
-  // when the owner grants it, mirroring the native repository's own gate.
-  list_picklists: ['warehouse'], get_picklist_items: ['warehouse'],
+  // Warehouse picklists: two separate ticks. `warehouse` is the shop worker
+  // creating lists and customers; `warehouse_fill` is the picker reading the
+  // queue and ticking items off. Both may read the queue and toggle taken
+  // quantities, but only `warehouse` may create.
+  list_picklists: ['warehouse', 'warehouse_fill'],
+  get_picklist_items: ['warehouse', 'warehouse_fill'],
   create_picklist: ['warehouse'], update_picklist_items: ['warehouse'],
   get_customers: ['warehouse'], add_customer: ['warehouse'],
-  toggle_picklist_item: ['warehouse'],
+  toggle_picklist_item: ['warehouse', 'warehouse_fill'],
   // History. search_sales is also needed by the Register History day drill-down
   // (which sales brought cash in that day), so register_history unlocks it too.
   search_sales: ['history', 'register_history'],
@@ -200,7 +202,15 @@ Deno.serve(async (req) => {
     // Per-device identity for shift/receipt operations (audit D1). Optional:
     // empty -> NULL so the shared perpetual shift still matches.
     const deviceId = str(body.device_id) || null;
-    const ctx = { customerId: session.customerId, userId: session.userId, role: actor.role, deviceId };
+    const ctx = {
+      customerId: session.customerId,
+      userId: session.userId,
+      role: actor.role,
+      // A fill-only worker must not receive list prices over the wire, not just
+      // hide them in the UI. Owners and shop creators keep the money fields.
+      canSeePicklistMoney: actor.role === OWNER || actor.permissions.includes('warehouse'),
+      deviceId,
+    };
 
     switch (action) {
       // Auth-adjacent
@@ -1606,10 +1616,11 @@ async function categoryNames(db: any, ctx: Ctx): Promise<Record<string, string>>
 //
 // Independent of the ledger: these touch only the `picklists` / `picklist_items`
 // tables, never sales / shifts / cash / finance. Every action is gated on the
-// `warehouse` tick above, and reads/writes are always carved to the verified
-// tenant (`ctx.customerId`) so one shop can never read or write another's
-// fulfillment. Client-supplied UUIDs are kept as identity so a header created
-// here lands with the same id the Warehouse tablets pull down.
+// `warehouse` or `warehouse_fill` tick above, and reads/writes are always
+// carved to the verified tenant (`ctx.customerId`) so one shop can never read
+// or write another's fulfillment. Client-supplied UUIDs are kept as identity
+// so a header created here lands with the same id the Warehouse tablets pull
+// down.
 // ===========================================================================
 
 // Status re-derived from the full item set, mirroring the native
@@ -1642,7 +1653,16 @@ async function getPicklistItems(db: any, ctx: Ctx, body: any): Promise<Response>
     .eq('customer_id', ctx.customerId).eq('picklist_id', picklistId)
     .order('product_name');
   if (error) throw new Error(error.message);
-  return json({ ok: true, items: strip(data) });
+  const items = strip(data);
+  // Fill-only workers get quantities, never money: drop the price columns so
+  // they are absent from the wire, not merely hidden in the widget tree.
+  if (!ctx.canSeePicklistMoney) {
+    for (const item of items) {
+      delete item.unit_price_minor_units;
+      delete item.line_total_minor_units;
+    }
+  }
+  return json({ ok: true, items });
 }
 
 async function createPicklist(db: any, ctx: Ctx, body: any): Promise<Response> {
@@ -1988,7 +2008,13 @@ async function hmac(data: string): Promise<string> {
 // ===========================================================================
 // Small shared helpers
 // ===========================================================================
-type Ctx = { customerId: string; userId: string; role: string; deviceId: string | null };
+type Ctx = {
+  customerId: string;
+  userId: string;
+  role: string;
+  canSeePicklistMoney: boolean;
+  deviceId: string | null;
+};
 
 // Stamps ownership + defaults; strips any client-supplied customer_id so a
 // crafted body can never target another tenant.

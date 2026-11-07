@@ -292,8 +292,6 @@ class _CreatePicklistScreenState extends State<CreatePicklistScreen> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
             children: [
-              _buildIntro(),
-              const SizedBox(height: 16),
               _buildCustomerSection(),
               const SizedBox(height: 22),
               _buildItemsHeader(),
@@ -332,30 +330,6 @@ class _CreatePicklistScreenState extends State<CreatePicklistScreen> {
         ),
       ),
       bottomNavigationBar: _buildFooter(),
-    );
-  }
-
-  Widget _buildIntro() {
-    return Row(
-      children: [
-        const IconChip(
-          icon: Icons.send_outlined,
-          size: 40,
-          color: AppDesign.blue,
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Text(
-            'Add the products this customer needs, then send the list to the '
-            'warehouse.',
-            style: TextStyle(
-              color: AppDesign.textLo,
-              fontSize: 13.5,
-              height: 1.35,
-            ),
-          ),
-        ),
-      ],
     );
   }
 

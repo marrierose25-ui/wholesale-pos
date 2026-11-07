@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:wholesale_pos_app/core/auth/features.dart';
 import 'package:wholesale_pos_app/core/models/picklist.dart';
 import 'package:wholesale_pos_app/core/models/picklist_customer.dart';
 import 'package:wholesale_pos_app/core/models/picklist_item.dart';
@@ -12,10 +13,10 @@ import 'package:wholesale_pos_app/features/warehouse/warehouse_history_screen.da
 import 'package:wholesale_pos_app/features/warehouse/warehouse_screen.dart';
 
 // Layout and behaviour guard for the redesigned Warehouse flow: the shop
-// worker's New List form, the warehouse worker's TAKE screen, the landing
-// split between "new" and "to fill", and the date -> customer -> taken
-// history drill-down. Renders at a real phone width and a desktop width and
-// fails on any RenderFlex overflow.
+// worker's New List form, the warehouse worker's tick-box fill screen, the
+// permission split between "new" and "to fill", and the date -> customer ->
+// taken history drill-down. Renders at a real phone width and a desktop width
+// and fails on any RenderFlex overflow.
 class _FakeRepo implements PicklistRepository {
   _FakeRepo({
     this.customers = const [],
@@ -114,6 +115,15 @@ User _user() => User(
   passwordHash: 'x',
   salt: 'y',
   role: 'OWNER',
+);
+
+User _staff(List<String> permissions) => User(
+  id: 'u2',
+  username: 'staff',
+  passwordHash: 'x',
+  salt: 'y',
+  role: 'CASHIER',
+  permissions: permissions,
 );
 
 Future<void> _pump(WidgetTester tester, Widget home, Size size) async {
@@ -253,7 +263,7 @@ void main() {
     expect(line.lineTotalMinorUnits, 22750);
   });
 
-  testWidgets('completed pick shows TAKEN with no money at phone width', (
+  testWidgets('completed list shows ticked boxes and hides money', (
     tester,
   ) async {
     final repo = _FakeRepo(items: [_item(taken: 5)]);
@@ -269,15 +279,15 @@ void main() {
 
     expect(find.text('DONE — this list is finished.'), findsOneWidget);
     expect(find.text('All items taken'), findsOneWidget);
-    expect(find.text('5 Karton'), findsOneWidget);
-    expect(find.text('TAKEN'), findsOneWidget);
-    expect(find.text('TAKE'), findsNothing);
+    expect(find.text('5 Karton requested'), findsOneWidget);
+    expect(tester.widget<Checkbox>(find.byType(Checkbox)).value, isTrue);
+    expect(find.text('Taken'), findsOneWidget);
     expect(find.textContaining('Br'), findsNothing);
 
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('warehouse worker taps TAKE and the pick auto-saves', (
+  testWidgets('warehouse worker ticks a box and the pick auto-saves', (
     tester,
   ) async {
     final repo = _FakeRepo(items: [_item()]);
@@ -288,21 +298,43 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 300));
 
-    expect(find.text('TAKE'), findsOneWidget);
+    expect(find.text('5 Karton requested'), findsOneWidget);
+    expect(tester.widget<Checkbox>(find.byType(Checkbox)).value, isFalse);
     expect(find.textContaining('Br'), findsNothing);
-    await tester.tap(find.text('TAKE'));
+
+    await tester.tap(find.byType(Checkbox));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(repo.toggled, isTrue);
-    expect(find.text('TAKEN'), findsOneWidget);
+    expect(tester.widget<Checkbox>(find.byType(Checkbox)).value, isTrue);
     expect(find.text('DONE — this list is finished.'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('landing separates New List from the queue and hides finished', (
-    tester,
-  ) async {
+  testWidgets('shop worker sees only the New List screen', (tester) async {
+    final repo = _FakeRepo(
+      picklists: [_picklist(id: 'p1', customer: 'Open Order')],
+    );
+    await _pump(
+      tester,
+      WarehouseScreen(
+        repository: repo,
+        currentUser: _staff([FeatureDef.warehouse]),
+      ),
+      const Size(390, 844),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('New List'), findsOneWidget);
+    expect(find.text('NEW LIST'), findsOneWidget);
+    expect(find.text('Lists to fill'), findsNothing);
+    expect(find.text('History'), findsNothing);
+    expect(find.text('To Fill'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('fill worker sees the queue only, with no money', (tester) async {
     final repo = _FakeRepo(
       picklists: [
         _picklist(id: 'p1', customer: 'Open Order'),
@@ -312,6 +344,33 @@ void main() {
           status: Picklist.statusCompleted,
         ),
       ],
+      items: [_item(id: 'i1', product: 'Sugar')],
+    );
+    await _pump(
+      tester,
+      WarehouseScreen(
+        repository: repo,
+        currentUser: _staff([FeatureDef.warehouseFill]),
+      ),
+      const Size(390, 844),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Lists to fill'), findsOneWidget);
+    expect(find.text('Open Order'), findsOneWidget);
+    expect(find.text('Sugar'), findsOneWidget);
+    expect(find.text('Finished Order'), findsNothing);
+    expect(find.text('NEW LIST'), findsNothing);
+    expect(find.textContaining('Br'), findsNothing);
+    expect(find.text('History'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('owner gets a switch between filling and creating', (
+    tester,
+  ) async {
+    final repo = _FakeRepo(
+      picklists: [_picklist(id: 'p1', customer: 'Open Order')],
     );
     await _pump(
       tester,
@@ -320,11 +379,13 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('NEW LIST'), findsOneWidget);
+    expect(find.text('To Fill'), findsOneWidget);
     expect(find.text('Lists to fill'), findsOneWidget);
-    expect(find.text('Open Order'), findsOneWidget);
-    expect(find.text('Finished Order'), findsNothing);
-    expect(find.text('History'), findsOneWidget);
+
+    await tester.tap(find.text('New List'));
+    await tester.pumpAndSettle();
+    expect(find.text('NEW LIST'), findsOneWidget);
+    expect(find.text('Lists to fill'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -369,7 +430,9 @@ void main() {
     expect(find.text('50 Karton'), findsOneWidget);
     expect(find.text('Flour'), findsOneWidget);
     expect(find.text('10 Karton'), findsOneWidget);
-    expect(find.text('asked for 30 Karton'), findsOneWidget);
+    expect(find.text('Taken'), findsOneWidget);
+    expect(find.text('Asked'), findsOneWidget);
+    expect(find.text('30'), findsOneWidget);
     expect(find.textContaining('Br'), findsNothing);
     expect(tester.takeException(), isNull);
   });

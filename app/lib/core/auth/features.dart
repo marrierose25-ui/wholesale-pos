@@ -21,7 +21,13 @@ class FeatureDef {
   /// Warehouse Picklists (Digital Fulfillment). Named as a constant so the
   /// Dart nav filter, the cloud `pos-api` FEATURE_KEYS set, and any code that
   /// checks `User.can('warehouse')` agree on one spelling.
+  ///
+  /// Two separate jobs, two separate ticks: `warehouse` is the shop worker
+  /// creating a list, `warehouseFill` is the warehouse worker pulling stock.
+  /// The Warehouse tab appears when either is granted, and the screen renders
+  /// only the job the account holds (the owner sees both, with a switch).
   static const String warehouse = 'warehouse';
+  static const String warehouseFill = 'warehouse_fill';
 }
 
 /// Ordered exactly as the navigation renders them. Settings is deliberately
@@ -39,6 +45,7 @@ const List<FeatureDef> kFeatures = [
   // like any other staff surface; deliberately not a default, so an upgrade
   // never hands a cashier a tab they did not have before.
   FeatureDef(FeatureDef.warehouse, 'Warehouse', Icons.inventory_2),
+  FeatureDef(FeatureDef.warehouseFill, 'Warehouse Filling', Icons.checklist),
   FeatureDef('reports', 'Reports', Icons.bar_chart),
   FeatureDef('users', 'Users', Icons.people),
   FeatureDef('audit', 'Audit Logs', Icons.security),

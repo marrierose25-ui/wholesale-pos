@@ -7,8 +7,9 @@ import '../../core/theme/app_design.dart';
 import 'warehouse_shared.dart';
 
 /// Read-only Warehouse History, following the Sales History drill-down:
-/// a list of days, then the customers served that day, then exactly what each
-/// customer took. No actions and no money — quantities only.
+/// a list of days, then the customers served that day, then a compact ledger
+/// of exactly what each customer took. No actions and no money — quantities
+/// only.
 class WarehouseHistoryScreen extends StatefulWidget {
   final PicklistRepository repository;
 
@@ -68,7 +69,7 @@ class _WarehouseHistoryScreenState extends State<WarehouseHistoryScreen> {
             tooltip: 'Refresh',
             onPressed: _load,
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
         ],
       ),
       body: AppBackground(child: _buildBody()),
@@ -97,7 +98,7 @@ class _WarehouseHistoryScreenState extends State<WarehouseHistoryScreen> {
           padding: const EdgeInsets.all(28),
           child: Text(
             'No history yet.',
-            style: TextStyle(color: AppDesign.textLo, fontSize: 14),
+            style: TextStyle(color: AppDesign.textLo, fontSize: 13),
           ),
         ),
       );
@@ -105,7 +106,7 @@ class _WarehouseHistoryScreenState extends State<WarehouseHistoryScreen> {
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView.separated(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 24),
         itemCount: _days.length,
         separatorBuilder: (_, _) => const SizedBox(height: 10),
         itemBuilder: (context, index) {
@@ -166,7 +167,7 @@ class _DayCard extends StatelessWidget {
     final finished = '${group.doneCount} of ${group.lists.length} finished';
     return GlassCard(
       radius: AppDesign.radiusCardSm,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       onTap: onTap,
       child: Row(
         children: [
@@ -178,18 +179,18 @@ class _DayCard extends StatelessWidget {
                   formatPicklistDay(group.day),
                   style: TextStyle(
                     color: AppDesign.textHi,
-                    fontSize: 16,
+                    fontSize: 14.5,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
-                const SizedBox(height: 3),
+                const SizedBox(height: 2),
                 Text(
                   relative.isEmpty
                       ? '$customers · $finished'
                       : '$relative · $customers · $finished',
                   style: TextStyle(
                     color: AppDesign.textLo,
-                    fontSize: 12.5,
+                    fontSize: 11.5,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
@@ -200,7 +201,7 @@ class _DayCard extends StatelessWidget {
           Icon(
             Icons.chevron_right_rounded,
             color: AppDesign.textFaint,
-            size: 22,
+            size: 19,
           ),
         ],
       ),
@@ -231,9 +232,9 @@ class PicklistDayScreen extends StatelessWidget {
       appBar: AppBar(title: Text(formatPicklistDay(day))),
       body: AppBackground(
         child: ListView.separated(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 24),
           itemCount: ordered.length,
-          separatorBuilder: (_, _) => const SizedBox(height: 10),
+          separatorBuilder: (_, _) => const SizedBox(height: 8),
           itemBuilder: (context, index) {
             final list = ordered[index];
             return _CustomerRow(
@@ -263,48 +264,68 @@ class _CustomerRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final name = picklist.customerName;
+    final shortId = picklist.id.length >= 4
+        ? picklist.id.substring(0, 4).toUpperCase()
+        : picklist.id.toUpperCase();
     return GlassCard(
       padding: EdgeInsets.zero,
       radius: AppDesign.radiusCardSm,
       onTap: onTap,
-      child: ListTile(
-        leading: Container(
-          width: 40,
-          height: 40,
-          decoration: const BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: AppDesign.buttonGradient,
-          ),
-          child: Center(
-            child: Text(
-              name.isEmpty ? '?' : name[0].toUpperCase(),
-              style: const TextStyle(
-                color: AppDesign.onBlue,
-                fontWeight: FontWeight.w700,
-                fontSize: 15,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: AppDesign.buttonGradient,
+              ),
+              child: Center(
+                child: Text(
+                  name.isEmpty ? '?' : name[0].toUpperCase(),
+                  style: const TextStyle(
+                    color: AppDesign.onBlue,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                  ),
+                ),
               ),
             ),
-          ),
-        ),
-        title: Text(
-          name,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
-        ),
-        subtitle: Text(
-          'Tap to see what was taken',
-          style: TextStyle(color: AppDesign.textLo, fontSize: 12.5),
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13.5,
+                      color: AppDesign.textHi,
+                    ),
+                  ),
+                  const SizedBox(height: 1),
+                  Text(
+                    'WL-$shortId',
+                    style: TextStyle(
+                      color: AppDesign.textLo,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
             PicklistStatusChip(status: picklist.status),
-            const SizedBox(width: 2),
             Icon(
               Icons.chevron_right_rounded,
               color: AppDesign.textFaint,
-              size: 20,
+              size: 18,
             ),
           ],
         ),
@@ -313,8 +334,8 @@ class _CustomerRow extends StatelessWidget {
   }
 }
 
-/// Level 3: exactly what one customer took. Shows every requested product with
-/// the taken quantity first, so a partial pick is obvious.
+/// Level 3: exactly what one customer took, as a compact ledger with the same
+/// caption/row rhythm as Sales History. Quantities only.
 class PicklistTakenScreen extends StatefulWidget {
   final PicklistRepository repository;
   final Picklist picklist;
@@ -367,165 +388,189 @@ class _PicklistTakenScreenState extends State<PicklistTakenScreen> {
       backgroundColor: AppDesign.bg,
       appBar: AppBar(title: const Text('What Was Taken')),
       body: AppBackground(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+        child: Column(
           children: [
-            _buildHeader(),
-            const SizedBox(height: 16),
-            if (_isLoading)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 48),
-                child: Center(child: CircularProgressIndicator()),
-              )
-            else if (_error != null)
-              Center(
-                child: Column(
-                  children: [
-                    Text(_error!, textAlign: TextAlign.center),
-                    const SizedBox(height: 8),
-                    TextButton(onPressed: _load, child: const Text('Retry')),
-                  ],
-                ),
-              )
-            else if (_items.isEmpty)
-              GlassCard(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 24),
-                  child: Center(
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 10, 18, 2),
+              child: Row(
+                children: [
+                  Expanded(
                     child: Text(
-                      'No products on this list.',
-                      style: TextStyle(color: AppDesign.textLo, fontSize: 14),
+                      widget.picklist.customerName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: AppDesign.textHi,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
-                ),
-              )
-            else
-              for (final item in _items) _buildItemRow(item),
+                  Text(
+                    formatPicklistDate(widget.picklist.createdAt),
+                    style: TextStyle(color: AppDesign.textLo, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+            if (!_isLoading && _error == null)
+              _TakenLedgerHeader(count: _items.length),
+            Expanded(child: _buildBody()),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildHeader() {
-    final name = widget.picklist.customerName;
-    return GlassCard(
-      padding: const EdgeInsets.all(16),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: const BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: AppDesign.buttonGradient,
+  Widget _buildBody() {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_error != null) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              _error!,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppDesign.textLo, fontSize: 13),
             ),
-            child: Center(
-              child: Text(
-                name.isEmpty ? '?' : name[0].toUpperCase(),
-                style: const TextStyle(
-                  color: AppDesign.onBlue,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: AppDesign.textHi,
-                    fontSize: 19,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  formatPicklistDate(widget.picklist.createdAt),
-                  style: TextStyle(color: AppDesign.textLo, fontSize: 12.5),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          PicklistStatusChip(status: widget.picklist.status),
-        ],
+            const SizedBox(height: 8),
+            TextButton(onPressed: _load, child: const Text('Retry')),
+          ],
+        ),
+      );
+    }
+    if (_items.isEmpty) {
+      return Center(
+        child: Text(
+          'No products on this list.',
+          style: TextStyle(color: AppDesign.textLo, fontSize: 13),
+        ),
+      );
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
+      itemCount: _items.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 8),
+      itemBuilder: (context, index) => _TakenRow(item: _items[index]),
+    );
+  }
+}
+
+/// Caption row aligned with [_TakenRow]'s columns.
+class _TakenLedgerHeader extends StatelessWidget {
+  final int count;
+
+  const _TakenLedgerHeader({required this.count});
+
+  Widget _cell(String label, TextAlign align, {double? width}) {
+    return SizedBox(
+      width: width,
+      child: Text(
+        label,
+        textAlign: align,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          color: AppDesign.textLo,
+          letterSpacing: 0.4,
+        ),
       ),
     );
   }
 
-  Widget _buildItemRow(PicklistItem item) {
-    final unit = (item.unit == null || item.unit!.isEmpty) ? '' : item.unit!;
-    final took = item.takenQty;
-    final short = took < item.requestedQty;
-    final dimmed = took <= 0;
+  @override
+  Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Opacity(
-        opacity: dimmed ? 0.55 : 1,
-        child: GlassCard(
-          radius: AppDesign.radiusCardSm,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      padding: const EdgeInsets.fromLTRB(24, 6, 24, 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              '$count item${count == 1 ? '' : 's'}',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: AppDesign.textLo,
+                letterSpacing: 0.4,
+              ),
+            ),
+          ),
+          _cell('Taken', TextAlign.end, width: 64),
+          const SizedBox(width: 10),
+          _cell('Asked', TextAlign.end, width: 56),
+        ],
+      ),
+    );
+  }
+}
+
+/// One product line: name, the quantity actually taken and what was asked for.
+class _TakenRow extends StatelessWidget {
+  final PicklistItem item;
+
+  const _TakenRow({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    final unit = (item.unit == null || item.unit!.isEmpty)
+        ? ''
+        : ' ${item.unit}';
+    final took = item.takenQty;
+    final dimmed = took <= 0;
+    return Opacity(
+      opacity: dimmed ? 0.55 : 1,
+      child: GlassCard(
+        radius: AppDesign.radiusCardSm,
+        padding: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
           child: Row(
             children: [
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      item.productName,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: AppDesign.textHi,
-                      ),
-                    ),
-                    if (short) ...[
-                      const SizedBox(height: 3),
-                      Text(
-                        'asked for ${item.requestedQty}'
-                        '${unit.isEmpty ? '' : ' $unit'}',
-                        style: TextStyle(
-                          color: AppDesign.textLo,
-                          fontSize: 12.5,
-                        ),
-                      ),
-                    ],
-                  ],
+                child: Text(
+                  item.productName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: AppDesign.textHi,
+                  ),
                 ),
               ),
-              const SizedBox(width: 10),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    '$took${unit.isEmpty ? '' : ' $unit'}',
+              SizedBox(
+                width: 64,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    '$took$unit',
+                    maxLines: 1,
+                    textAlign: TextAlign.end,
                     style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.2,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
                       color: took > 0 ? AppDesign.textHi : AppDesign.textLo,
                     ),
                   ),
-                  Text(
-                    'taken',
-                    style: TextStyle(
-                      color: AppDesign.textFaint,
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.5,
-                    ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              SizedBox(
+                width: 56,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    '${item.requestedQty}',
+                    maxLines: 1,
+                    textAlign: TextAlign.end,
+                    style: TextStyle(fontSize: 12, color: AppDesign.textLo),
                   ),
-                ],
+                ),
               ),
             ],
           ),

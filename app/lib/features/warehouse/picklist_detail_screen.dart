@@ -6,16 +6,15 @@ import '../../core/repositories/picklist_repository.dart';
 import '../../core/theme/app_design.dart';
 import 'warehouse_shared.dart';
 
-/// The warehouse worker's screen for one list. Each line shows only three
-/// things — product, quantity and unit — plus one big TAKE button. Tapping it
+/// The warehouse worker's screen for one list: a tick box per product. Ticking
 /// calls [PicklistRepository.toggleItemTaken], which sets the line's taken qty
 /// to its requested qty (or back to 0) and re-derives the header status.
 ///
 /// No prices and no totals here: money is the shop's concern and would only
-/// confuse the person pulling stock. The write is optimistic — the button flips
-/// instantly, a spinner shows on that row while the save is in flight, and it
-/// reverts if the call fails. A COMPLETED list is frozen, so closed history can
-/// never be restated. This screen only ever touches the picklist tables.
+/// confuse the person pulling stock. The write is optimistic — the box ticks
+/// instantly and reverts if the save fails. A COMPLETED list is frozen, so
+/// closed history can never be restated. This screen only ever touches the
+/// picklist tables.
 class PicklistDetailScreen extends StatefulWidget {
   final PicklistRepository repository;
   final Picklist picklist;
@@ -40,7 +39,7 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
   String? _error;
 
   /// Live header status, re-derived locally after each toggle so the chip keeps
-  /// pace with the buttons without a full reload.
+  /// pace with the boxes without a full reload.
   late String _status = widget.picklist.status;
 
   /// Whether any toggle landed, so the directory refreshes on the way out.
@@ -140,17 +139,17 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
       ),
       body: AppBackground(
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
           children: [
             _buildHeader(),
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
             if (_readOnly) ...[
               _buildCompletedBanner(),
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
             ],
             if (_isLoading)
               const Padding(
-                padding: EdgeInsets.symmetric(vertical: 48),
+                padding: EdgeInsets.symmetric(vertical: 40),
                 child: Center(child: CircularProgressIndicator()),
               )
             else if (_error != null)
@@ -159,7 +158,7 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
               _buildEmpty()
             else ...[
               _buildItemsHeader(),
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
               for (final item in _items) _buildItemCard(item),
             ],
           ],
@@ -175,7 +174,7 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
     final progressColor = _readOnly ? AppDesign.success : AppDesign.blueBright;
 
     return GlassCard(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -191,32 +190,31 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: AppDesign.textHi,
-                        fontSize: 22,
+                        fontSize: 16,
                         fontWeight: FontWeight.w700,
-                        letterSpacing: -0.3,
                       ),
                     ),
-                    const SizedBox(height: 3),
+                    const SizedBox(height: 2),
                     Text(
                       formatPicklistDate(widget.picklist.createdAt),
-                      style: TextStyle(color: AppDesign.textLo, fontSize: 12.5),
+                      style: TextStyle(color: AppDesign.textLo, fontSize: 11.5),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 8),
               PicklistStatusChip(status: _status),
             ],
           ),
           if (showProgress) ...[
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
             Row(
               children: [
                 Text(
                   _readOnly ? 'All items taken' : 'Taken',
                   style: TextStyle(
                     color: AppDesign.textLo,
-                    fontSize: 13,
+                    fontSize: 11.5,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -225,18 +223,18 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
                   '$picked of $total',
                   style: TextStyle(
                     color: _readOnly ? AppDesign.success : AppDesign.textHi,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
             ClipRRect(
               borderRadius: BorderRadius.circular(AppDesign.radiusPill),
               child: LinearProgressIndicator(
                 value: total == 0 ? 0 : picked / total,
-                minHeight: 8,
+                minHeight: 6,
                 backgroundColor: AppDesign.cardSoft,
                 valueColor: AlwaysStoppedAnimation<Color>(progressColor),
               ),
@@ -249,7 +247,7 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
 
   Widget _buildCompletedBanner() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: AppDesign.success.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(AppDesign.radiusCardSm),
@@ -260,17 +258,16 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
           const Icon(
             Icons.check_circle_outline,
             color: AppDesign.success,
-            size: 20,
+            size: 18,
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 8),
           Expanded(
             child: Text(
               'DONE — this list is finished.',
               style: TextStyle(
                 color: AppDesign.success,
-                fontSize: 13.5,
+                fontSize: 12.5,
                 fontWeight: FontWeight.w700,
-                height: 1.3,
               ),
             ),
           ),
@@ -283,14 +280,14 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
     return GlassCard(
       child: Column(
         children: [
-          Icon(Icons.error_outline, color: AppDesign.danger, size: 30),
-          const SizedBox(height: 10),
+          Icon(Icons.error_outline, color: AppDesign.danger, size: 28),
+          const SizedBox(height: 8),
           Text(
             _error!,
             textAlign: TextAlign.center,
-            style: TextStyle(color: AppDesign.textLo, fontSize: 13),
+            style: TextStyle(color: AppDesign.textLo, fontSize: 12.5),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           TextButton(onPressed: _load, child: const Text('Retry')),
         ],
       ),
@@ -300,18 +297,18 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
   Widget _buildEmpty() {
     return GlassCard(
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 28),
+        padding: const EdgeInsets.symmetric(vertical: 24),
         child: Column(
           children: [
             Icon(
               Icons.inventory_2_outlined,
-              size: 34,
+              size: 30,
               color: AppDesign.textFaint,
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
             Text(
               'No products on this list.',
-              style: TextStyle(color: AppDesign.textLo, fontSize: 13.5),
+              style: TextStyle(color: AppDesign.textLo, fontSize: 12.5),
             ),
           ],
         ),
@@ -327,9 +324,8 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
             'Products',
             style: TextStyle(
               color: AppDesign.textHi,
-              fontSize: 17,
+              fontSize: 13.5,
               fontWeight: FontWeight.w700,
-              letterSpacing: -0.2,
             ),
           ),
         ),
@@ -337,7 +333,7 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
           '${_items.length}',
           style: TextStyle(
             color: AppDesign.textLo,
-            fontSize: 13,
+            fontSize: 12.5,
             fontWeight: FontWeight.w700,
           ),
         ),
@@ -353,7 +349,7 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
         : ' ${item.unit}';
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: 8),
       child: GlassCard(
         padding: EdgeInsets.zero,
         radius: AppDesign.radiusCardSm,
@@ -362,12 +358,45 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
           color: taken
               ? AppDesign.success.withValues(alpha: 0.45)
               : AppDesign.stroke,
-          width: taken ? 1.4 : 1,
+          width: taken ? 1.3 : 1,
         ),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+          padding: const EdgeInsets.fromLTRB(6, 8, 12, 8),
           child: Row(
             children: [
+              if (saving)
+                const SizedBox(
+                  width: 42,
+                  height: 42,
+                  child: Center(
+                    child: SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  ),
+                )
+              else
+                SizedBox(
+                  width: 42,
+                  height: 42,
+                  child: Checkbox(
+                    value: taken,
+                    onChanged: _readOnly ? null : (_) => _toggle(item, !taken),
+                    activeColor: AppDesign.success,
+                    checkColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(5),
+                    ),
+                    side: BorderSide(
+                      color: taken ? AppDesign.success : AppDesign.textFaint,
+                      width: 1.6,
+                    ),
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+              const SizedBox(width: 4),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -377,132 +406,33 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: -0.2,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
                         color: AppDesign.textHi,
                       ),
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 1),
                     Text(
-                      '${item.requestedQty}$unit',
-                      style: TextStyle(
-                        color: AppDesign.textLo,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
+                      '${item.requestedQty}$unit requested',
+                      style: TextStyle(color: AppDesign.textLo, fontSize: 11.5),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(width: 12),
-              _TakeButton(
-                taken: taken,
-                saving: saving,
-                readOnly: _readOnly,
-                onPressed: () => _toggle(item, !taken),
-              ),
+              if (taken) ...[
+                const SizedBox(width: 8),
+                Text(
+                  'Taken',
+                  style: TextStyle(
+                    color: AppDesign.success,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-/// The one action a warehouse worker needs: a big TAKE button that turns into
-/// a green TAKEN badge. Tapping TAKEN again undoes the pick while the list is
-/// still open; a finished list renders it inert.
-class _TakeButton extends StatelessWidget {
-  final bool taken;
-  final bool saving;
-  final bool readOnly;
-  final VoidCallback onPressed;
-
-  const _TakeButton({
-    required this.taken,
-    required this.saving,
-    required this.readOnly,
-    required this.onPressed,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (saving) {
-      return const SizedBox(
-        width: 96,
-        height: 48,
-        child: Center(
-          child: SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-        ),
-      );
-    }
-    if (taken) {
-      final badge = Container(
-        width: 96,
-        height: 48,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: AppDesign.success.withValues(alpha: readOnly ? 0.16 : 0.20),
-          borderRadius: BorderRadius.circular(AppDesign.radiusButton),
-          border: Border.all(
-            color: AppDesign.success.withValues(alpha: 0.55),
-            width: 1.4,
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.check, color: AppDesign.success, size: 18),
-            const SizedBox(width: 4),
-            Text(
-              'TAKEN',
-              style: TextStyle(
-                color: AppDesign.success,
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 0.4,
-              ),
-            ),
-          ],
-        ),
-      );
-      if (readOnly) return badge;
-      return Semantics(
-        button: true,
-        label: 'Taken. Tap to undo.',
-        child: InkWell(
-          onTap: onPressed,
-          borderRadius: BorderRadius.circular(AppDesign.radiusButton),
-          child: badge,
-        ),
-      );
-    }
-    return SizedBox(
-      width: 96,
-      height: 48,
-      child: FilledButton(
-        onPressed: readOnly ? null : onPressed,
-        style: FilledButton.styleFrom(
-          backgroundColor: AppDesign.blue,
-          foregroundColor: AppDesign.onBlue,
-          disabledBackgroundColor: AppDesign.cardSoft,
-          disabledForegroundColor: AppDesign.textFaint,
-          padding: EdgeInsets.zero,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppDesign.radiusButton),
-          ),
-          textStyle: const TextStyle(
-            fontWeight: FontWeight.w800,
-            fontSize: 13,
-            letterSpacing: 0.5,
-          ),
-        ),
-        child: const Text('TAKE'),
       ),
     );
   }

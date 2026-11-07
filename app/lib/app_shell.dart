@@ -459,18 +459,25 @@ class _MainScaffoldState extends State<MainScaffold>
         currentUser: user,
       ),
     );
-    // Warehouse Picklists. Only rendered when the seam has a repository; the
-    // pos-api web build returns null, so this tab never appears in the browser
-    // and can never surface alongside Sales. `add` additionally hides it for
-    // any account lacking the `warehouse` tick, so a cashier never sees it.
+    // Warehouse Picklists. Only rendered when the backend seam exposes a
+    // repository. The tab is shown when the account holds either warehouse
+    // tick (create or fill); the screen itself renders only the job that
+    // account is allowed to do.
     final picklists = backend.picklists;
-    if (picklists != null) {
-      add(
-        FeatureDef.warehouse,
-        WarehouseScreen(
-          key: _warehouseKey,
-          repository: picklists,
-          currentUser: user,
+    if (picklists != null &&
+        (user.can(FeatureDef.warehouse) ||
+            user.can(FeatureDef.warehouseFill))) {
+      final def = kFeatures.firstWhere((f) => f.key == FeatureDef.warehouse);
+      entries.add(
+        _ShellDestination(
+          FeatureDef.warehouse,
+          def.label,
+          def.icon,
+          WarehouseScreen(
+            key: _warehouseKey,
+            repository: picklists,
+            currentUser: user,
+          ),
         ),
       );
     }
