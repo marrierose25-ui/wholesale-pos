@@ -540,6 +540,70 @@ class SyncPullApplier {
         'closed_at': _localIso(row['closed_at']),
       };
       _closeOut(values);
+      if (values['status'] == 'OPEN') {
+        // Fresh-install merge: a device that joined the shop starts with an
+        // empty local OPEN shift while the real drawer lives in the cloud. The
+        // `one_open_shift` index (and the insert trigger) allow exactly one OPEN
+        // row, so the pulled cloud shift could not land alongside it. Keeping
+        // the empty local shift open and the cloud shift closed left all pulled
+        // sales on the closed row while the register read the empty open one —
+        // a zero balance. Merge instead: move everything that referenced the
+        // local shift onto the cloud shift, delete the empty local shift, then
+        // insert the cloud shift as the one true OPEN drawer.
+        final localOpen = await txn.query(
+          'shifts',
+          columns: const ['id'],
+          where: "status = 'OPEN' AND id <> ?",
+          whereArgs: [id],
+          limit: 1,
+        );
+        if (localOpen.isNotEmpty) {
+          final localId = localOpen.first['id'] as String;
+          // Insert the cloud shift as CLOSED first so FK targets exist while
+          // local OPEN is still present (the one_open_shift constraint allows
+          // any number of CLOSED rows alongside the single OPEN row).
+          final closedValues = Map<String, Object?>.from(values)
+            ..['status'] = 'CLOSED';
+          _closeOut(closedValues);
+          await txn.insert('shifts', closedValues);
+          await txn.update(
+            'sales',
+            {'shift_id': id},
+            where: 'shift_id = ?',
+            whereArgs: [localId],
+          );
+          await txn.update(
+            'sales',
+            {'voided_shift_id': id},
+            where: 'voided_shift_id = ?',
+            whereArgs: [localId],
+          );
+          await txn.update(
+            'cash_movements',
+            {'shift_id': id},
+            where: 'shift_id = ?',
+            whereArgs: [localId],
+          );
+          await txn.delete('shifts', where: 'id = ?', whereArgs: [localId]);
+          // Re-open the merged cloud shift; the trigger permits this because
+          // no other OPEN shift remains.
+          await txn.update(
+            'shifts',
+            {
+              'status': 'OPEN',
+              'closing_cash_minor_units':
+                  values['closing_cash_minor_units'],
+              'expected_cash_minor_units':
+                  values['expected_cash_minor_units'],
+              'closed_at': values['closed_at'],
+            },
+            where: 'id = ?',
+            whereArgs: [id],
+          );
+          created++;
+          continue;
+        }
+      }
       var inserted = await _insert(txn, 'shifts', values);
       if (inserted == 0 && values['status'] == 'OPEN') {
         // This register already has its OWN open drawer (the local trigger

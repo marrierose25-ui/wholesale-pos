@@ -358,35 +358,89 @@ void main() {
       expect(await db.query('sales'), hasLength(2));
     });
 
-    test('keeps another register\'s OPEN shift as a closed parent', () async {
-      await seedLocalSale(
-        db,
-        saleId: 'local-sale',
-        receipt: 'REC-L',
-        shiftStatus: 'OPEN',
-      );
+    test(
+      'merges a local open shift into the cloud open shift on fresh sync',
+      () async {
+        await seedLocalSale(
+          db,
+          saleId: 'local-sale',
+          receipt: 'REC-L',
+          shiftStatus: 'OPEN',
+        );
+        await db.insert('cash_movements', {
+          'id': 'local-cm',
+          'shift_id': 'local-shift',
+          'type': 'CREDIT',
+          'amount_minor_units': 5000,
+          'reason': 'Float',
+          'created_at': DateTime.now().toIso8601String(),
+          'user_id': 'local-user',
+        });
+        // A sale voided against the local shift exercises voided_shift_id merge.
+        await db.insert('sales', {
+          'id': 'voided-sale',
+          'receipt_number': 'REC-V',
+          'cashier_id': 'local-user',
+          'device_id': 'local-device',
+          'shift_id': 'local-shift',
+          'payment_method': 'CASH',
+          'subtotal_minor_units': 100,
+          'discount_minor_units': 0,
+          'total_minor_units': 100,
+          'amount_paid_minor_units': 100,
+          'change_minor_units': 0,
+          'status': 'VOIDED',
+          'voided_shift_id': 'local-shift',
+          'created_at': DateTime.now().toIso8601String(),
+        });
 
-      final report = await SyncPullApplier(db).apply(
-        pageOf('shifts', [cloudShift(id: 'cloud-shift', status: 'OPEN')]),
-      );
+        final report = await SyncPullApplier(db).apply(
+          pageOf('shifts', [cloudShift(id: 'cloud-shift', status: 'OPEN')]),
+        );
 
-      expect(report.shifts, 1);
-      final shift = (await db.query(
-        'shifts',
-        where: 'id = ?',
-        whereArgs: ['cloud-shift'],
-      )).single;
-      expect(shift['status'], 'CLOSED');
-      // A closed container still has to carry a close time and a figure, or
-      // every drawer report silently drops the session.
-      expect(shift['closed_at'], isNotNull);
-      expect(shift['closing_cash_minor_units'], isNotNull);
-      // The till's own drawer is untouched.
-      expect(
-        (await db.query('shifts', where: 'status = ?', whereArgs: ['OPEN'])),
-        hasLength(1),
-      );
-    });
+        expect(report.shifts, 1);
+        // The local empty/open shift was merged away.
+        expect(
+          await db.query(
+            'shifts',
+            where: 'id = ?',
+            whereArgs: ['local-shift'],
+          ),
+          isEmpty,
+        );
+        // The cloud shift is now the one true OPEN drawer.
+        final cloud = (await db.query(
+          'shifts',
+          where: 'id = ?',
+          whereArgs: ['cloud-shift'],
+        )).single;
+        expect(cloud['status'], 'OPEN');
+        expect(
+          await db.query('shifts', where: "status = 'OPEN'"),
+          hasLength(1),
+        );
+        // Sales and cash movements moved to the cloud shift.
+        final sale = (await db.query(
+          'sales',
+          where: 'id = ?',
+          whereArgs: ['local-sale'],
+        )).single;
+        expect(sale['shift_id'], 'cloud-shift');
+        final voided = (await db.query(
+          'sales',
+          where: 'id = ?',
+          whereArgs: ['voided-sale'],
+        )).single;
+        expect(voided['shift_id'], 'cloud-shift');
+        expect(voided['voided_shift_id'], 'cloud-shift');
+        final movement = (await db.query(
+          'cash_movements',
+          where: 'id = ?',
+          whereArgs: ['local-cm'],
+        )).single;
+        expect(movement['shift_id'], 'cloud-shift');
+      },
+    );
 
     test('a CLOSED shift arriving without a closing count is filled in', () async {
       // The cloud can send a closed shift with no figure (a till closed while
