@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/auth/features.dart';
 import '../../core/models/picklist.dart';
@@ -8,6 +11,7 @@ import '../../core/repositories/picklist_repository.dart';
 import '../../core/theme/app_design.dart';
 import 'create_picklist_screen.dart';
 import 'picklist_detail_screen.dart';
+import 'warehouse_alerts.dart';
 import 'warehouse_history_screen.dart';
 import 'warehouse_shared.dart';
 
@@ -47,14 +51,38 @@ class WarehouseScreenState extends State<WarehouseScreen> {
   /// The owner holds both ticks; this picks which job is on screen.
   bool _showFill = true;
 
+  /// Polls the cloud for lists the shop sends while the picker is on this tab,
+  /// so a new order is noticed without a manual pull-to-refresh.
+  Timer? _pollTimer;
+
+  /// The open-list ids seen on the last poll. The first successful load only
+  /// records the baseline, so signing in never replays the backlog as "new".
+  Set<String>? _knownOpenIds;
+
+  /// Lists that arrived while this tab was open. They carry a NEW badge until
+  /// the picker opens them.
+  final Set<String> _newIds = {};
+
+  static const Duration _pollInterval = Duration(seconds: 20);
+
   bool get _canCreate => widget.currentUser.can(FeatureDef.warehouse);
   bool get _canFill => widget.currentUser.can(FeatureDef.warehouseFill);
   bool get _dual => _canCreate && _canFill;
+  bool get _canSeeMoney => _canCreate;
 
   @override
   void initState() {
     super.initState();
     _future = _load();
+    if (_canFill) {
+      _pollTimer = Timer.periodic(_pollInterval, (_) => _pollQueue());
+    }
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
   }
 
   /// Re-runs the queue fetch. Called by the shell on tab-select and after a
@@ -63,9 +91,83 @@ class WarehouseScreenState extends State<WarehouseScreen> {
     setState(() => _future = _load());
   }
 
+  /// One poll: look for open lists we have not seen before, alert the picker,
+  /// then rebuild the queue. Failures stay silent — polling is a convenience,
+  /// never a reason to blank a screen that already has data.
+  Future<void> _pollQueue() async {
+    try {
+      final lists = await widget.repository.getPicklists();
+      if (!mounted) return;
+      final open = lists.where((p) => !p.isCompleted).toList();
+      final ids = open.map((p) => p.id).toSet();
+      final known = _knownOpenIds;
+      _knownOpenIds = ids;
+      if (known == null) return;
+      final fresh = open.where((p) => !known.contains(p.id)).toList();
+      if (fresh.isEmpty) return;
+      setState(() => _newIds.addAll(fresh.map((p) => p.id)));
+      _announce(fresh);
+      refresh();
+    } catch (_) {
+      // Offline or a transient server error: try again on the next tick.
+    }
+  }
+
+  /// Sound + in-app notification for a list that just reached the queue.
+  void _announce(List<Picklist> fresh) {
+    WarehouseAlerts.playNewList();
+    HapticFeedback.mediumImpact();
+
+    final names = fresh
+        .map((p) => p.customerName)
+        .where((name) => name.trim().isNotEmpty)
+        .toSet();
+    final shown = names.take(2).join(', ');
+    final extra = names.length > 2 ? ' +${names.length - 2} more' : '';
+    final message = fresh.length == 1
+        ? 'New list from $shown$extra'
+        : '${fresh.length} new lists from $shown$extra';
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 8),
+          content: Row(
+            children: [
+              const Icon(
+                Icons.notifications_active,
+                color: AppDesign.onBlue,
+                size: 20,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  message,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+          action: SnackBarAction(
+            label: 'View',
+            textColor: AppDesign.onBlue,
+            onPressed: () {
+              if (!mounted) return;
+              setState(() => _showFill = true);
+              refresh();
+            },
+          ),
+        ),
+      );
+  }
+
   Future<List<_FillList>> _load() async {
     final lists = await widget.repository.getPicklists();
     final open = lists.where((p) => !p.isCompleted).toList();
+    _knownOpenIds ??= open.map((p) => p.id).toSet();
     // A card without its lines is still useful, so a single failed fetch
     // degrades to an empty summary instead of blanking the whole queue.
     final itemSets = await Future.wait(
@@ -98,6 +200,7 @@ class WarehouseScreenState extends State<WarehouseScreen> {
   }
 
   Future<void> _openPicklist(Picklist picklist) async {
+    setState(() => _newIds.remove(picklist.id));
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
         builder: (context) => PicklistDetailScreen(
@@ -115,8 +218,10 @@ class WarehouseScreenState extends State<WarehouseScreen> {
   Future<void> _openHistory() async {
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (context) =>
-            WarehouseHistoryScreen(repository: widget.repository),
+        builder: (context) => WarehouseHistoryScreen(
+          repository: widget.repository,
+          showMoney: _canSeeMoney,
+        ),
       ),
     );
     refresh(silent: true);
@@ -136,19 +241,18 @@ class WarehouseScreenState extends State<WarehouseScreen> {
               : 'New List',
         ),
         actions: [
-          if (_canFill)
-            TextButton.icon(
-              onPressed: _openHistory,
-              icon: const Icon(Icons.history, size: 18),
-              label: const Text('History'),
-              style: TextButton.styleFrom(
-                foregroundColor: AppDesign.textHi,
-                textStyle: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
+          TextButton.icon(
+            onPressed: _openHistory,
+            icon: const Icon(Icons.history, size: 18),
+            label: const Text('History'),
+            style: TextButton.styleFrom(
+              foregroundColor: AppDesign.textHi,
+              textStyle: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
               ),
             ),
+          ),
           const SizedBox(width: 6),
         ],
       ),
@@ -167,11 +271,13 @@ class WarehouseScreenState extends State<WarehouseScreen> {
     );
   }
 
-  /// Shop worker's only job: start a new list.
+  /// Shop worker's only job: start a new list. One large + button, like POS.
   Widget _buildShopBody() {
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
-      children: [_NewListButton(onTap: _createPicklist)],
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: _NewListButton(onTap: _createPicklist),
+      ),
     );
   }
 
@@ -293,6 +399,12 @@ class WarehouseScreenState extends State<WarehouseScreen> {
         padding: EdgeInsets.zero,
         radius: AppDesign.radiusCardSm,
         onTap: () => _openPicklist(picklist),
+        border: _newIds.contains(picklist.id)
+            ? Border.all(
+                color: AppDesign.warning.withValues(alpha: 0.55),
+                width: 1.3,
+              )
+            : null,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -334,6 +446,10 @@ class WarehouseScreenState extends State<WarehouseScreen> {
                     ),
                   ),
                   const SizedBox(width: 8),
+                  if (_newIds.contains(picklist.id)) ...[
+                    const _NewBadge(),
+                    const SizedBox(width: 6),
+                  ],
                   Text(
                     'WL-$shortId',
                     style: TextStyle(
@@ -456,6 +572,32 @@ String _qtyLabel(PicklistItem item) {
   return '${item.requestedQty}$unit';
 }
 
+/// The NEW pill on a queue card that arrived while the picker was watching.
+class _NewBadge extends StatelessWidget {
+  const _NewBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: AppDesign.warning.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(AppDesign.radiusPill),
+        border: Border.all(color: AppDesign.warning.withValues(alpha: 0.45)),
+      ),
+      child: Text(
+        'NEW',
+        style: TextStyle(
+          color: AppDesign.warning,
+          fontSize: 9.5,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0.5,
+        ),
+      ),
+    );
+  }
+}
+
 /// Owner-only switch between the two warehouse jobs.
 class _ModeSwitch extends StatelessWidget {
   final bool showFill;
@@ -523,7 +665,8 @@ class _ModeSwitch extends StatelessWidget {
   }
 }
 
-/// The shop worker's one action: a wide blue card that opens the New List form.
+/// The shop worker's one action: a large + circle that opens the New List form,
+/// mirroring the POS home button so the two surfaces feel the same.
 class _NewListButton extends StatelessWidget {
   final VoidCallback onTap;
 
@@ -531,68 +674,20 @@ class _NewListButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(AppDesign.radiusCardSm),
-        child: Ink(
-          decoration: BoxDecoration(
-            gradient: AppDesign.buttonGradient,
-            borderRadius: BorderRadius.circular(AppDesign.radiusCardSm),
-            boxShadow: [AppDesign.blueGlow(alpha: 0.28)],
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            child: Row(
-              children: [
-                Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(
-                    color: AppDesign.onBlue.withValues(alpha: 0.18),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.add,
-                    color: AppDesign.onBlue,
-                    size: 23,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'NEW LIST',
-                        style: TextStyle(
-                          color: AppDesign.onBlue,
-                          fontSize: 14.5,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 0.4,
-                        ),
-                      ),
-                      SizedBox(height: 1),
-                      Text(
-                        'Send products to the warehouse',
-                        style: TextStyle(
-                          color: AppDesign.onBlue,
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const Icon(
-                  Icons.chevron_right_rounded,
-                  color: AppDesign.onBlue,
-                  size: 21,
-                ),
-              ],
-            ),
-          ),
+    return InkWell(
+      onTap: onTap,
+      customBorder: const CircleBorder(),
+      child: Ink(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: AppDesign.buttonGradient,
+          boxShadow: [AppDesign.blueGlow(alpha: 0.4)],
+        ),
+        child: Container(
+          width: 88,
+          height: 88,
+          alignment: Alignment.center,
+          child: const Icon(Icons.add, size: 48, color: AppDesign.onBlue),
         ),
       ),
     );

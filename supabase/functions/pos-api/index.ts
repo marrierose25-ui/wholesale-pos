@@ -121,7 +121,8 @@ const ACTION_FEATURES: Record<string, string[]> = {
   finance_restore_category: ['finance'],
   finance_permanently_delete_category: ['finance'],
   finance_add_entry: ['finance'], finance_update_entry: ['finance'],
-  finance_mark_completed: ['finance'], finance_search_entries: ['finance'],
+  finance_mark_completed: ['finance'], finance_delete_entry: ['finance'],
+  finance_search_entries: ['finance'],
   finance_person_totals: ['finance'],
   // Warehouse picklists: two separate ticks. `warehouse` is the shop worker
   // creating lists and customers; `warehouse_fill` is the picker reading the
@@ -265,6 +266,7 @@ Deno.serve(async (req) => {
       case 'finance_add_entry': return await financeAddEntry(db, ctx, body);
       case 'finance_update_entry': return await financeUpdateEntry(db, ctx, body);
       case 'finance_mark_completed': return await financeMarkCompleted(db, ctx, body);
+      case 'finance_delete_entry': return await financeDeleteEntry(db, ctx, body);
       case 'finance_search_entries': return await financeSearchEntries(db, ctx, body);
       case 'finance_person_totals': return await financePersonTotals(db, ctx, body);
 
@@ -1532,8 +1534,24 @@ async function financeMarkCompleted(db: any, ctx: Ctx, body: any): Promise<Respo
   if (error) return rpcFailure(error.message);
   return json({ ok: true });
 }
+async function financeDeleteEntry(db: any, ctx: Ctx, body: any): Promise<Response> {
+  const entryId = String(body.entry_id ?? '');
+  if (!entryId) return json({ ok: false, error: 'Entry not found.' }, 404);
+  // Soft delete + cash reversal commit together in the RPC. A completed CASH
+  // collection gets a matching WITHDRAWAL on the open drawer, so the money it
+  // added when marked taken is returned; the row stays stored as DELETED so
+  // every surface's sync pull can hide it without losing the audit trail.
+  const { error } = await db.rpc('pos_delete_finance_entry', {
+    p_customer: ctx.customerId, p_user: ctx.userId, p_entry_id: entryId,
+  });
+  if (error) return rpcFailure(error.message);
+  return json({ ok: true });
+}
 async function financeSearchEntries(db: any, ctx: Ctx, body: any): Promise<Response> {
   let q = db.from('pos_finance_entries').select('*').eq('customer_id', ctx.customerId)
+    // A deleted entry remains in the table so the deletion syncs, but it must
+    // never reappear in the active ledger.
+    .neq('status', 'DELETED')
     .order('entry_date', { ascending: false }).limit(pageLimit(body));
   if (body.category_id) q = q.eq('category_id', body.category_id);
   if (body.status && body.status !== 'ALL') q = q.eq('status', body.status);

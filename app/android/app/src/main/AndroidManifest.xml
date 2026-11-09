@@ -16,7 +16,7 @@
         android:xlargeScreens="true"
         android:anyDensity="true"/>
     <application
-        android:label="wholesale_pos_app"
+        android:label="Wholesale POS"
         android:name="${applicationName}"
         android:resizeableActivity="true"
         android:icon="@mipmap/ic_launcher">

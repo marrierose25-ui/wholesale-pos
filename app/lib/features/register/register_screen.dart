@@ -548,7 +548,7 @@ class _CashMovementDialog extends StatefulWidget {
 class _CashMovementDialogState extends State<_CashMovementDialog> {
   final _amountController = TextEditingController();
   final _reasonController = TextEditingController();
-  late String _type = widget.initialType;
+  late final String _type = widget.initialType;
   String? _error;
 
   /// Optional proof photo (base64) — usually attached on a debit as evidence
@@ -601,92 +601,102 @@ class _CashMovementDialogState extends State<_CashMovementDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Cash Movement'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(
-                value: 'WITHDRAWAL',
-                label: Text('Debit'),
-                icon: Icon(Icons.arrow_upward),
-              ),
-              ButtonSegment(
-                value: 'DEPOSIT',
-                label: Text('Credit'),
-                icon: Icon(Icons.arrow_downward),
-              ),
-            ],
-            selected: {_type},
-            onSelectionChanged: (selection) =>
-                setState(() => _type = selection.first),
-          ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: _amountController,
-            autofocus: true,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(labelText: 'Amount (Br)'),
-          ),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _reasonController,
-            decoration: const InputDecoration(labelText: 'Reason / Reference'),
-            onSubmitted: (_) => _submit(),
-          ),
-          const SizedBox(height: 4),
-          // Optional proof photo. Shown for both directions, but aimed at
-          // debits: "upload proof the cash left the drawer". The label is
-          // Expanded + ellipsized so it can never overflow a phone-width
-          // dialog.
-          Row(
+      title: Text(
+        _type == 'DEPOSIT' ? 'Credit (Deposit)' : 'Debit (Withdrawal)',
+      ),
+      content: SingleChildScrollView(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom,
+        ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 360),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              IconButton(
-                onPressed: _picking ? null : _pickPhoto,
-                icon: Icon(
-                  _photo == null
-                      ? Icons.add_a_photo_outlined
-                      : Icons.photo_camera_outlined,
+              TextField(
+                controller: _amountController,
+                autofocus: true,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
                 ),
-                tooltip: 'Add photo (optional)',
+                decoration: const InputDecoration(labelText: 'Amount (Br)'),
               ),
-              Expanded(
-                child: _photo == null
-                    ? const Text(
-                        'Add photo (optional)',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      )
-                    : Row(
-                        children: [
+              const SizedBox(height: 8),
+              TextField(
+                controller: _reasonController,
+                decoration: const InputDecoration(
+                  labelText: 'Reason / Reference',
+                ),
+                onSubmitted: (_) => _submit(),
+              ),
+              const SizedBox(height: 4),
+              // Optional proof photo. Shown for both directions, but aimed at
+              // debits: "upload proof the cash left the drawer". The whole row is
+              // tappable (not just the icon) so it is easy to hit on a tablet.
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: _picking ? null : _pickPhoto,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 4,
+                      vertical: 6,
+                    ),
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 44,
+                          height: 44,
+                          child: Center(
+                            child: _picking
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : Icon(
+                                    _photo == null
+                                        ? Icons.add_a_photo_outlined
+                                        : Icons.photo_camera_outlined,
+                                  ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            _photo == null
+                                ? 'Add photo (optional)'
+                                : 'Photo attached',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (_photo != null)
                           // Tap to remove the attached proof.
                           IconButton(
                             onPressed: () => setState(() => _photo = null),
                             icon: const Icon(Icons.close),
-                            iconSize: 16,
+                            iconSize: 18,
                             tooltip: 'Remove photo',
                           ),
-                          const Expanded(
-                            child: Text(
-                              'Photo attached',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
+                      ],
+                    ),
+                  ),
+                ),
               ),
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  _error!,
+                  style: const TextStyle(color: AppTheme.danger, fontSize: 13),
+                ),
+              ],
             ],
           ),
-          if (_error != null) ...[
-            const SizedBox(height: 12),
-            Text(
-              _error!,
-              style: const TextStyle(color: AppTheme.danger, fontSize: 13),
-            ),
-          ],
-        ],
+        ),
       ),
       actions: [
         TextButton(

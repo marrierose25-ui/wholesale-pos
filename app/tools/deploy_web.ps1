@@ -81,24 +81,37 @@ if (-not $ok) {
 # 4. Verify the public link actually serves the fresh build. Pages updates the
 #    branch domain almost immediately, but compare the served bundle against the
 #    one just built so a silent mis-point to an older deploy fails loudly.
+#
+#    Compare SHA-256, not Content-Length: Cloudflare may serve main.dart.js
+#    compressed (gzip/brotli), so the HTTP Content-Length is the COMPRESSED size
+#    and never equals the local file size even when the bytes are identical.
+#    -OutFile writes the decoded body, and hashing that matches what the browser
+#    actually evaluates.
 $Domain = "$ProjectName.pages.dev"
 $localBundle = Join-Path $WebDir 'main.dart.js'
-$localLen = (Get-Item $localBundle).Length
-Write-Host "Verifying https://$Domain serves the new bundle ($localLen bytes)..."
+$localHash = (Get-FileHash $localBundle -Algorithm SHA256).Hash
+Write-Host "Verifying https://$Domain serves the new bundle (sha256 $localHash)..."
 $max = 12
 for ($i = 1; $i -le $max; $i++) {
+    $tmp = Join-Path $env:TEMP ("pos_served_main_$PID.dart.js")
     try {
-        $probe = Invoke-WebRequest -Uri "https://$Domain/index.html" -UseBasicParsing -TimeoutSec 30
+        # Probe the root, not /index.html: Pages answers /index.html with a 308
+        # redirect to "/", and PowerShell 5.1's Invoke-WebRequest does not follow
+        # 308, which made this check fail even on a perfectly live deploy.
+        $probe = Invoke-WebRequest -Uri "https://$Domain/" -UseBasicParsing -TimeoutSec 30
         if ($probe.StatusCode -eq 200) {
-            $served = Invoke-WebRequest -Uri "https://$Domain/main.dart.js" -UseBasicParsing -TimeoutSec 180
-            if ($served.RawContentLength -eq $localLen) {
-                Write-Host "OK: https://$Domain is live (HTTP $($probe.StatusCode), bundle $localLen bytes)." -ForegroundColor Green
+            Invoke-WebRequest -Uri "https://$Domain/main.dart.js" -UseBasicParsing -TimeoutSec 180 -OutFile $tmp
+            $servedHash = (Get-FileHash $tmp -Algorithm SHA256).Hash
+            if ($servedHash -eq $localHash) {
+                Write-Host "OK: https://$Domain is live (HTTP $($probe.StatusCode), bundle sha256 $localHash)." -ForegroundColor Green
                 return
             }
         }
     } catch {
         # Transient 5xx / propagation; retry below.
+    } finally {
+        if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
     }
     Start-Sleep -Seconds 5
 }
-throw "Verification failed for https://$Domain - served main.dart.js did not match the $localLen-byte build after $max attempts."
+throw "Verification failed for https://$Domain - served main.dart.js did not match the built bundle (sha256 $localHash) after $max attempts."

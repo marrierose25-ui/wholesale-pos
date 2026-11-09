@@ -4,16 +4,26 @@ import '../../core/models/picklist.dart';
 import '../../core/models/picklist_item.dart';
 import '../../core/repositories/picklist_repository.dart';
 import '../../core/theme/app_design.dart';
+import '../../core/utils/money_utils.dart';
 import 'warehouse_shared.dart';
 
 /// Read-only Warehouse History, following the Sales History drill-down:
 /// a list of days, then the customers served that day, then a compact ledger
-/// of exactly what each customer took. No actions and no money — quantities
-/// only.
+/// of exactly what each customer took.
+///
+/// [showMoney] is true for the shop side (owner or `warehouse` tick) and false
+/// for a fill-only worker. Prices and totals are hidden — and the totals are
+/// not even fetched — when money is off, so a warehouse screen can never
+/// surface an amount by accident.
 class WarehouseHistoryScreen extends StatefulWidget {
   final PicklistRepository repository;
+  final bool showMoney;
 
-  const WarehouseHistoryScreen({super.key, required this.repository});
+  const WarehouseHistoryScreen({
+    super.key,
+    required this.repository,
+    this.showMoney = false,
+  });
 
   @override
   State<WarehouseHistoryScreen> createState() => _WarehouseHistoryScreenState();
@@ -119,6 +129,7 @@ class _WarehouseHistoryScreenState extends State<WarehouseHistoryScreen> {
                   repository: widget.repository,
                   day: group.day,
                   picklists: group.lists,
+                  showMoney: widget.showMoney,
                 ),
               ),
             ),
@@ -210,26 +221,63 @@ class _DayCard extends StatelessWidget {
 }
 
 /// Level 2: the customers served on one day. One row per list so two orders
-/// from the same customer stay separate and easy to open.
-class PicklistDayScreen extends StatelessWidget {
+/// from the same customer stay separate and easy to open. When [showMoney] is
+/// on, each row also carries the value of the goods taken on that list.
+class PicklistDayScreen extends StatefulWidget {
   final PicklistRepository repository;
   final DateTime day;
   final List<Picklist> picklists;
+  final bool showMoney;
 
   const PicklistDayScreen({
     super.key,
     required this.repository,
     required this.day,
     required this.picklists,
+    this.showMoney = false,
   });
 
   @override
+  State<PicklistDayScreen> createState() => _PicklistDayScreenState();
+}
+
+class _PicklistDayScreenState extends State<PicklistDayScreen> {
+  /// Picklist id -> value of the goods taken (unit price x taken quantity).
+  /// Empty for a fill-only worker, who never asks for the item rows here.
+  Map<String, int> _totals = const {};
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.showMoney) _loadTotals();
+  }
+
+  Future<void> _loadTotals() async {
+    final totals = <String, int>{};
+    await Future.wait(
+      widget.picklists.map((list) async {
+        try {
+          final items = await widget.repository.getItems(list.id);
+          totals[list.id] = items.fold(
+            0,
+            (sum, item) => sum + item.unitPriceMinorUnits * item.takenQty,
+          );
+        } catch (_) {
+          // A missing item set simply leaves that row without a value.
+        }
+      }),
+    );
+    if (!mounted) return;
+    setState(() => _totals = totals);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final ordered = [...picklists]
+    final ordered = [...widget.picklists]
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     return Scaffold(
       backgroundColor: AppDesign.bg,
-      appBar: AppBar(title: Text(formatPicklistDay(day))),
+      appBar: AppBar(title: Text(formatPicklistDay(widget.day))),
       body: AppBackground(
         child: ListView.separated(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 24),
@@ -239,11 +287,13 @@ class PicklistDayScreen extends StatelessWidget {
             final list = ordered[index];
             return _CustomerRow(
               picklist: list,
+              totalMinorUnits: widget.showMoney ? _totals[list.id] : null,
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
                   builder: (_) => PicklistTakenScreen(
-                    repository: repository,
+                    repository: widget.repository,
                     picklist: list,
+                    showMoney: widget.showMoney,
                   ),
                 ),
               ),
@@ -257,9 +307,14 @@ class PicklistDayScreen extends StatelessWidget {
 
 class _CustomerRow extends StatelessWidget {
   final Picklist picklist;
+  final int? totalMinorUnits;
   final VoidCallback onTap;
 
-  const _CustomerRow({required this.picklist, required this.onTap});
+  const _CustomerRow({
+    required this.picklist,
+    required this.onTap,
+    this.totalMinorUnits,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -267,6 +322,9 @@ class _CustomerRow extends StatelessWidget {
     final shortId = picklist.id.length >= 4
         ? picklist.id.substring(0, 4).toUpperCase()
         : picklist.id.toUpperCase();
+    final subtitle = totalMinorUnits == null
+        ? 'WL-$shortId'
+        : 'WL-$shortId · ${MoneyUtils.formatBr(totalMinorUnits!)}';
     return GlassCard(
       padding: EdgeInsets.zero,
       radius: AppDesign.radiusCardSm,
@@ -310,7 +368,9 @@ class _CustomerRow extends StatelessWidget {
                   ),
                   const SizedBox(height: 1),
                   Text(
-                    'WL-$shortId',
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: AppDesign.textLo,
                       fontSize: 11,
@@ -335,15 +395,18 @@ class _CustomerRow extends StatelessWidget {
 }
 
 /// Level 3: exactly what one customer took, as a compact ledger with the same
-/// caption/row rhythm as Sales History. Quantities only.
+/// caption/row rhythm as Sales History. Quantities always; prices and totals
+/// only when [showMoney] is on.
 class PicklistTakenScreen extends StatefulWidget {
   final PicklistRepository repository;
   final Picklist picklist;
+  final bool showMoney;
 
   const PicklistTakenScreen({
     super.key,
     required this.repository,
     required this.picklist,
+    this.showMoney = false,
   });
 
   @override
@@ -414,13 +477,25 @@ class _PicklistTakenScreenState extends State<PicklistTakenScreen> {
               ),
             ),
             if (!_isLoading && _error == null)
-              _TakenLedgerHeader(count: _items.length),
+              _TakenLedgerHeader(
+                count: _items.length,
+                showMoney: widget.showMoney,
+              ),
             Expanded(child: _buildBody()),
+            if (widget.showMoney &&
+                !_isLoading &&
+                _error == null &&
+                _items.isNotEmpty)
+              _TakenTotalFooter(totalMinorUnits: _takenTotal),
           ],
         ),
       ),
     );
   }
+
+  /// Value of what was actually taken: unit price x taken quantity.
+  int get _takenTotal =>
+      _items.fold(0, (sum, i) => sum + i.unitPriceMinorUnits * i.takenQty);
 
   Widget _buildBody() {
     if (_isLoading) {
@@ -454,16 +529,19 @@ class _PicklistTakenScreenState extends State<PicklistTakenScreen> {
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
       itemCount: _items.length,
       separatorBuilder: (_, _) => const SizedBox(height: 8),
-      itemBuilder: (context, index) => _TakenRow(item: _items[index]),
+      itemBuilder: (context, index) =>
+          _TakenRow(item: _items[index], showMoney: widget.showMoney),
     );
   }
 }
 
-/// Caption row aligned with [_TakenRow]'s columns.
+/// Caption row aligned with [_TakenRow]'s columns. Price and Total only appear
+/// when the shop side is looking; the picker's ledger stops at Asked.
 class _TakenLedgerHeader extends StatelessWidget {
   final int count;
+  final bool showMoney;
 
-  const _TakenLedgerHeader({required this.count});
+  const _TakenLedgerHeader({required this.count, required this.showMoney});
 
   Widget _cell(String label, TextAlign align, {double? width}) {
     return SizedBox(
@@ -489,7 +567,7 @@ class _TakenLedgerHeader extends StatelessWidget {
         children: [
           Expanded(
             child: Text(
-              '$count item${count == 1 ? '' : 's'}',
+              showMoney ? 'Item' : '$count item${count == 1 ? '' : 's'}',
               style: TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.w700,
@@ -498,28 +576,32 @@ class _TakenLedgerHeader extends StatelessWidget {
               ),
             ),
           ),
-          _cell('Taken', TextAlign.end, width: 64),
-          const SizedBox(width: 10),
-          _cell('Asked', TextAlign.end, width: 56),
+          _cell('Asked', TextAlign.end, width: 52),
+          if (showMoney) ...[
+            const SizedBox(width: 6),
+            _cell('Price', TextAlign.end, width: 60),
+            const SizedBox(width: 6),
+            _cell('Total', TextAlign.end, width: 64),
+          ],
         ],
       ),
     );
   }
 }
 
-/// One product line: name, the quantity actually taken and what was asked for.
+/// One product line: name, the quantity actually taken, what was asked for and
+/// — on the shop side only — the unit price and the value taken.
 class _TakenRow extends StatelessWidget {
   final PicklistItem item;
+  final bool showMoney;
 
-  const _TakenRow({required this.item});
+  const _TakenRow({required this.item, required this.showMoney});
 
   @override
   Widget build(BuildContext context) {
-    final unit = (item.unit == null || item.unit!.isEmpty)
-        ? ''
-        : ' ${item.unit}';
     final took = item.takenQty;
     final dimmed = took <= 0;
+    final takenValue = item.unitPriceMinorUnits * took;
     return Opacity(
       opacity: dimmed ? 0.55 : 1,
       child: GlassCard(
@@ -542,25 +624,7 @@ class _TakenRow extends StatelessWidget {
                 ),
               ),
               SizedBox(
-                width: 64,
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerRight,
-                  child: Text(
-                    '$took$unit',
-                    maxLines: 1,
-                    textAlign: TextAlign.end,
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w700,
-                      color: took > 0 ? AppDesign.textHi : AppDesign.textLo,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              SizedBox(
-                width: 56,
+                width: 52,
                 child: FittedBox(
                   fit: BoxFit.scaleDown,
                   alignment: Alignment.centerRight,
@@ -572,9 +636,81 @@ class _TakenRow extends StatelessWidget {
                   ),
                 ),
               ),
+              if (showMoney) ...[
+                const SizedBox(width: 6),
+                SizedBox(
+                  width: 60,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      MoneyUtils.formatBr(item.unitPriceMinorUnits),
+                      maxLines: 1,
+                      textAlign: TextAlign.end,
+                      style: TextStyle(fontSize: 11.5, color: AppDesign.textLo),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                SizedBox(
+                  width: 64,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      MoneyUtils.formatBr(takenValue),
+                      maxLines: 1,
+                      textAlign: TextAlign.end,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: took > 0 ? AppDesign.textHi : AppDesign.textLo,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// The shop-side footer: the total value of everything taken on this list.
+class _TakenTotalFooter extends StatelessWidget {
+  final int totalMinorUnits;
+
+  const _TakenTotalFooter({required this.totalMinorUnits});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(24, 10, 24, 14),
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: AppDesign.stroke)),
+      ),
+      child: Row(
+        children: [
+          Text(
+            'Value taken',
+            style: TextStyle(
+              color: AppDesign.textLo,
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const Spacer(),
+          Text(
+            MoneyUtils.formatBr(totalMinorUnits),
+            style: TextStyle(
+              color: AppDesign.textHi,
+              fontSize: 14.5,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
       ),
     );
   }

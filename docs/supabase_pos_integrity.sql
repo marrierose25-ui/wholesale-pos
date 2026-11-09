@@ -636,6 +636,83 @@ REVOKE ALL ON FUNCTION pos_complete_finance FROM public;
 GRANT EXECUTE ON FUNCTION pos_complete_finance TO service_role;
 
 -- ---------------------------------------------------------------------------
+-- 3f-1b. pos_delete_finance_entry: soft-delete a collection, reversing a
+-- completed CASH deposit with a WITHDRAWAL on the open drawer. Mirrors the
+-- native transaction; `status = DELETED` is what the sync pull hides.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION pos_delete_finance_entry(
+  p_customer uuid,
+  p_user     text,
+  p_entry_id text
+)
+RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  entry       record;
+  cat_name    text;
+  shift_found text;
+  updated     int;
+BEGIN
+  IF public.pos_is_demo(p_customer, p_user) THEN
+    RAISE EXCEPTION 'Training-account data stays on the till that made it.';
+  END IF;
+
+  SELECT * INTO entry FROM public.pos_finance_entries
+  WHERE customer_id = p_customer AND id = p_entry_id AND status <> 'DELETED'
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Entry not found.';
+  END IF;
+
+  IF upper(COALESCE(entry.status, '')) = 'COMPLETED'
+     AND upper(COALESCE(entry.payment_method, '')) = 'CASH' THEN
+    IF EXISTS (
+      SELECT 1 FROM public.cash_movements
+      WHERE customer_id = p_customer
+        AND source_finance_entry_id = p_entry_id
+    ) THEN
+      SELECT id INTO shift_found FROM public.shifts
+      WHERE customer_id = p_customer AND status = 'OPEN'
+      LIMIT 1 FOR SHARE;
+      IF shift_found IS NULL THEN
+        RAISE EXCEPTION
+          'Open the register before deleting a completed cash collection.';
+      END IF;
+
+      SELECT name INTO cat_name FROM public.pos_finance_categories
+      WHERE customer_id = p_customer AND id = entry.category_id;
+
+      INSERT INTO public.cash_movements (
+        id, customer_id, shift_id, user_id, type, amount_minor_units,
+        reason, created_at)
+      VALUES (
+        gen_random_uuid(), p_customer, shift_found, p_user, 'WITHDRAWAL',
+        entry.amount_minor_units,
+        'Reversal: deleted cash collection from '
+          || COALESCE(cat_name, 'a person') || ' (' || COALESCE(entry.source, '') || ')',
+        now());
+    END IF;
+  END IF;
+
+  UPDATE public.pos_finance_entries
+  SET status = 'DELETED', updated_at = now()
+  WHERE customer_id = p_customer AND id = p_entry_id AND status <> 'DELETED';
+  GET DIAGNOSTICS updated = ROW_COUNT;
+  IF updated <> 1 THEN
+    RAISE EXCEPTION 'Entry is already deleted.';
+  END IF;
+
+  INSERT INTO public.pos_audit_logs (id, customer_id, user_id, action, details, created_at)
+  VALUES (gen_random_uuid(), p_customer, p_user, 'FINANCE_ENTRY_DELETED',
+    'Entry ' || p_entry_id || ' deleted.', now());
+END;
+$$;
+REVOKE ALL ON FUNCTION pos_delete_finance_entry FROM public;
+GRANT EXECUTE ON FUNCTION pos_delete_finance_entry TO service_role;
+
+-- ---------------------------------------------------------------------------
 -- 3f-2. pos_delete_finance_category: permanent delete of a binned person.
 -- Entries and the person must leave together: the client used to send two
 -- separate requests, so a failure in between erased a person's ledger while
@@ -1281,7 +1358,7 @@ BEGIN
   END IF;
   SELECT jsonb_build_object(
     'pending_total',   COALESCE(sum(amount_minor_units) FILTER (WHERE status = 'PENDING'), 0),
-    'completed_total', COALESCE(sum(amount_minor_units) FILTER (WHERE status <> 'PENDING'), 0)
+    'completed_total', COALESCE(sum(amount_minor_units) FILTER (WHERE status = 'COMPLETED'), 0)
   ) INTO res
   FROM public.pos_finance_entries
   WHERE customer_id = p_customer AND category_id = p_category_id;

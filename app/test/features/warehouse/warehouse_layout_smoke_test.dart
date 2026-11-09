@@ -327,9 +327,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('New List'), findsOneWidget);
-    expect(find.text('NEW LIST'), findsOneWidget);
+    // The action is now a single large + circle, not a labelled card.
+    expect(find.byIcon(Icons.add), findsOneWidget);
     expect(find.text('Lists to fill'), findsNothing);
-    expect(find.text('History'), findsNothing);
+    // History is read-only and available to the shop side too (with money).
+    expect(find.text('History'), findsOneWidget);
     expect(find.text('To Fill'), findsNothing);
     expect(tester.takeException(), isNull);
   });
@@ -384,7 +386,9 @@ void main() {
 
     await tester.tap(find.text('New List'));
     await tester.pumpAndSettle();
-    expect(find.text('NEW LIST'), findsOneWidget);
+    // The mode switch itself has an add icon; the body's large + circle is the
+    // second one.
+    expect(find.byIcon(Icons.add), findsNWidgets(2));
     expect(find.text('Lists to fill'), findsNothing);
     expect(tester.takeException(), isNull);
   });
@@ -427,13 +431,50 @@ void main() {
     await tester.tap(find.text('Aymen'));
     await tester.pumpAndSettle();
     expect(find.text('Chew'), findsOneWidget);
-    expect(find.text('50 Karton'), findsOneWidget);
+    // Only the Asked quantity is shown; the Taken column was removed.
+    expect(find.text('50'), findsOneWidget);
     expect(find.text('Flour'), findsOneWidget);
-    expect(find.text('10 Karton'), findsOneWidget);
-    expect(find.text('Taken'), findsOneWidget);
-    expect(find.text('Asked'), findsOneWidget);
     expect(find.text('30'), findsOneWidget);
+    expect(find.text('Taken'), findsNothing);
+    expect(find.text('Asked'), findsOneWidget);
     expect(find.textContaining('Br'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('shop-side history shows prices and the value taken', (
+    tester,
+  ) async {
+    final repo = _FakeRepo(
+      picklists: [_picklist(id: 'p1', customer: 'Aymen')],
+      items: [
+        _item(id: 'i1', product: 'Chew', requested: 50, taken: 50),
+        _item(id: 'i2', product: 'Flour', requested: 30, taken: 10),
+      ],
+    );
+    await _pump(
+      tester,
+      WarehouseHistoryScreen(repository: repo, showMoney: true),
+      const Size(390, 844),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('6 November 2026'));
+    await tester.pumpAndSettle();
+    // The customer row carries the list's value taken.
+    expect(find.textContaining('2,730.00 Br'), findsOneWidget);
+
+    await tester.tap(find.text('Aymen'));
+    await tester.pumpAndSettle();
+    expect(find.text('Price'), findsOneWidget);
+    expect(find.text('Total'), findsOneWidget);
+    expect(find.text('45.50 Br'), findsNWidgets(2));
+    expect(find.text('2,275.00 Br'), findsOneWidget);
+    expect(find.text('455.00 Br'), findsOneWidget);
+    expect(find.text('Value taken'), findsOneWidget);
+    expect(find.text('2,730.00 Br'), findsOneWidget);
+    // Asked quantities only; the Taken column is gone.
+    expect(find.text('50'), findsOneWidget);
+    expect(find.text('30'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

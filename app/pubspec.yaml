@@ -58,6 +58,9 @@ dependencies:
   # JPEG encoder on web). Also present transitively via `pdf`; declared direct
   # here because our own code imports it.
   image: ^4.12.0
+  # Short "new picklist" chime for the warehouse queue. Plays on web, Windows
+  # and Android from one asset, so the alert sounds the same on every device.
+  audioplayers: ^6.8.1
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -80,6 +83,9 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - assets/sounds/warehouse_alert.wav
 
   # To add assets to your application, add an assets section, like this:
   # assets:

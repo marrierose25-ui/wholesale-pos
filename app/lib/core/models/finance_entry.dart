@@ -5,6 +5,7 @@
 class FinanceEntry {
   static const String statusPending = 'PENDING';
   static const String statusCompleted = 'COMPLETED';
+  static const String statusDeleted = 'DELETED';
 
   final String id;
   final String categoryId;
@@ -44,6 +45,7 @@ class FinanceEntry {
   });
 
   bool get isCompleted => status == statusCompleted;
+  bool get isDeleted => status == statusDeleted;
   bool get isCash => paymentMethod == 'CASH';
 
   Map<String, dynamic> toMap() {

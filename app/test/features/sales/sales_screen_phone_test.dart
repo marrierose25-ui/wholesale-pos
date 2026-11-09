@@ -134,6 +134,13 @@ void main() {
       await tester.tap(find.widgetWithText(ChoiceChip, 'Cash'));
       await pumpFrames();
 
+      // A reason is required before the sale can be completed.
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Reason / Reference'),
+        'Walk-in customer',
+      );
+      await tester.pump();
+
       await tester.tap(find.text('Complete'));
       // The save runs as a fire-and-forget real-time future on the screen. Poll
       // for its row INSIDE runAsync: awaiting sqflite only resolves on the real

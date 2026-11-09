@@ -92,6 +92,11 @@ abstract class FinanceRepository {
     required String entryId,
   });
 
+  /// Deletes a pending or completed entry. A completed CASH collection is
+  /// reversed out of the open register with a matching WITHDRAWAL movement, so
+  /// deleting a mistaken collection does not leave its money in the drawer.
+  Future<void> deleteEntry({required String ownerId, required String entryId});
+
   Future<List<FinanceEntry>> searchEntries({
     required String ownerId,
     String? categoryId,
@@ -231,16 +236,6 @@ class SqfliteFinanceRepository implements FinanceRepository {
 
     await _db.transaction((txn) async {
       await _requireFinanceAccess(txn, ownerId);
-      final existing = await txn.query(
-        'finance_categories',
-        columns: ['id'],
-        where: 'LOWER(name) = LOWER(?)',
-        whereArgs: [trimmed],
-        limit: 1,
-      );
-      if (existing.isNotEmpty) {
-        throw Exception('A person named "$trimmed" already exists.');
-      }
       await txn.insert('finance_categories', category.toMap());
       await _enqueueCategory(txn, category.id);
       await _audit(
@@ -272,16 +267,6 @@ class SqfliteFinanceRepository implements FinanceRepository {
       );
       if (existing.isEmpty) {
         throw Exception('Person not found.');
-      }
-      final duplicate = await txn.query(
-        'finance_categories',
-        columns: ['id'],
-        where: 'LOWER(name) = LOWER(?) AND id != ?',
-        whereArgs: [trimmed, categoryId],
-        limit: 1,
-      );
-      if (duplicate.isNotEmpty) {
-        throw Exception('A person named "$trimmed" already exists.');
       }
       final oldName = existing.first['name'] as String;
       await txn.update(
@@ -723,6 +708,105 @@ class SqfliteFinanceRepository implements FinanceRepository {
     });
   }
 
+  /// Deletes a pending or completed entry. A completed CASH collection gets a
+  /// matching WITHDRAWAL on the open drawer, so the money `markCompleted`
+  /// deposited is returned rather than left behind. The row itself is marked
+  /// `DELETED` instead of being removed: the ledger is append-only in the
+  /// cloud, and the hidden status is what syncs the deletion to every surface.
+  @override
+  Future<void> deleteEntry({
+    required String ownerId,
+    required String entryId,
+  }) async {
+    final now = DateTime.now();
+    await _db.transaction((txn) async {
+      await _requireFinanceAccess(txn, ownerId);
+      final maps = await txn.query(
+        'finance_entries',
+        where: 'id = ?',
+        whereArgs: [entryId],
+        limit: 1,
+      );
+      if (maps.isEmpty) throw Exception('Entry not found.');
+      final entry = FinanceEntry.fromMap(maps.first);
+      if (entry.status == FinanceEntry.statusDeleted) {
+        throw Exception('Entry is already deleted.');
+      }
+      final category = await _requireCategory(txn, entry.categoryId);
+
+      // A completed CASH collection deposited its amount into the drawer. Find
+      // that deposit and post the exact opposite movement, not a raw row
+      // deletion: the cash ledger is append-only and the reversal has to travel
+      // to the cloud through the same `pos_add_cash_movement` path.
+      if (entry.isCompleted && entry.isCash) {
+        final deposits = await txn.query(
+          'cash_movements',
+          columns: ['id'],
+          where: 'source_finance_entry_id = ?',
+          whereArgs: [entry.id],
+          limit: 1,
+        );
+        if (deposits.isNotEmpty) {
+          final shifts = await txn.query(
+            'shifts',
+            columns: ['id'],
+            where: "status = 'OPEN'",
+            limit: 1,
+          );
+          if (shifts.isEmpty) {
+            throw Exception(
+              'Open the register before deleting a completed cash collection '
+              'so its deposit can be reversed.',
+            );
+          }
+          final movementId = const Uuid().v4();
+          final movement = {
+            'id': movementId,
+            'shift_id': shifts.first['id'] as String,
+            'user_id': ownerId,
+            'type': 'WITHDRAWAL',
+            'amount_minor_units': entry.amountMinorUnits,
+            'reason':
+                'Reversal: deleted cash collection from ${category.name} '
+                '(${entry.source})',
+            'created_at': now.toIso8601String(),
+            // Deliberately no `source_finance_entry_id`: its unique index keeps
+            // one row per collection, and this is the opposite leg, not the
+            // deposit itself.
+          };
+          await txn.insert('cash_movements', movement);
+          await SyncOutbox.upsert(
+            txn,
+            entityType: SyncEntities.cashMovement,
+            entityId: movementId,
+            payload: {'cash_movement': movement},
+          );
+        }
+      }
+
+      final updated = await txn.update(
+        'finance_entries',
+        {
+          'status': FinanceEntry.statusDeleted,
+          'updated_at': now.toIso8601String(),
+        },
+        where: 'id = ? AND status != ?',
+        whereArgs: [entryId, FinanceEntry.statusDeleted],
+      );
+      if (updated != 1) throw Exception('Entry is already deleted.');
+
+      await _enqueueEntry(txn, entryId);
+      await _audit(
+        txn,
+        ownerId,
+        'FINANCE_ENTRY_DELETED',
+        'Person "${category.name}": ${entry.source} '
+            '${MoneyUtils.formatBr(entry.amountMinorUnits)} deleted.'
+            '${entry.isCompleted && entry.isCash ? ' Cash deposit reversed.' : ''}',
+      );
+    });
+  }
+
   /// Searches financial history. Matches person name, source, and
   /// description; filters by status and an optional entry-date range.
   @override
@@ -737,6 +821,11 @@ class SqfliteFinanceRepository implements FinanceRepository {
 
     final where = <String>[];
     final args = <dynamic>[];
+
+    // A deleted entry stays in the table so its deletion can sync, but it must
+    // never resurface in the active ledger or its totals.
+    where.add('finance_entries.status != ?');
+    args.add(FinanceEntry.statusDeleted);
 
     if (categoryId != null && categoryId.isNotEmpty) {
       where.add('finance_entries.category_id = ?');

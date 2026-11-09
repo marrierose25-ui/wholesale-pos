@@ -146,6 +146,14 @@ class CloudFinanceRepository implements FinanceRepository {
   }
 
   @override
+  Future<void> deleteEntry({
+    required String ownerId,
+    required String entryId,
+  }) async {
+    await _api.call('finance_delete_entry', {'entry_id': entryId});
+  }
+
+  @override
   Future<List<FinanceEntry>> searchEntries({
     required String ownerId,
     String? categoryId,

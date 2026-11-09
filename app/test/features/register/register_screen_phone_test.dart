@@ -87,7 +87,7 @@ void main() {
           await Future<void>.delayed(const Duration(milliseconds: 40));
           await tester.pump(const Duration(milliseconds: 40));
         }
-        expect(find.text('Cash Movement'), findsOneWidget);
+        expect(find.text('Debit (Withdrawal)'), findsOneWidget);
         // The debit dialog offers an (optional) proof photo picker.
         expect(find.text('Add photo (optional)'), findsOneWidget);
 

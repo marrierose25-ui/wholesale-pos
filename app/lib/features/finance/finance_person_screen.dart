@@ -10,8 +10,8 @@ import '../../core/theme/app_theme.dart';
 import '../../core/utils/money_utils.dart';
 
 /// The dedicated page for one person in the owner's private money area.
-/// Pending entries disappear from the active list once marked taken, but
-/// stay permanently in history and remain searchable.
+/// Pending and taken entries share one list in date order; the status chip on
+/// each row says which it is, and a taken entry stays visible for good.
 class FinancePersonScreen extends StatefulWidget {
   final FinanceRepository financeRepository;
   final User currentUser;
@@ -39,8 +39,6 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
   final _searchController = TextEditingController();
   Timer? _searchDebounce;
 
-  String _statusFilter = 'PENDING';
-
   @override
   void initState() {
     super.initState();
@@ -66,15 +64,20 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
         searchQuery: _searchController.text.trim().isEmpty
             ? null
             : _searchController.text.trim(),
-        status: _statusFilter,
+        status: 'ALL',
       );
       final totals = await widget.financeRepository.getPersonTotals(
         widget.currentUser.id,
         widget.categoryId,
       );
       if (!mounted) return;
+      // One list in time order, newest first, whatever the status. The repo
+      // already orders by entry date; re-sorting here keeps a locally inserted
+      // row from jumping to the end.
+      final ordered = [...entries]
+        ..sort((a, b) => b.entryDate.compareTo(a.entryDate));
       setState(() {
-        _entries = entries;
+        _entries = ordered;
         _totals = totals;
         _isLoading = false;
       });
@@ -94,7 +97,12 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
 
   void _showError(Object e) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(e.toString().replaceAll('Exception: ', ''))),
+      SnackBar(
+        content: Text(e.toString().replaceAll('Exception: ', '')),
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.all(16),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
     );
   }
 
@@ -139,7 +147,7 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Mark as Taken?'),
         content: Text(
-          'Mark ${entry.source} (${MoneyUtils.formatBr(entry.amountMinorUnits)}) as taken? It will leave the pending list but stay in history.'
+          'Mark ${entry.source} (${MoneyUtils.formatBr(entry.amountMinorUnits)}) as taken? It stays in the list, marked as taken.'
           '${entry.isCash ? ' As a cash collection, the amount is also added to the register balance.' : ''}',
         ),
         actions: [
@@ -167,6 +175,43 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
     }
   }
 
+  Future<void> _deleteEntry(FinanceEntry entry) async {
+    final reversesCash = entry.isCompleted && entry.isCash;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Entry?'),
+        content: Text(
+          'Delete ${entry.source} (${MoneyUtils.formatBr(entry.amountMinorUnits)})? '
+          'This cannot be undone.'
+          '${reversesCash ? ' The cash amount was added to the register when this collection was marked taken, so it will be taken back out of the register too.' : ''}',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await widget.financeRepository.deleteEntry(
+        ownerId: widget.currentUser.id,
+        entryId: entry.id,
+      );
+      await _load();
+    } catch (e) {
+      if (mounted) _showError(e);
+    }
+  }
+
   String _formatDate(DateTime date) {
     return '${date.year.toString().padLeft(4, '0')}-'
         '${date.month.toString().padLeft(2, '0')}-'
@@ -182,7 +227,7 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
         child: Column(
           children: [
             _buildSummary(),
-            _buildTabsAndSearch(),
+            _buildSearch(),
             const Divider(height: 1),
             Expanded(
               child: _isLoading
@@ -204,11 +249,7 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
                   : _entries.isEmpty
                   ? Center(
                       child: Text(
-                        _statusFilter == 'PENDING'
-                            ? 'No pending entries.'
-                            : _statusFilter == 'COMPLETED'
-                            ? 'No completed entries yet.'
-                            : 'No entries yet.',
+                        'No entries yet.',
                         style: TextStyle(
                           color: Theme.of(context).textTheme.bodySmall?.color,
                         ),
@@ -300,44 +341,27 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
     );
   }
 
-  Widget _buildTabsAndSearch() {
+  Widget _buildSearch() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
-      child: Column(
-        children: [
-          SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(value: 'PENDING', label: Text('Pending')),
-              ButtonSegment(value: 'COMPLETED', label: Text('Completed')),
-              ButtonSegment(value: 'ALL', label: Text('All History')),
-            ],
-            selected: {_statusFilter},
-            onSelectionChanged: (selection) {
-              setState(() => _statusFilter = selection.first);
-              _load();
-            },
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _searchController,
-            decoration: InputDecoration(
-              hintText: 'Search source or description...',
-              prefixIcon: const Icon(Icons.search),
-              isDense: true,
-              suffixIcon: _searchController.text.isEmpty
-                  ? null
-                  : IconButton(
-                      icon: const Icon(Icons.clear),
-                      onPressed: () {
-                        _searchController.clear();
-                        _load();
-                      },
-                    ),
-            ),
-            onChanged: _onSearchChanged,
-            onSubmitted: (_) => _load(),
-          ),
-        ],
+      child: TextField(
+        controller: _searchController,
+        decoration: InputDecoration(
+          hintText: 'Search source or description...',
+          prefixIcon: const Icon(Icons.search),
+          isDense: true,
+          suffixIcon: _searchController.text.isEmpty
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.clear),
+                  onPressed: () {
+                    _searchController.clear();
+                    _load();
+                  },
+                ),
+        ),
+        onChanged: _onSearchChanged,
+        onSubmitted: (_) => _load(),
       ),
     );
   }
@@ -381,26 +405,35 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                MoneyUtils.formatBr(entry.amountMinorUnits),
-                style: const TextStyle(fontWeight: FontWeight.bold),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 120),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    MoneyUtils.formatBr(entry.amountMinorUnits),
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
               ),
-              if (isPending) ...[
-                const SizedBox(width: 4),
-                PopupMenuButton<String>(
-                  onSelected: (value) {
-                    if (value == 'complete') _markCompleted(entry);
-                    if (value == 'edit') _showAddEntryDialog(editing: entry);
-                  },
-                  itemBuilder: (context) => const [
-                    PopupMenuItem(
+              const SizedBox(width: 4),
+              PopupMenuButton<String>(
+                onSelected: (value) {
+                  if (value == 'complete') _markCompleted(entry);
+                  if (value == 'edit') _showAddEntryDialog(editing: entry);
+                  if (value == 'delete') _deleteEntry(entry);
+                },
+                itemBuilder: (context) => [
+                  if (isPending) ...[
+                    const PopupMenuItem(
                       value: 'complete',
                       child: Text('Mark as Taken'),
                     ),
-                    PopupMenuItem(value: 'edit', child: Text('Edit')),
+                    const PopupMenuItem(value: 'edit', child: Text('Edit')),
                   ],
-                ),
-              ],
+                  const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                ],
+              ),
             ],
           ),
         ),
@@ -506,9 +539,14 @@ class _EntryDialogState extends State<_EntryDialog> {
             ? (_step == 0 ? 'Add Entry (1/2)' : 'Select Payment (2/2)')
             : (_step == 0 ? 'Edit Entry (1/2)' : 'Select Payment (2/2)'),
       ),
-      content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 420),
-        child: _step == 0 ? _buildDetailsStep() : _buildPaymentStep(),
+      content: SingleChildScrollView(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom,
+        ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: _step == 0 ? _buildDetailsStep() : _buildPaymentStep(),
+        ),
       ),
       actions: _step == 0
           ? [
@@ -543,17 +581,17 @@ class _EntryDialogState extends State<_EntryDialog> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         TextField(
-          controller: _sourceController,
+          controller: _amountController,
           autofocus: widget.initial == null,
-          decoration: const InputDecoration(
-            labelText: 'Source (e.g., CBE Bank)',
-          ),
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(labelText: 'Amount (Br)'),
         ),
         const SizedBox(height: 12),
         TextField(
-          controller: _amountController,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: const InputDecoration(labelText: 'Amount (Br)'),
+          controller: _sourceController,
+          decoration: const InputDecoration(
+            labelText: 'Source (e.g., CBE Bank)',
+          ),
         ),
         const SizedBox(height: 12),
         InkWell(
@@ -569,13 +607,6 @@ class _EntryDialogState extends State<_EntryDialog> {
               '${_selectedDate.month.toString().padLeft(2, '0')}-'
               '${_selectedDate.day.toString().padLeft(2, '0')}',
             ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _descriptionController,
-          decoration: const InputDecoration(
-            labelText: 'Description / Notes (optional)',
           ),
         ),
         if (_error != null) ...[
@@ -619,12 +650,7 @@ class _EntryDialogState extends State<_EntryDialog> {
             ],
           ),
         ),
-        const SizedBox(height: 24),
-        const Text(
-          'How was this collected?',
-          style: TextStyle(fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 16),
         Wrap(
           spacing: 8,
           runSpacing: 8,

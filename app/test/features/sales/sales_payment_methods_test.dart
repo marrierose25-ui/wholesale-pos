@@ -140,9 +140,19 @@ void main() {
       await pumpFrames(tester, 3);
       expect(find.text('Select a payment method.'), findsOneWidget);
 
-      // Pick Loan and commit.
+      // Pick Loan; a reason is still required, so Complete stays blocked.
       await tester.tap(find.widgetWithText(ChoiceChip, 'Loan'));
       await pumpFrames(tester);
+      await tester.tap(find.text('Complete'));
+      await pumpFrames(tester, 3);
+      expect(find.text('Enter a reason for this sale.'), findsOneWidget);
+
+      // Supply the reason and commit.
+      await tester.enterText(
+        find.widgetWithText(TextField, 'Reason / Reference'),
+        'Monthly customer account',
+      );
+      await tester.pump();
       await tester.tap(find.text('Complete'));
 
       for (var i = 0; i < 50; i++) {
@@ -161,6 +171,9 @@ void main() {
     // Loan settles for exactly the total: nothing tendered, nothing given back.
     expect(saved!.amountPaidMinorUnits, saved!.totalMinorUnits);
     expect(saved!.changeMinorUnits, 0);
+    // The reason rides on the line item's notes, which syncs without a schema
+    // change.
+    expect(saved!.items.single.notes, 'Monthly customer account');
 
     expect(tester.takeException(), isNull);
   });

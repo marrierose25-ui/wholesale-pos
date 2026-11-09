@@ -96,6 +96,10 @@ void main() {
         throwsException,
       );
       await expectLater(
+        repository.deleteEntry(ownerId: 'cashier-1', entryId: 'anything'),
+        throwsException,
+      );
+      await expectLater(
         repository.searchEntries(ownerId: 'cashier-1'),
         throwsException,
       );
@@ -155,17 +159,18 @@ void main() {
   });
 
   group('people (categories)', () {
-    test('creates and lists people; duplicate names are rejected', () async {
+    test('creates and lists people; duplicate names are allowed', () async {
       await repository.createCategory(ownerId: 'owner-1', name: 'Alem');
       await repository.createCategory(ownerId: 'owner-1', name: 'Hanna');
 
-      final people = await repository.getCategories('owner-1');
+      var people = await repository.getCategories('owner-1');
       expect(people.map((p) => p.name), ['Alem', 'Hanna']);
 
-      await expectLater(
-        repository.createCategory(ownerId: 'owner-1', name: ' alem '),
-        throwsException,
-      );
+      // Two different people may share a name; the trim still applies.
+      await repository.createCategory(ownerId: 'owner-1', name: ' alem ');
+      people = await repository.getCategories('owner-1');
+      expect(people, hasLength(3));
+      expect(people.where((p) => p.name.toLowerCase() == 'alem'), hasLength(2));
     });
 
     test('renaming keeps all entries attached to the person', () async {
@@ -284,6 +289,89 @@ void main() {
         );
       },
     );
+
+    test(
+      'deleting a completed cash entry reverses its drawer deposit',
+      () async {
+        final category = await repository.createCategory(
+          ownerId: 'owner-1',
+          name: 'Alem',
+        );
+        final entry = await repository.addEntry(
+          ownerId: 'owner-1',
+          categoryId: category.id,
+          source: 'Counter',
+          amountMinorUnits: 10000,
+          paymentMethod: 'CASH',
+        );
+        await openShift();
+        await repository.markCompleted(ownerId: 'owner-1', entryId: entry.id);
+
+        await repository.deleteEntry(ownerId: 'owner-1', entryId: entry.id);
+
+        // The entry is hidden from every active view and its completed total no
+        // longer counts, but the row remains stored as DELETED for sync.
+        expect(await repository.searchEntries(ownerId: 'owner-1'), isEmpty);
+        final totals = await repository.getPersonTotals('owner-1', category.id);
+        expect(totals['completed_total'], 0);
+        final stored = await db.query(
+          'finance_entries',
+          where: 'id = ?',
+          whereArgs: [entry.id],
+        );
+        expect(stored.single['status'], FinanceEntry.statusDeleted);
+
+        // The deposit stays in the ledger and an equal opposite movement takes
+        // the money back out, so the drawer nets to zero.
+        final deposits = await db.query(
+          'cash_movements',
+          where: "type = 'DEPOSIT'",
+        );
+        final withdrawals = await db.query(
+          'cash_movements',
+          where: "type = 'WITHDRAWAL'",
+        );
+        expect(deposits, hasLength(1));
+        expect(withdrawals, hasLength(1));
+        expect(withdrawals.single['amount_minor_units'], 10000);
+
+        // Both changes are queued so the cloud sees the same truth.
+        final outbox = await db.query(
+          'sync_outbox',
+          where: "entity_type IN ('finance_entry', 'cash_movement')",
+        );
+        expect(
+          outbox.where((r) => r['entity_type'] == 'finance_entry'),
+          isNotEmpty,
+        );
+        expect(
+          outbox.where((r) => r['entity_type'] == 'cash_movement'),
+          isNotEmpty,
+        );
+      },
+    );
+
+    test('deleting a pending entry needs no cash movement', () async {
+      final category = await repository.createCategory(
+        ownerId: 'owner-1',
+        name: 'Alem',
+      );
+      final entry = await repository.addEntry(
+        ownerId: 'owner-1',
+        categoryId: category.id,
+        source: 'Bank',
+        amountMinorUnits: 50000,
+      );
+
+      await repository.deleteEntry(ownerId: 'owner-1', entryId: entry.id);
+
+      expect(await repository.searchEntries(ownerId: 'owner-1'), isEmpty);
+      expect(await db.query('cash_movements'), isEmpty);
+      await expectLater(
+        repository.deleteEntry(ownerId: 'owner-1', entryId: entry.id),
+        throwsException,
+      );
+    });
 
     test('completed entries are immutable', () async {
       final category = await repository.createCategory(

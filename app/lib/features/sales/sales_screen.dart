@@ -74,14 +74,14 @@ class SalesScreenState extends State<SalesScreen> {
     if (draft == null) return;
     if (!mounted) return;
 
-    // Second step: choose how the sale is settled. Back/cancel returns null and
-    // abandons the sale without saving anything.
-    final paymentMethod = await showDialog<String>(
+    // Second step: choose how the sale is settled and why. Back/cancel returns
+    // null and abandons the sale without saving anything.
+    final settlement = await showDialog<_SaleSettlement>(
       context: context,
       barrierDismissible: false,
       builder: (context) => _PaymentDialog(draft: draft),
     );
-    if (paymentMethod == null) return;
+    if (settlement == null) return;
 
     setState(() => _isProcessing = true);
     try {
@@ -108,7 +108,7 @@ class SalesScreenState extends State<SalesScreen> {
         billingQuantityMilliunits: draft.billingQuantityMilliunits,
         lineDiscountMinorUnits: 0,
         lineTotalMinorUnits: lineTotal,
-        notes: null,
+        notes: settlement.reason,
       );
 
       final sale = Sale(
@@ -117,7 +117,7 @@ class SalesScreenState extends State<SalesScreen> {
         cashierId: widget.currentUser.id,
         deviceId: widget.deviceId,
         shiftId: shift.id,
-        paymentMethod: paymentMethod,
+        paymentMethod: settlement.paymentMethod,
         subtotalMinorUnits: lineTotal,
         discountMinorUnits: 0,
         totalMinorUnits: lineTotal,
@@ -131,7 +131,7 @@ class SalesScreenState extends State<SalesScreen> {
       // Confirm the receipt out loud: a loan sale moves no money, so without
       // this the dashboard and the drawer would look unchanged and the cashier
       // could think the sale was never recorded.
-      final methodLabel = switch (paymentMethod) {
+      final methodLabel = switch (settlement.paymentMethod) {
         'LOAN' => 'Loan (on credit)',
         'BANK' => 'Bank transfer',
         _ => 'Cash',
@@ -236,6 +236,16 @@ class _SaleDraft {
     required this.unitPriceMinorUnits,
     required this.lineTotalMinorUnits,
   });
+}
+
+/// The settlement chosen on step two. The reason rides on the sale's line-item
+/// notes, which already syncs end to end, so no schema change is needed and the
+/// cloud keeps the audit trail with the sale it explains.
+class _SaleSettlement {
+  final String paymentMethod;
+  final String reason;
+
+  const _SaleSettlement({required this.paymentMethod, required this.reason});
 }
 
 /// Units offered in the New Sale dialog's Unit dropdown.
@@ -468,10 +478,11 @@ class _SaleDialogState extends State<_SaleDialog> {
   }
 }
 
-/// The second step of the sale: shows the line just entered and asks for the
-/// payment method. Nothing is pre-selected, so the cashier must make an
-/// explicit Cash / Bank Transfer / Loan choice before the sale is posted. It
-/// carries no text fields, so the keyboard never covers it.
+/// The second step of the sale: shows the line just entered, asks for the
+/// payment method, and requires a reason/reference. Nothing is pre-selected, so
+/// the cashier must make an explicit Cash / Bank Transfer / Loan choice before
+/// the sale is posted. The reason rides on the line item's notes (which already
+/// syncs end to end), so no schema change is needed.
 class _PaymentDialog extends StatefulWidget {
   final _SaleDraft draft;
 
@@ -482,16 +493,29 @@ class _PaymentDialog extends StatefulWidget {
 }
 
 class _PaymentDialogState extends State<_PaymentDialog> {
+  final _reasonController = TextEditingController();
   String? _paymentMethod;
   String? _error;
 
+  @override
+  void dispose() {
+    _reasonController.dispose();
+    super.dispose();
+  }
+
   void _complete() {
     final method = _paymentMethod;
+    final reason = _reasonController.text.trim();
     if (method == null) {
       setState(() => _error = 'Select a payment method.');
       return;
     }
-    Navigator.of(context).pop(method);
+    if (reason.isEmpty) {
+      setState(() => _error = 'Enter a reason for this sale.');
+      return;
+    }
+    Navigator.of(context)
+        .pop(_SaleSettlement(paymentMethod: method, reason: reason));
   }
 
   @override
@@ -499,80 +523,98 @@ class _PaymentDialogState extends State<_PaymentDialog> {
     return AlertDialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       title: const Text('Payment Method'),
-      content: ConstrainedBox(
-        // Cap at 360 on wide screens but never exceed the dialog's own content
-        // box, so the summary row can't overflow a narrow phone.
-        constraints: const BoxConstraints(maxWidth: 360),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Theme.of(context).scaffoldBackgroundColor,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: AppTheme.border),
+      content: SingleChildScrollView(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom,
+        ),
+        child: ConstrainedBox(
+          // Cap at 360 on wide screens but never exceed the dialog's own content
+          // box, so the summary row can't overflow a narrow phone.
+          constraints: const BoxConstraints(maxWidth: 360),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).scaffoldBackgroundColor,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppTheme.border),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.draft.name,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            widget.draft.quantityText,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: AppTheme.muted),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          MoneyUtils.formatBr(widget.draft.lineTotalMinorUnits),
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
                 children: [
-                  Text(
-                    widget.draft.name,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Flexible(
-                        child: Text(
-                          widget.draft.quantityText,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: AppTheme.muted),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        MoneyUtils.formatBr(widget.draft.lineTotalMinorUnits),
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                        ),
-                      ),
-                    ],
-                  ),
+                  for (final option in const <(String, String)>[
+                    ('CASH', 'Cash'),
+                    ('BANK', 'Bank Transfer'),
+                    ('LOAN', 'Loan'),
+                  ])
+                    ChoiceChip(
+                      label: Text(option.$2),
+                      selected: _paymentMethod == option.$1,
+                      onSelected: (_) => setState(() {
+                        _paymentMethod = option.$1;
+                        _error = null;
+                      }),
+                    ),
                 ],
               ),
-            ),
-            const SizedBox(height: 16),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final option in const <(String, String)>[
-                  ('CASH', 'Cash'),
-                  ('BANK', 'Bank Transfer'),
-                  ('LOAN', 'Loan'),
-                ])
-                  ChoiceChip(
-                    label: Text(option.$2),
-                    selected: _paymentMethod == option.$1,
-                    onSelected: (_) => setState(() {
-                      _paymentMethod = option.$1;
-                      _error = null;
-                    }),
-                  ),
-              ],
-            ),
-            if (_error != null) ...[
               const SizedBox(height: 12),
-              Text(
-                _error!,
-                style: const TextStyle(color: AppTheme.danger, fontSize: 13),
+              TextField(
+                controller: _reasonController,
+                textInputAction: TextInputAction.done,
+                decoration: const InputDecoration(
+                  labelText: 'Reason / Reference',
+                  hintText: 'Why is this sale being recorded?',
+                ),
+                onChanged: (_) {
+                  if (_error != null) setState(() => _error = null);
+                },
+                onSubmitted: (_) => _complete(),
               ),
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  _error!,
+                  style: const TextStyle(color: AppTheme.danger, fontSize: 13),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
       actions: [

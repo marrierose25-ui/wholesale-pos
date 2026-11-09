@@ -478,18 +478,20 @@ class SqfliteShiftRepository implements ShiftRepository {
       );
       if (rows.isEmpty) throw Exception('Shift is no longer open.');
       final currentShift = Shift.fromMap(rows.first);
+      final notDemoSale = notDemoOperator('cashier_id');
+      final notDemoMovement = notDemoOperator('user_id');
       final cashSales = await txn.rawQuery(
-        "SELECT COALESCE(SUM(total_minor_units), 0) AS total FROM sales WHERE status = 'COMPLETED' AND payment_method = 'CASH' AND shift_id = ?",
+        "SELECT COALESCE(SUM(total_minor_units), 0) AS total FROM sales WHERE status = 'COMPLETED' AND payment_method = 'CASH' AND $notDemoSale AND shift_id = ?",
         [shift.id],
       );
       final movements = await txn.rawQuery(
-        "SELECT COALESCE(SUM(CASE WHEN type = 'DEPOSIT' THEN amount_minor_units ELSE -amount_minor_units END), 0) AS total FROM cash_movements WHERE shift_id = ?",
+        "SELECT COALESCE(SUM(CASE WHEN type = 'DEPOSIT' THEN amount_minor_units ELSE -amount_minor_units END), 0) AS total FROM cash_movements WHERE $notDemoMovement AND shift_id = ?",
         [shift.id],
       );
       // Only cross-shift cash refunds reduce this drawer; see
       // [_cashRefundsForShift] for the same-shift netting rule.
       final cashVoids = await txn.rawQuery(
-        "SELECT COALESCE(SUM(total_minor_units), 0) AS total FROM sales WHERE status = 'VOIDED' AND payment_method = 'CASH' AND voided_shift_id = ? AND shift_id <> ?",
+        "SELECT COALESCE(SUM(total_minor_units), 0) AS total FROM sales WHERE status = 'VOIDED' AND payment_method = 'CASH' AND $notDemoSale AND voided_shift_id = ? AND shift_id <> ?",
         [shift.id, shift.id],
       );
       final expected =
