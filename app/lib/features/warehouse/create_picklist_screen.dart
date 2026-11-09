@@ -137,6 +137,7 @@ class _CreatePicklistScreenState extends State<CreatePicklistScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                const SizedBox(height: 6),
                 TextFormField(
                   controller: nameController,
                   textCapitalization: TextCapitalization.words,

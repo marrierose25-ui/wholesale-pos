@@ -507,8 +507,12 @@ class SaleLedgerHeader extends StatelessWidget {
       child: wide
           ? Row(
               children: [
-                const SizedBox(width: 34),
-                Expanded(child: _cell('Item', TextAlign.start)),
+                const SizedBox(width: 48),
+                const SizedBox(width: 8),
+                Expanded(flex: 3, child: _cell('Item', TextAlign.start)),
+                const SizedBox(width: 6),
+                Expanded(flex: 2, child: _cell('Reason', TextAlign.start)),
+                const SizedBox(width: 6),
                 _cell('Quantity', TextAlign.end, width: 58),
                 const SizedBox(width: 6),
                 _cell('Unit Price', TextAlign.end, width: 82),
@@ -520,7 +524,8 @@ class SaleLedgerHeader extends StatelessWidget {
             )
           : Row(
               children: [
-                const SizedBox(width: 34),
+                const SizedBox(width: 48),
+                const SizedBox(width: 8),
                 Expanded(child: _cell('Item', TextAlign.start)),
                 _cell('Total', TextAlign.end, width: 88),
               ],
@@ -592,8 +597,31 @@ class SaleLedgerRow extends StatelessWidget {
       ),
     );
 
-    final itemCell = Expanded(
-      child: Row(
+    final rawReason = item?.notes?.trim();
+    final reasonText = (rawReason != null && rawReason.isNotEmpty)
+        ? rawReason
+        : (isVoided &&
+                sale.voidReason != null &&
+                sale.voidReason!.trim().isNotEmpty)
+            ? sale.voidReason!.trim()
+            : '-';
+
+    final reasonCell = Expanded(
+      flex: 2,
+      child: Text(
+        reasonText,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontSize: 12,
+          color: isVoided ? Colors.grey : AppDesign.textLo,
+          decoration: decoration,
+        ),
+      ),
+    );
+
+    Widget buildItemCell({int? flex}) {
+      final cell = Row(
         children: [
           // Expanded (not Flexible) so the name gives room to the
           // VOID/REQ badge and the "+N" count before ellipsizing.
@@ -625,8 +653,11 @@ class SaleLedgerRow extends StatelessWidget {
           // mark them, and the fixed columns must leave the item name
           // room at phone width.
         ],
-      ),
-    );
+      );
+      return flex != null
+          ? Expanded(flex: flex, child: cell)
+          : Expanded(child: cell);
+    }
 
     return GlassCard(
       radius: AppDesign.radiusCardSm,
@@ -638,13 +669,19 @@ class SaleLedgerRow extends StatelessWidget {
             ? Row(
                 children: [
                   SizedBox(
-                    width: 34,
+                    width: 48,
                     child: Text(
                       _time,
+                      maxLines: 1,
+                      softWrap: false,
                       style: TextStyle(fontSize: 11.5, color: AppDesign.textLo),
                     ),
                   ),
-                  itemCell,
+                  const SizedBox(width: 8),
+                  buildItemCell(flex: 3),
+                  const SizedBox(width: 6),
+                  reasonCell,
+                  const SizedBox(width: 6),
                   SizedBox(
                     width: 58,
                     child: FittedBox(
@@ -691,16 +728,19 @@ class SaleLedgerRow extends StatelessWidget {
                   Row(
                     children: [
                       SizedBox(
-                        width: 34,
+                        width: 48,
                         child: Text(
                           _time,
+                          maxLines: 1,
+                          softWrap: false,
                           style: TextStyle(
                             fontSize: 11.5,
                             color: AppDesign.textLo,
                           ),
                         ),
                       ),
-                      itemCell,
+                      const SizedBox(width: 8),
+                      buildItemCell(),
                       SizedBox(
                         width: 88,
                         child: FittedBox(
@@ -712,12 +752,25 @@ class SaleLedgerRow extends StatelessWidget {
                     ],
                   ),
                   Padding(
-                    padding: const EdgeInsets.only(left: 34, top: 4),
+                    padding: const EdgeInsets.only(left: 56, top: 4),
                     child: Wrap(
                       spacing: 10,
                       runSpacing: 2,
                       crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [quantityText, unitPriceText, methodText],
+                      children: [
+                        quantityText,
+                        unitPriceText,
+                        methodText,
+                        if (reasonText != '-')
+                          Text(
+                            reasonText,
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              color: AppDesign.textLo,
+                              decoration: decoration,
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                 ],

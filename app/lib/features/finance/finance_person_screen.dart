@@ -540,7 +540,9 @@ class _EntryDialogState extends State<_EntryDialog> {
             : (_step == 0 ? 'Edit Entry (1/2)' : 'Select Payment (2/2)'),
       ),
       content: SingleChildScrollView(
+        clipBehavior: Clip.none,
         padding: EdgeInsets.only(
+          top: 8,
           bottom: MediaQuery.of(context).viewInsets.bottom,
         ),
         child: ConstrainedBox(

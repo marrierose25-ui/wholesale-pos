@@ -359,6 +359,8 @@ class _SaleDialogState extends State<_SaleDialog> {
             children: [
               Flexible(
                 child: SingleChildScrollView(
+                  clipBehavior: Clip.none,
+                  padding: const EdgeInsets.only(top: 8),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -524,7 +526,9 @@ class _PaymentDialogState extends State<_PaymentDialog> {
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       title: const Text('Payment Method'),
       content: SingleChildScrollView(
+        clipBehavior: Clip.none,
         padding: EdgeInsets.only(
+          top: 8,
           bottom: MediaQuery.of(context).viewInsets.bottom,
         ),
         child: ConstrainedBox(

@@ -276,7 +276,25 @@ class WarehouseScreenState extends State<WarehouseScreen> {
     return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
-        child: _NewListButton(onTap: _createPicklist),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            GlassCard(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 32,
+                  vertical: 40,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _NewListButton(onTap: _createPicklist),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

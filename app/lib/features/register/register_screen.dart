@@ -605,7 +605,9 @@ class _CashMovementDialogState extends State<_CashMovementDialog> {
         _type == 'DEPOSIT' ? 'Credit (Deposit)' : 'Debit (Withdrawal)',
       ),
       content: SingleChildScrollView(
+        clipBehavior: Clip.none,
         padding: EdgeInsets.only(
+          top: 8,
           bottom: MediaQuery.of(context).viewInsets.bottom,
         ),
         child: ConstrainedBox(
