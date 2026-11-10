@@ -9,7 +9,7 @@ import '../../core/models/picklist_item.dart';
 import '../../core/models/user.dart';
 import '../../core/repositories/picklist_repository.dart';
 import '../../core/theme/app_design.dart';
-import 'create_picklist_screen.dart';
+import 'new_picklist_dialog.dart';
 import 'picklist_detail_screen.dart';
 import 'warehouse_alerts.dart';
 import 'warehouse_history_screen.dart';
@@ -88,7 +88,9 @@ class WarehouseScreenState extends State<WarehouseScreen> {
   /// Re-runs the queue fetch. Called by the shell on tab-select and after a
   /// create / fulfillment returns.
   Future<void> refresh({bool silent = false}) async {
-    setState(() => _future = _load());
+    setState(() {
+      _future = _load();
+    });
   }
 
   /// One poll: look for open lists we have not seen before, alert the picker,
@@ -185,12 +187,11 @@ class WarehouseScreenState extends State<WarehouseScreen> {
   }
 
   Future<void> _createPicklist() async {
-    final created = await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(
-        builder: (context) => CreatePicklistScreen(
-          repository: widget.repository,
-          currentUser: widget.currentUser,
-        ),
+    final created = await showDialog<bool>(
+      context: context,
+      builder: (context) => NewPicklistDialog(
+        repository: widget.repository,
+        currentUser: widget.currentUser,
       ),
     );
     if (created == true) {
@@ -287,9 +288,7 @@ class WarehouseScreenState extends State<WarehouseScreen> {
                 ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _NewListButton(onTap: _createPicklist),
-                  ],
+                  children: [_NewListButton(onTap: _createPicklist)],
                 ),
               ),
             ),
@@ -683,8 +682,8 @@ class _ModeSwitch extends StatelessWidget {
   }
 }
 
-/// The shop worker's one action: a large + circle that opens the New List form,
-/// mirroring the POS home button so the two surfaces feel the same.
+/// The shop worker's one action: a large + circle that opens the New List
+/// window, mirroring the POS home button so the two surfaces feel the same.
 class _NewListButton extends StatelessWidget {
   final VoidCallback onTap;
 

@@ -263,7 +263,9 @@ class _SaleDialog extends StatefulWidget {
 
 class _SaleDialogState extends State<_SaleDialog> {
   final _nameController = TextEditingController();
-  final _quantityController = TextEditingController(text: '1');
+  // Starts empty on purpose: the cashier must type the quantity, so a stray
+  // "1" can never be posted by accident.
+  final _quantityController = TextEditingController();
   final _priceController = TextEditingController();
 
   String _unit = _saleUnits.first;

@@ -7,7 +7,6 @@ import 'package:wholesale_pos_app/core/models/picklist_item.dart';
 import 'package:wholesale_pos_app/core/models/user.dart';
 import 'package:wholesale_pos_app/core/repositories/picklist_repository.dart';
 import 'package:wholesale_pos_app/core/theme/app_theme.dart';
-import 'package:wholesale_pos_app/features/warehouse/create_picklist_screen.dart';
 import 'package:wholesale_pos_app/features/warehouse/picklist_detail_screen.dart';
 import 'package:wholesale_pos_app/features/warehouse/warehouse_history_screen.dart';
 import 'package:wholesale_pos_app/features/warehouse/warehouse_screen.dart';
@@ -136,62 +135,74 @@ Future<void> _pump(WidgetTester tester, Widget home, Size size) async {
 }
 
 void main() {
-  testWidgets(
-    'create list uses a unit dropdown and keeps money on the shop side',
-    (tester) async {
-      final repo = _FakeRepo(
-        customers: [
-          PicklistCustomer(
-            id: 'c1',
-            name: 'Aymen',
-            createdAt: DateTime(2026, 11, 6),
-          ),
-        ],
-      );
-      await _pump(
-        tester,
-        CreatePicklistScreen(repository: repo, currentUser: _user()),
-        const Size(390, 844),
-      );
+  testWidgets('create list is a two-step dialog with an empty quantity', (
+    tester,
+  ) async {
+    final repo = _FakeRepo(
+      customers: [
+        PicklistCustomer(
+          id: 'c1',
+          name: 'Aymen',
+          createdAt: DateTime(2026, 11, 6),
+        ),
+      ],
+    );
+    await _pump(
+      tester,
+      WarehouseScreen(
+        repository: repo,
+        currentUser: _staff([FeatureDef.warehouse]),
+      ),
+      const Size(390, 844),
+    );
+    await tester.pumpAndSettle();
 
-      expect(find.text('New List'), findsOneWidget);
-      expect(find.text('Send to Warehouse'), findsOneWidget);
-      expect(find.text('GRAND TOTAL'), findsOneWidget);
-      expect(find.text('Karton'), findsOneWidget);
+    // Step one: the + opens the customer window, not the product form.
+    await tester.tap(find.byIcon(Icons.add));
+    await tester.pumpAndSettle();
+    expect(find.text('New List (1/2)'), findsOneWidget);
+    expect(find.text('Select Customer'), findsOneWidget);
+    expect(find.text('Next'), findsOneWidget);
 
-      final fields = find.byType(TextFormField);
-      await tester.enterText(fields.at(0), 'Sugar');
-      await tester.enterText(fields.at(1), '5');
-      await tester.enterText(fields.at(2), '45.50');
-      await tester.pump();
+    await tester.tap(find.text('Next'));
+    await tester.pump();
+    expect(find.text('Choose a customer.'), findsOneWidget);
 
-      expect(find.text('227.50 Br'), findsNWidgets(2));
+    await tester.tap(find.text('Select Customer'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Aymen').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
 
-      // The unit is a fixed-choice dropdown, not a text field.
-      await tester.tap(find.text('Karton').last);
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Derzen').last);
-      await tester.pumpAndSettle();
-      expect(find.text('Derzen'), findsOneWidget);
+    // Step two: item detail with an explicit quantity, never a default 1.
+    expect(find.text('New List (2/2)'), findsOneWidget);
+    expect(find.text('Send to Warehouse'), findsOneWidget);
+    expect(find.text('Karton'), findsOneWidget);
 
-      final scrollable = find.byType(Scrollable).first;
-      await tester.scrollUntilVisible(
-        find.text('Add Product'),
-        200,
-        scrollable: scrollable,
-      );
-      await tester.tap(find.text('Add Product'));
-      await tester.pump();
-      await tester.scrollUntilVisible(
-        find.text('PRODUCT 2'),
-        200,
-        scrollable: scrollable,
-      );
-      expect(find.text('PRODUCT 2'), findsOneWidget);
+    final fields = find.byType(TextField);
+    expect(tester.widget<TextField>(fields.at(1)).controller?.text, isEmpty);
 
-      expect(tester.takeException(), isNull);
-    },
-  );
+    await tester.enterText(fields.at(0), 'Sugar');
+    await tester.enterText(fields.at(1), '5');
+    await tester.enterText(fields.at(2), '45.50');
+    await tester.pump();
+
+    expect(find.text('227.50 Br'), findsNWidgets(2));
+
+    // The unit is a fixed-choice dropdown, not a text field.
+    await tester.tap(find.text('Karton').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Derzen').last);
+    await tester.pumpAndSettle();
+    expect(find.text('Derzen'), findsOneWidget);
+
+    await tester.tap(find.text('Add Product'));
+    await tester.pumpAndSettle();
+    expect(find.text('PRODUCT 2'), findsOneWidget);
+
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('shop worker sends the unit and quantities to the repository', (
     tester,
@@ -205,40 +216,26 @@ void main() {
         ),
       ],
     );
-    tester.view.physicalSize = const Size(390, 844);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: AppTheme.dark(),
-        home: Builder(
-          builder: (context) => Scaffold(
-            body: Center(
-              child: ElevatedButton(
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => CreatePicklistScreen(
-                      repository: repo,
-                      currentUser: _user(),
-                    ),
-                  ),
-                ),
-                child: const Text('OPEN'),
-              ),
-            ),
-          ),
-        ),
+    await _pump(
+      tester,
+      WarehouseScreen(
+        repository: repo,
+        currentUser: _staff([FeatureDef.warehouse]),
       ),
+      const Size(390, 844),
     );
-    await tester.tap(find.text('OPEN'));
     await tester.pumpAndSettle();
 
+    await tester.tap(find.byIcon(Icons.add));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Select Customer'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Aymen').last);
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
 
-    final fields = find.byType(TextFormField);
+    final fields = find.byType(TextField);
     await tester.enterText(fields.at(0), 'Sugar');
     await tester.enterText(fields.at(1), '5');
     await tester.enterText(fields.at(2), '45.50');
@@ -252,7 +249,7 @@ void main() {
     await tester.tap(find.text('Send to Warehouse'));
     await tester.pumpAndSettle();
 
-    expect(find.text('OPEN'), findsOneWidget);
+    expect(find.text('New List (2/2)'), findsNothing);
     expect(repo.createdHeader?.customerName, 'Aymen');
     expect(repo.createdItems, hasLength(1));
     final line = repo.createdItems!.single;
