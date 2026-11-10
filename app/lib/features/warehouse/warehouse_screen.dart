@@ -9,7 +9,7 @@ import '../../core/models/picklist_item.dart';
 import '../../core/models/user.dart';
 import '../../core/repositories/picklist_repository.dart';
 import '../../core/theme/app_design.dart';
-import 'new_picklist_dialog.dart';
+import 'create_picklist_screen.dart';
 import 'picklist_detail_screen.dart';
 import 'warehouse_alerts.dart';
 import 'warehouse_history_screen.dart';
@@ -187,11 +187,12 @@ class WarehouseScreenState extends State<WarehouseScreen> {
   }
 
   Future<void> _createPicklist() async {
-    final created = await showDialog<bool>(
-      context: context,
-      builder: (context) => NewPicklistDialog(
-        repository: widget.repository,
-        currentUser: widget.currentUser,
+    final created = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (context) => CreatePicklistScreen(
+          repository: widget.repository,
+          currentUser: widget.currentUser,
+        ),
       ),
     );
     if (created == true) {

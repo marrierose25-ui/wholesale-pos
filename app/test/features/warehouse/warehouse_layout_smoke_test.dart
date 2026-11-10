@@ -135,7 +135,7 @@ Future<void> _pump(WidgetTester tester, Widget home, Size size) async {
 }
 
 void main() {
-  testWidgets('create list is a two-step dialog with an empty quantity', (
+  testWidgets('create list is a two-step screen with an empty quantity', (
     tester,
   ) async {
     final repo = _FakeRepo(
@@ -157,10 +157,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // Step one: the + opens the customer window, not the product form.
+    // Step one: the + opens the customer step, not the product form.
     await tester.tap(find.byIcon(Icons.add));
     await tester.pumpAndSettle();
-    expect(find.text('New List (1/2)'), findsOneWidget);
+    expect(find.text('Step 1 of 2'), findsOneWidget);
     expect(find.text('Select Customer'), findsOneWidget);
     expect(find.text('Next'), findsOneWidget);
 
@@ -176,7 +176,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // Step two: item detail with an explicit quantity, never a default 1.
-    expect(find.text('New List (2/2)'), findsOneWidget);
+    expect(find.text('Step 2 of 2'), findsOneWidget);
     expect(find.text('Send to Warehouse'), findsOneWidget);
     expect(find.text('Karton'), findsOneWidget);
 
@@ -249,7 +249,7 @@ void main() {
     await tester.tap(find.text('Send to Warehouse'));
     await tester.pumpAndSettle();
 
-    expect(find.text('New List (2/2)'), findsNothing);
+    expect(find.text('Step 2 of 2'), findsNothing);
     expect(repo.createdHeader?.customerName, 'Aymen');
     expect(repo.createdItems, hasLength(1));
     final line = repo.createdItems!.single;
