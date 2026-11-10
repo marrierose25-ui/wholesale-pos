@@ -555,7 +555,7 @@ class _FeaturePicker extends StatelessWidget {
                   children: [
                     Icon(f.icon, size: 18, color: AppDesign.textLo),
                     const SizedBox(width: 8),
-                    Text(f.label),
+                    Expanded(child: Text(f.label)),
                   ],
                 ),
                 onChanged: enabled ? (v) => onToggle(f.key, v ?? false) : null,

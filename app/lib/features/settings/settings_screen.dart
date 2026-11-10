@@ -580,42 +580,61 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
 
   @override
   Widget build(BuildContext context) {
+    // Three fields plus the keyboard do not fit a small phone, so cap the body
+    // to the space above the keyboard and scroll it.
+    final media = MediaQuery.of(context);
+    final keyboard = media.viewInsets.bottom;
+    final maxBodyHeight = (media.size.height - keyboard - 200).clamp(
+      120.0,
+      420.0,
+    );
     return AlertDialog(
       title: const Text('Change Password'),
-      content: SizedBox(
-        width: 360,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: _currentController,
-              obscureText: true,
-              autofocus: true,
-              decoration: const InputDecoration(labelText: 'Current Password'),
+      content: MediaQuery(
+        data: media.copyWith(viewInsets: EdgeInsets.zero),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: 360, maxHeight: maxBodyHeight),
+          child: SingleChildScrollView(
+            clipBehavior: Clip.none,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: _currentController,
+                  obscureText: true,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Current Password',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _newController,
+                  obscureText: true,
+                  decoration: const InputDecoration(labelText: 'New Password'),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _confirmController,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Confirm New Password',
+                  ),
+                  onSubmitted: (_) => _submit(),
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    _error!,
+                    style: const TextStyle(
+                      color: AppTheme.danger,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ],
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _newController,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: 'New Password'),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _confirmController,
-              obscureText: true,
-              decoration: const InputDecoration(
-                labelText: 'Confirm New Password',
-              ),
-              onSubmitted: (_) => _submit(),
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 12),
-              Text(
-                _error!,
-                style: const TextStyle(color: AppTheme.danger, fontSize: 13),
-              ),
-            ],
-          ],
+          ),
         ),
       ),
       actions: [
@@ -659,26 +678,43 @@ class _ActivationCodeDialogState extends State<_ActivationCodeDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final keyboard = media.viewInsets.bottom;
+    final maxBodyHeight = (media.size.height - keyboard - 200).clamp(
+      120.0,
+      420.0,
+    );
     return AlertDialog(
       title: const Text('Activate this device'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Enter the activation code from your shop. This device joins your '
-            'shop\'s cloud account, so sales recorded on your other phones and '
-            'PCs appear here.',
+      content: MediaQuery(
+        data: media.copyWith(viewInsets: EdgeInsets.zero),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: 420, maxHeight: maxBodyHeight),
+          child: SingleChildScrollView(
+            clipBehavior: Clip.none,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Enter the activation code from your shop. This device joins '
+                  'your shop\'s cloud account, so sales recorded on your other '
+                  'phones and PCs appear here.',
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _controller,
+                  autofocus: true,
+                  textCapitalization: TextCapitalization.characters,
+                  decoration: const InputDecoration(
+                    labelText: 'Activation Code',
+                  ),
+                  onSubmitted: (value) => Navigator.of(context).pop(value),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: _controller,
-            autofocus: true,
-            textCapitalization: TextCapitalization.characters,
-            decoration: const InputDecoration(labelText: 'Activation Code'),
-            onSubmitted: (value) => Navigator.of(context).pop(value),
-          ),
-        ],
+        ),
       ),
       actions: [
         TextButton(

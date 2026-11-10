@@ -400,6 +400,7 @@ class _SaleDialogState extends State<_SaleDialog> {
                             child: DropdownButtonFormField<String>(
                               initialValue: _unit,
                               isDense: true,
+                              isExpanded: true,
                               decoration: const InputDecoration(
                                 labelText: 'Unit',
                               ),
@@ -438,19 +439,25 @@ class _SaleDialogState extends State<_SaleDialog> {
                           border: Border.all(color: AppTheme.border),
                         ),
                         child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             const Text(
                               'Total',
                               style: TextStyle(fontWeight: FontWeight.w600),
                             ),
-                            Text(
-                              lineTotal == null
-                                  ? '—'
-                                  : MoneyUtils.formatBr(lineTotal),
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerRight,
+                                child: Text(
+                                  lineTotal == null
+                                      ? '—'
+                                      : MoneyUtils.formatBr(lineTotal),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                  ),
+                                ),
                               ),
                             ),
                           ],
@@ -524,102 +531,120 @@ class _PaymentDialogState extends State<_PaymentDialog> {
 
   @override
   Widget build(BuildContext context) {
+    // The keyboard lifts the dialog, so the body is capped to the space left
+    // above it and scrolls instead of pushing the chips/action off-screen.
+    final media = MediaQuery.of(context);
+    final keyboard = media.viewInsets.bottom;
+    final maxBodyHeight = (media.size.height - keyboard - 200).clamp(
+      120.0,
+      420.0,
+    );
     return AlertDialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       title: const Text('Payment Method'),
-      content: SingleChildScrollView(
-        clipBehavior: Clip.none,
-        padding: EdgeInsets.only(
-          top: 8,
-          bottom: MediaQuery.of(context).viewInsets.bottom,
-        ),
+      content: MediaQuery(
+        data: media.copyWith(viewInsets: EdgeInsets.zero),
         child: ConstrainedBox(
-          // Cap at 360 on wide screens but never exceed the dialog's own content
-          // box, so the summary row can't overflow a narrow phone.
-          constraints: const BoxConstraints(maxWidth: 360),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).scaffoldBackgroundColor,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: AppTheme.border),
+          // Cap at 360 on wide screens but never exceed the space above the
+          // keyboard, so the summary row can't overflow a narrow phone.
+          constraints: BoxConstraints(maxWidth: 360, maxHeight: maxBodyHeight),
+          child: SingleChildScrollView(
+            clipBehavior: Clip.none,
+            padding: const EdgeInsets.only(top: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).scaffoldBackgroundColor,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppTheme.border),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        widget.draft.name,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              widget.draft.quantityText,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(color: AppTheme.muted),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              alignment: Alignment.centerRight,
+                              child: Text(
+                                MoneyUtils.formatBr(
+                                  widget.draft.lineTotalMinorUnits,
+                                ),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
                   children: [
-                    Text(
-                      widget.draft.name,
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Flexible(
-                          child: Text(
-                            widget.draft.quantityText,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(color: AppTheme.muted),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          MoneyUtils.formatBr(widget.draft.lineTotalMinorUnits),
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                          ),
-                        ),
-                      ],
-                    ),
+                    for (final option in const <(String, String)>[
+                      ('CASH', 'Cash'),
+                      ('BANK', 'Bank Transfer'),
+                      ('LOAN', 'Loan'),
+                    ])
+                      ChoiceChip(
+                        label: Text(option.$2),
+                        selected: _paymentMethod == option.$1,
+                        onSelected: (_) => setState(() {
+                          _paymentMethod = option.$1;
+                          _error = null;
+                        }),
+                      ),
                   ],
                 ),
-              ),
-              const SizedBox(height: 16),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final option in const <(String, String)>[
-                    ('CASH', 'Cash'),
-                    ('BANK', 'Bank Transfer'),
-                    ('LOAN', 'Loan'),
-                  ])
-                    ChoiceChip(
-                      label: Text(option.$2),
-                      selected: _paymentMethod == option.$1,
-                      onSelected: (_) => setState(() {
-                        _paymentMethod = option.$1;
-                        _error = null;
-                      }),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _reasonController,
-                textInputAction: TextInputAction.done,
-                decoration: const InputDecoration(
-                  labelText: 'Reason / Reference',
-                  hintText: 'Why is this sale being recorded?',
-                ),
-                onChanged: (_) {
-                  if (_error != null) setState(() => _error = null);
-                },
-                onSubmitted: (_) => _complete(),
-              ),
-              if (_error != null) ...[
                 const SizedBox(height: 12),
-                Text(
-                  _error!,
-                  style: const TextStyle(color: AppTheme.danger, fontSize: 13),
+                TextField(
+                  controller: _reasonController,
+                  textInputAction: TextInputAction.done,
+                  decoration: const InputDecoration(
+                    labelText: 'Reason / Reference',
+                    hintText: 'Why is this sale being recorded?',
+                  ),
+                  onChanged: (_) {
+                    if (_error != null) setState(() => _error = null);
+                  },
+                  onSubmitted: (_) => _complete(),
                 ),
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    _error!,
+                    style: const TextStyle(
+                      color: AppTheme.danger,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),

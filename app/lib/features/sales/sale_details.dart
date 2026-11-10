@@ -297,29 +297,47 @@ class _VoidSaleDialogState extends State<_VoidSaleDialog> {
   @override
   Widget build(BuildContext context) {
     final requestMode = widget.requestMode;
+    // Keyboard open on a small phone: cap the body above the keyboard and let
+    // the explanation + reason field scroll instead of overflowing.
+    final media = MediaQuery.of(context);
+    final keyboard = media.viewInsets.bottom;
+    final maxBodyHeight = (media.size.height - keyboard - 200).clamp(
+      100.0,
+      420.0,
+    );
     return AlertDialog(
       title: Text(requestMode ? 'Request Void?' : 'Void Sale?'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            requestMode
-                ? 'Ask the owner to void this sale. It keeps counting as '
-                      'revenue until the owner approves. Give a reason below.'
-                : 'Void this sale? The original sale stays in the audit '
-                      'trail; it just stops counting as revenue.',
+      content: MediaQuery(
+        data: media.copyWith(viewInsets: EdgeInsets.zero),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: 420, maxHeight: maxBodyHeight),
+          child: SingleChildScrollView(
+            clipBehavior: Clip.none,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  requestMode
+                      ? 'Ask the owner to void this sale. It keeps counting as '
+                            'revenue until the owner approves. Give a reason '
+                            'below.'
+                      : 'Void this sale? The original sale stays in the audit '
+                            'trail; it just stops counting as revenue.',
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _reasonController,
+                  autofocus: true,
+                  decoration: const InputDecoration(labelText: 'Reason'),
+                  maxLength: 240,
+                  onChanged: (_) => setState(() {}),
+                  onSubmitted: (_) => _submit(),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: _reasonController,
-            autofocus: true,
-            decoration: const InputDecoration(labelText: 'Reason'),
-            maxLength: 240,
-            onChanged: (_) => setState(() {}),
-            onSubmitted: (_) => _submit(),
-          ),
-        ],
+        ),
       ),
       actions: [
         TextButton(

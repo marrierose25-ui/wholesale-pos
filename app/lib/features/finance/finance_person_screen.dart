@@ -224,44 +224,54 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
       backgroundColor: AppDesign.bg,
       appBar: AppBar(title: Text(widget.personName)),
       body: AppBackground(
-        child: Column(
-          children: [
-            _buildSummary(),
-            _buildSearch(),
-            const Divider(height: 1),
-            Expanded(
-              child: _isLoading
-                  ? const Center(child: CircularProgressIndicator())
-                  : _error != null
-                  ? Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(_error!),
-                          const SizedBox(height: 8),
-                          TextButton(
-                            onPressed: _load,
-                            child: const Text('Retry'),
-                          ),
-                        ],
-                      ),
-                    )
-                  : _entries.isEmpty
-                  ? Center(
-                      child: Text(
-                        'No entries yet.',
-                        style: TextStyle(
-                          color: Theme.of(context).textTheme.bodySmall?.color,
-                        ),
-                      ),
-                    )
-                  : ListView.builder(
-                      padding: const EdgeInsets.all(16),
-                      itemCount: _entries.length,
-                      itemBuilder: (context, index) =>
-                          _buildEntryCard(_entries[index]),
+        // A single scroll view: with the on-screen keyboard open the viewport
+        // shrinks to a phone's top half, so the summary/search header must be
+        // able to scroll away instead of overflowing a fixed Column.
+        child: CustomScrollView(
+          slivers: [
+            SliverToBoxAdapter(child: _buildSummary()),
+            SliverToBoxAdapter(child: _buildSearch()),
+            const SliverToBoxAdapter(child: Divider(height: 1)),
+            if (_isLoading)
+              const SliverFillRemaining(
+                hasScrollBody: false,
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (_error != null)
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(_error!),
+                      const SizedBox(height: 8),
+                      TextButton(onPressed: _load, child: const Text('Retry')),
+                    ],
+                  ),
+                ),
+              )
+            else if (_entries.isEmpty)
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: Center(
+                  child: Text(
+                    'No entries yet.',
+                    style: TextStyle(
+                      color: Theme.of(context).textTheme.bodySmall?.color,
                     ),
-            ),
+                  ),
+                ),
+              )
+            else
+              SliverPadding(
+                padding: const EdgeInsets.all(16),
+                sliver: SliverList.builder(
+                  itemCount: _entries.length,
+                  itemBuilder: (context, index) =>
+                      _buildEntryCard(_entries[index]),
+                ),
+              ),
           ],
         ),
       ),
@@ -532,6 +542,15 @@ class _EntryDialogState extends State<_EntryDialog> {
 
   @override
   Widget build(BuildContext context) {
+    // The on-screen keyboard lifts the dialog, so the body must be capped to
+    // the space that is left above it and scroll, otherwise the action row is
+    // pushed off a small phone and the Column overflows.
+    final media = MediaQuery.of(context);
+    final keyboard = media.viewInsets.bottom;
+    final maxBodyHeight = (media.size.height - keyboard - 200).clamp(
+      120.0,
+      460.0,
+    );
     return AlertDialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       title: Text(
@@ -539,15 +558,15 @@ class _EntryDialogState extends State<_EntryDialog> {
             ? (_step == 0 ? 'Add Entry (1/2)' : 'Select Payment (2/2)')
             : (_step == 0 ? 'Edit Entry (1/2)' : 'Select Payment (2/2)'),
       ),
-      content: SingleChildScrollView(
-        clipBehavior: Clip.none,
-        padding: EdgeInsets.only(
-          top: 8,
-          bottom: MediaQuery.of(context).viewInsets.bottom,
-        ),
+      content: MediaQuery(
+        data: media.copyWith(viewInsets: EdgeInsets.zero),
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 420),
-          child: _step == 0 ? _buildDetailsStep() : _buildPaymentStep(),
+          constraints: BoxConstraints(maxWidth: 420, maxHeight: maxBodyHeight),
+          child: SingleChildScrollView(
+            clipBehavior: Clip.none,
+            padding: const EdgeInsets.only(top: 8),
+            child: _step == 0 ? _buildDetailsStep() : _buildPaymentStep(),
+          ),
         ),
       ),
       actions: _step == 0

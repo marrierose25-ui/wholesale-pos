@@ -600,103 +600,114 @@ class _CashMovementDialogState extends State<_CashMovementDialog> {
 
   @override
   Widget build(BuildContext context) {
+    // Cap the body to the space above the keyboard so the proof row and error
+    // text scroll inside the dialog instead of overflowing a small phone.
+    final media = MediaQuery.of(context);
+    final keyboard = media.viewInsets.bottom;
+    final maxBodyHeight = (media.size.height - keyboard - 200).clamp(
+      120.0,
+      420.0,
+    );
     return AlertDialog(
       title: Text(
         _type == 'DEPOSIT' ? 'Credit (Deposit)' : 'Debit (Withdrawal)',
       ),
-      content: SingleChildScrollView(
-        clipBehavior: Clip.none,
-        padding: EdgeInsets.only(
-          top: 8,
-          bottom: MediaQuery.of(context).viewInsets.bottom,
-        ),
+      content: MediaQuery(
+        data: media.copyWith(viewInsets: EdgeInsets.zero),
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 360),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: _amountController,
-                autofocus: true,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
+          constraints: BoxConstraints(maxWidth: 360, maxHeight: maxBodyHeight),
+          child: SingleChildScrollView(
+            clipBehavior: Clip.none,
+            padding: const EdgeInsets.only(top: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: _amountController,
+                  autofocus: true,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(labelText: 'Amount (Br)'),
                 ),
-                decoration: const InputDecoration(labelText: 'Amount (Br)'),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _reasonController,
-                decoration: const InputDecoration(
-                  labelText: 'Reason / Reference',
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _reasonController,
+                  decoration: const InputDecoration(
+                    labelText: 'Reason / Reference',
+                  ),
+                  onSubmitted: (_) => _submit(),
                 ),
-                onSubmitted: (_) => _submit(),
-              ),
-              const SizedBox(height: 4),
-              // Optional proof photo. Shown for both directions, but aimed at
-              // debits: "upload proof the cash left the drawer". The whole row is
-              // tappable (not just the icon) so it is easy to hit on a tablet.
-              Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: _picking ? null : _pickPhoto,
-                  borderRadius: BorderRadius.circular(8),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 4,
-                      vertical: 6,
-                    ),
-                    child: Row(
-                      children: [
-                        SizedBox(
-                          width: 44,
-                          height: 44,
-                          child: Center(
-                            child: _picking
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
+                const SizedBox(height: 4),
+                // Optional proof photo. Shown for both directions, but aimed at
+                // debits: "upload proof the cash left the drawer". The whole row is
+                // tappable (not just the icon) so it is easy to hit on a tablet.
+                Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: _picking ? null : _pickPhoto,
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 6,
+                      ),
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: 44,
+                            height: 44,
+                            child: Center(
+                              child: _picking
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : Icon(
+                                      _photo == null
+                                          ? Icons.add_a_photo_outlined
+                                          : Icons.photo_camera_outlined,
                                     ),
-                                  )
-                                : Icon(
-                                    _photo == null
-                                        ? Icons.add_a_photo_outlined
-                                        : Icons.photo_camera_outlined,
-                                  ),
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            _photo == null
-                                ? 'Add photo (optional)'
-                                : 'Photo attached',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              _photo == null
+                                  ? 'Add photo (optional)'
+                                  : 'Photo attached',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
-                        ),
-                        if (_photo != null)
-                          // Tap to remove the attached proof.
-                          IconButton(
-                            onPressed: () => setState(() => _photo = null),
-                            icon: const Icon(Icons.close),
-                            iconSize: 18,
-                            tooltip: 'Remove photo',
-                          ),
-                      ],
+                          if (_photo != null)
+                            // Tap to remove the attached proof.
+                            IconButton(
+                              onPressed: () => setState(() => _photo = null),
+                              icon: const Icon(Icons.close),
+                              iconSize: 18,
+                              tooltip: 'Remove photo',
+                            ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                Text(
-                  _error!,
-                  style: const TextStyle(color: AppTheme.danger, fontSize: 13),
-                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    _error!,
+                    style: const TextStyle(
+                      color: AppTheme.danger,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),

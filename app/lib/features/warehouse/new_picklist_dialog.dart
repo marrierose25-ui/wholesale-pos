@@ -314,7 +314,7 @@ class _NewPicklistDialogState extends State<NewPicklistDialog> {
     final media = MediaQuery.of(context);
     final keyboard = media.viewInsets.bottom;
     final maxBodyHeight = (media.size.height - keyboard - 210).clamp(
-      220.0,
+      140.0,
       620.0,
     );
     return AlertDialog(
@@ -565,15 +565,21 @@ class _NewPicklistDialogState extends State<NewPicklistDialog> {
                       fontWeight: FontWeight.w600,
                     ),
                   ),
-                  const Spacer(),
-                  Text(
-                    MoneyUtils.formatBr(_grandTotalMinor),
-                    style: TextStyle(
-                      color: AppDesign.isDark
-                          ? AppDesign.blueBright
-                          : AppDesign.blue,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerRight,
+                      child: Text(
+                        MoneyUtils.formatBr(_grandTotalMinor),
+                        style: TextStyle(
+                          color: AppDesign.isDark
+                              ? AppDesign.blueBright
+                              : AppDesign.blue,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -731,7 +737,6 @@ class _NewPicklistDialogState extends State<NewPicklistDialog> {
           ),
           const SizedBox(height: 8),
           Row(
-            mainAxisAlignment: MainAxisAlignment.end,
             children: [
               Text(
                 'Line total',
@@ -742,14 +747,20 @@ class _NewPicklistDialogState extends State<NewPicklistDialog> {
                 ),
               ),
               const SizedBox(width: 8),
-              Text(
-                MoneyUtils.formatBr(draft.lineTotalMinor),
-                style: TextStyle(
-                  color: AppDesign.isDark
-                      ? AppDesign.blueBright
-                      : AppDesign.blue,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w800,
+              Expanded(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    MoneyUtils.formatBr(draft.lineTotalMinor),
+                    style: TextStyle(
+                      color: AppDesign.isDark
+                          ? AppDesign.blueBright
+                          : AppDesign.blue,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
                 ),
               ),
             ],

@@ -550,15 +550,20 @@ class WarehouseScreenState extends State<WarehouseScreen> {
               child: Row(
                 children: [
                   PicklistStatusChip(status: picklist.status),
-                  const Spacer(),
-                  Text(
-                    'Tap to fill',
-                    style: TextStyle(
-                      color: AppDesign.isDark
-                          ? AppDesign.blueBright
-                          : AppDesign.blue,
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w600,
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Tap to fill',
+                      textAlign: TextAlign.right,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: AppDesign.isDark
+                            ? AppDesign.blueBright
+                            : AppDesign.blue,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                   Icon(
@@ -665,12 +670,16 @@ class _ModeSwitch extends StatelessWidget {
                   color: selected ? AppDesign.textHi : AppDesign.textLo,
                 ),
                 const SizedBox(width: 5),
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: selected ? AppDesign.textHi : AppDesign.textLo,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: selected ? AppDesign.textHi : AppDesign.textLo,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
               ],
