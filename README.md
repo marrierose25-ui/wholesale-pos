@@ -90,6 +90,8 @@ apply it with the Supabase CLI before deploying the function. Smoke-test a deplo
 powershell -File tools\verify_pos_api.ps1 -ActivationCode <code>
 ```
 
+**Architecture Note**: The sync gateway (`sync` Edge Function) is a read-only "delta feed" that transports data between the cloud and devices. It does not modify business logic such as sale timestamps, which are handled by the native application layer.
+
 ## Test and analyze
 
 ```powershell

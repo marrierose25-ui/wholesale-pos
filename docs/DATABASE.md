@@ -60,7 +60,10 @@ A partial unique index (`one_open_shift`) plus insert/update triggers enforce at
 - `subtotal_minor_units`, `discount_minor_units`, `total_minor_units`
 - `amount_paid_minor_units`, `change_minor_units`
 - `status` (`COMPLETED`/`VOIDED`), `void_reason`, `voided_at`, `voided_by`, `voided_shift_id`
-- `created_at`, `synced_at`
+- `created_at` TEXT NOT NULL (local wall clock when recorded, converted to UTC for cloud sync)
+- `synced_at` TEXT (when the sale was last pulled from cloud)
+
+**Important Note**: Offline sales are recorded with the real transaction time from `DateTime.now()` in the native application layer. When these sales are synced to the cloud, timestamps are converted to UTC format using `timestampsToUtc()`. The sync gateway transports these timestamps unchanged — it does not modify business logic timestamps.
 
 Voids are soft deletes. `voided_shift_id` attributes the cash refund to the shift that was open when the void happened; refunds fall back to the original `shift_id` for legacy voids.
 
