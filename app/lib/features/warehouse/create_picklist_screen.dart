@@ -373,8 +373,6 @@ class _CreatePicklistScreenState extends State<CreatePicklistScreen> {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
         children: [
-          _buildCustomerSummary(),
-          const SizedBox(height: 22),
           _buildItemsHeader(),
           const SizedBox(height: 10),
           for (var i = 0; i < _items.length; i++) ...[
@@ -455,64 +453,6 @@ class _CreatePicklistScreenState extends State<CreatePicklistScreen> {
                 label: const Text('Pick a saved customer'),
               ),
             ),
-        ],
-      ),
-    );
-  }
-
-  /// The chosen customer, collapsed on step two so the products keep the whole
-  /// screen but the worker can still check and change who the list is for.
-  Widget _buildCustomerSummary() {
-    return GlassCard(
-      padding: const EdgeInsets.fromLTRB(16, 12, 10, 12),
-      child: Row(
-        children: [
-          const IconChip(
-            icon: Icons.person_outline,
-            size: 34,
-            color: AppDesign.blue,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Customer',
-                  style: TextStyle(
-                    color: AppDesign.textLo,
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 1),
-                Text(
-                  _customerName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: AppDesign.textHi,
-                    fontSize: 14.5,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          TextButton.icon(
-            onPressed: _saving ? null : _back,
-            icon: const Icon(Icons.edit_outlined, size: 16),
-            label: const Text('Change'),
-            style: TextButton.styleFrom(
-              foregroundColor: AppDesign.isDark
-                  ? AppDesign.blueBright
-                  : AppDesign.blue,
-              textStyle: const TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
         ],
       ),
     );

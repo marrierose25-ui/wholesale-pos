@@ -29,6 +29,9 @@ class _FakeRepo implements PicklistRepository {
   bool toggled = false;
   Picklist? createdHeader;
   List<PicklistItem>? createdItems;
+  PicklistItem? updatedItem;
+  String? deletedItemId;
+  String? deletedPicklistId;
 
   @override
   Future<List<PicklistCustomer>> getCustomers() async => customers;
@@ -72,6 +75,29 @@ class _FakeRepo implements PicklistRepository {
         else
           i,
     ];
+  }
+
+  @override
+  Future<void> updatePicklistItem(PicklistItem item) async {
+    updatedItem = item;
+    items = [
+      for (final i in items)
+        if (i.id == item.id) item else i,
+    ];
+  }
+
+  @override
+  Future<void> deletePicklistItem(String picklistId, String itemId) async {
+    deletedItemId = itemId;
+    items = [
+      for (final i in items)
+        if (i.id != itemId) i,
+    ];
+  }
+
+  @override
+  Future<void> deletePicklist(String picklistId) async {
+    deletedPicklistId = picklistId;
   }
 }
 
@@ -333,7 +359,9 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('fill worker sees the queue only, with no money', (tester) async {
+  testWidgets('fill worker sees the queue only; cards stay quantities-only', (
+    tester,
+  ) async {
     final repo = _FakeRepo(
       picklists: [
         _picklist(id: 'p1', customer: 'Open Order'),
@@ -362,6 +390,48 @@ void main() {
     expect(find.text('NEW LIST'), findsNothing);
     expect(find.textContaining('Br'), findsNothing);
     expect(find.text('History'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('fill worker now sees money on the fill screen and in history', (
+    tester,
+  ) async {
+    final repo = _FakeRepo(
+      picklists: [_picklist(id: 'p1', customer: 'Aymen')],
+      items: [_item(taken: 5)],
+    );
+    await _pump(
+      tester,
+      WarehouseScreen(
+        repository: repo,
+        currentUser: _staff([FeatureDef.warehouseFill]),
+      ),
+      const Size(390, 844),
+    );
+    await tester.pumpAndSettle();
+
+    // Open the queue card: the fill screen carries the list value and each
+    // line's unit price, not just the quantities.
+    await tester.tap(find.text('Aymen'));
+    await tester.pumpAndSettle();
+    expect(find.text('List value'), findsOneWidget);
+    expect(find.text('227.50 Br'), findsOneWidget);
+    expect(find.text('45.50 Br each · 227.50 Br'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+
+    // History is opened with money on for a fill-only worker too.
+    await tester.tap(find.text('History'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('6 November 2026'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Aymen'));
+    await tester.pumpAndSettle();
+    expect(find.text('Price'), findsOneWidget);
+    expect(find.text('Total'), findsOneWidget);
+    expect(find.text('45.50 Br'), findsOneWidget);
+    expect(find.text('Value taken'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -472,6 +542,95 @@ void main() {
     // Asked quantities only; the Taken column is gone.
     expect(find.text('50'), findsOneWidget);
     expect(find.text('30'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('per-item menu edits a line and saves it', (tester) async {
+    final repo = _FakeRepo(items: [_item()]);
+    await _pump(
+      tester,
+      PicklistDetailScreen(
+        repository: repo,
+        picklist: _picklist(),
+        showMoney: true,
+      ),
+      const Size(1280, 800),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.more_vert_rounded).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Edit entry'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Edit entry'), findsWidgets);
+    final fields = find.byType(TextField);
+    await tester.enterText(fields.at(0), 'Salt');
+    await tester.enterText(fields.at(1), '3');
+    await tester.enterText(fields.at(2), '10.00');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+
+    expect(repo.updatedItem, isNotNull);
+    expect(repo.updatedItem!.productName, 'Salt');
+    expect(repo.updatedItem!.requestedQty, 3);
+    expect(repo.updatedItem!.unitPriceMinorUnits, 1000);
+    expect(repo.updatedItem!.lineTotalMinorUnits, 3000);
+    expect(find.text('Salt'), findsOneWidget);
+    expect(find.text('3 Karton requested'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('per-item menu deletes one line only', (tester) async {
+    final repo = _FakeRepo(
+      items: [
+        _item(id: 'i1', product: 'Sugar'),
+        _item(id: 'i2', product: 'Flour'),
+      ],
+    );
+    await _pump(
+      tester,
+      PicklistDetailScreen(repository: repo, picklist: _picklist()),
+      const Size(1280, 800),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.more_vert_rounded).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete entry'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+
+    expect(repo.deletedItemId, 'i1');
+    expect(find.text('Sugar'), findsNothing);
+    expect(find.text('Flour'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('queue card menu deletes the whole list', (tester) async {
+    final repo = _FakeRepo(
+      picklists: [_picklist(id: 'p1', customer: 'Open Order')],
+      items: [_item()],
+    );
+    await _pump(
+      tester,
+      WarehouseScreen(
+        repository: repo,
+        currentUser: _staff([FeatureDef.warehouseFill]),
+      ),
+      const Size(390, 844),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.more_vert_rounded));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete list'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+
+    expect(repo.deletedPicklistId, 'p1');
     expect(tester.takeException(), isNull);
   });
 }

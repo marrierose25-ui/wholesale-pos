@@ -68,7 +68,11 @@ class WarehouseScreenState extends State<WarehouseScreen> {
   bool get _canCreate => widget.currentUser.can(FeatureDef.warehouse);
   bool get _canFill => widget.currentUser.can(FeatureDef.warehouseFill);
   bool get _dual => _canCreate && _canFill;
-  bool get _canSeeMoney => _canCreate;
+
+  /// Both warehouse jobs see money now: the shop side always did, and the
+  /// owner asked for the fill workers to see it too. Guarded by the two ticks
+  /// so this screen can never show money to an account with neither.
+  bool get _canSeeMoney => _canCreate || _canFill;
 
   @override
   void initState() {
@@ -208,12 +212,58 @@ class WarehouseScreenState extends State<WarehouseScreen> {
         builder: (context) => PicklistDetailScreen(
           repository: widget.repository,
           picklist: picklist,
+          showMoney: _canSeeMoney,
         ),
       ),
     );
     if (changed == true) {
       widget.onDataChanged?.call();
       refresh();
+    }
+  }
+
+  /// Deletes a whole list from the queue card, after a confirmation. The
+  /// repository writes a soft-delete tombstone (header + lines) so the removal
+  /// reaches every device through sync rather than vanishing locally.
+  Future<void> _deletePicklist(Picklist picklist) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete this list?'),
+        content: Text(
+          'The list for "${picklist.customerName}" and all its items will be '
+          'removed from every device. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            style: FilledButton.styleFrom(backgroundColor: AppDesign.danger),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await widget.repository.deletePicklist(picklist.id);
+      if (!mounted) return;
+      setState(() {
+        _newIds.remove(picklist.id);
+      });
+      widget.onDataChanged?.call();
+      refresh();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceAll('Exception: ', '')),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
   }
 
@@ -398,7 +448,7 @@ class WarehouseScreenState extends State<WarehouseScreen> {
 
   /// One queue card, shaped like the Sales History cards: a tinted customer
   /// header, a short item summary, and one tap to start filling. Quantities
-  /// only — a picker never sees a price.
+  /// only here; prices and totals live on the fill screen and in History.
   Widget _buildFillCard(_FillList entry) {
     final picklist = entry.picklist;
     final items = entry.items;
@@ -478,6 +528,31 @@ class WarehouseScreenState extends State<WarehouseScreen> {
                       fontWeight: FontWeight.w700,
                       letterSpacing: 0.2,
                     ),
+                  ),
+                  PopupMenuButton<String>(
+                    tooltip: 'List actions',
+                    padding: EdgeInsets.zero,
+                    splashRadius: 18,
+                    icon: Icon(
+                      Icons.more_vert_rounded,
+                      size: 18,
+                      color: AppDesign.textLo,
+                    ),
+                    onSelected: (value) {
+                      if (value == 'delete') _deletePicklist(picklist);
+                    },
+                    itemBuilder: (context) => const [
+                      PopupMenuItem<String>(
+                        value: 'delete',
+                        child: Row(
+                          children: [
+                            Icon(Icons.delete_outline_rounded, size: 18),
+                            SizedBox(width: 8),
+                            Text('Delete list'),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),

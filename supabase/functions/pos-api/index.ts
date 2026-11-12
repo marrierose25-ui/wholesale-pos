@@ -131,6 +131,12 @@ const ACTION_FEATURES: Record<string, string[]> = {
   list_picklists: ['warehouse', 'warehouse_fill'],
   get_picklist_items: ['warehouse', 'warehouse_fill'],
   create_picklist: ['warehouse'], update_picklist_items: ['warehouse'],
+  // Correcting or removing a line is a warehouse-floor action: both ticks may
+  // do it (the owner asked fill workers to fix a wrong entry without waiting
+  // for the shop). Creating a list and its customer directory stay shop-only.
+  update_picklist_item: ['warehouse', 'warehouse_fill'],
+  delete_picklist_item: ['warehouse', 'warehouse_fill'],
+  delete_picklist: ['warehouse', 'warehouse_fill'],
   get_customers: ['warehouse'], add_customer: ['warehouse'],
   toggle_picklist_item: ['warehouse', 'warehouse_fill'],
   // History. search_sales is also needed by the Register History day drill-down
@@ -207,9 +213,13 @@ Deno.serve(async (req) => {
       customerId: session.customerId,
       userId: session.userId,
       role: actor.role,
-      // A fill-only worker must not receive list prices over the wire, not just
-      // hide them in the UI. Owners and shop creators keep the money fields.
-      canSeePicklistMoney: actor.role === OWNER || actor.permissions.includes('warehouse'),
+      // Every warehouse tick may see picklist prices now, including the
+      // fill-only worker. The owner asked for both jobs to see money, so the
+      // price columns ride the wire for either tick.
+      canSeePicklistMoney:
+        actor.role === OWNER ||
+        actor.permissions.includes('warehouse') ||
+        actor.permissions.includes('warehouse_fill'),
       deviceId,
     };
 
@@ -278,6 +288,9 @@ Deno.serve(async (req) => {
       case 'get_customers': return await getCustomers(db, ctx, body);
       case 'add_customer': return await addCustomer(db, ctx, body);
       case 'toggle_picklist_item': return await togglePicklistItem(db, ctx, body);
+      case 'update_picklist_item': return await updatePicklistItem(db, ctx, body);
+      case 'delete_picklist_item': return await deletePicklistItem(db, ctx, body);
+      case 'delete_picklist': return await deletePicklist(db, ctx, body);
 
       // Counters, reporting, audit. There is no client-writable key/value
       // surface: tenant settings are server-owned (audit 2 #4).
@@ -1645,16 +1658,19 @@ async function categoryNames(db: any, ctx: Ctx): Promise<Record<string, string>>
 // SqflitePicklistRepository: all lines fulfilled -> COMPLETED, none taken ->
 // PENDING, anything in between -> PARTIAL.
 function derivePicklistStatus(items: any[]): string {
+  const active = items.filter((i) => !i.deleted_at);
+  if (active.length === 0) return 'PENDING';
   const takenOf = (i: any) => Number(i.taken_qty ?? 0);
   const requestedOf = (i: any) => Number(i.requested_qty ?? 0);
-  if (items.every((i) => takenOf(i) >= requestedOf(i))) return 'COMPLETED';
-  if (items.every((i) => takenOf(i) <= 0)) return 'PENDING';
+  if (active.every((i) => takenOf(i) >= requestedOf(i))) return 'COMPLETED';
+  if (active.every((i) => takenOf(i) <= 0)) return 'PENDING';
   return 'PARTIAL';
 }
 
 async function listPicklists(db: any, ctx: Ctx, body: any): Promise<Response> {
   let q = db.from('picklists').select('*')
     .eq('customer_id', ctx.customerId)
+    .is('deleted_at', null)
     .order('created_at', { ascending: false })
     .limit(pageLimit(body));
   if (body.status && body.status !== 'ALL') q = q.eq('status', body.status);
@@ -1666,14 +1682,23 @@ async function listPicklists(db: any, ctx: Ctx, body: any): Promise<Response> {
 async function getPicklistItems(db: any, ctx: Ctx, body: any): Promise<Response> {
   const picklistId = String(body.picklist_id ?? '');
   if (!picklistId) return json({ ok: false, error: 'Picklist not found.' }, 404);
+  const { data: header, error: headErr } = await db.from('picklists')
+    .select('id').eq('customer_id', ctx.customerId).eq('id', picklistId)
+    .is('deleted_at', null).maybeSingle();
+  if (headErr) throw new Error(headErr.message);
+  if (!header) return json({ ok: false, error: 'Picklist not found.' }, 404);
   // Stable order (product name) so the fulfillment screen matches native.
+  // A soft-deleted line is never returned; the row is kept only so the
+  // tombstone can sync to every device.
   const { data, error } = await db.from('picklist_items').select('*')
     .eq('customer_id', ctx.customerId).eq('picklist_id', picklistId)
+    .is('deleted_at', null)
     .order('product_name');
   if (error) throw new Error(error.message);
   const items = strip(data);
-  // Fill-only workers get quantities, never money: drop the price columns so
-  // they are absent from the wire, not merely hidden in the widget tree.
+  // Price columns are only dropped for a context that is not allowed money.
+  // Both warehouse ticks (and the owner) now pass that gate, so fill workers
+  // receive the same line prices as the shop side.
   if (!ctx.canSeePicklistMoney) {
     for (const item of items) {
       delete item.unit_price_minor_units;
@@ -1682,6 +1707,10 @@ async function getPicklistItems(db: any, ctx: Ctx, body: any): Promise<Response>
   }
   return json({ ok: true, items });
 }
+
+// Picklist money columns are Postgres `int` (32-bit), so a price or line total
+// above this would fail the write instead of landing as a value.
+const PICKLIST_MAX_MINOR_UNITS = 2147483647;
 
 async function createPicklist(db: any, ctx: Ctx, body: any): Promise<Response> {
   const header = body.picklist ?? {};
@@ -1731,10 +1760,23 @@ async function createPicklist(db: any, ctx: Ctx, body: any): Promise<Response> {
     // with its own quantity.
     const unit = str(raw.unit) || null;
     const unitPrice = Math.max(0, Number.isInteger(Number(raw.unit_price_minor_units)) ? Number(raw.unit_price_minor_units) : 0);
+    // A value the int column cannot hold (or a line total that would overflow
+    // it) is refused up front instead of failing the batch insert with a raw
+    // database error.
+    if (unitPrice > PICKLIST_MAX_MINOR_UNITS ||
+        (unitPrice > 0 && requested > Math.floor(PICKLIST_MAX_MINOR_UNITS / unitPrice))) {
+      await db.from('picklists').delete().eq('customer_id', ctx.customerId).eq('id', id);
+      return json({ ok: false, error: 'Price is too large for that quantity.' }, 400);
+    }
+    const rawTaken = Number(raw.taken_qty ?? 0);
+    const takenQty = Math.min(
+      Math.max(Number.isInteger(rawTaken) ? rawTaken : 0, 0),
+      requested,
+    );
     itemRows.push({
       id: str(raw.id) || crypto.randomUUID(),
       customer_id: ctx.customerId, picklist_id: id, product_name: productName,
-      requested_qty: requested, taken_qty: Math.max(0, Number(raw.taken_qty ?? 0) || 0),
+      requested_qty: requested, taken_qty: takenQty,
       unit, unit_price_minor_units: unitPrice, line_total_minor_units: unitPrice * requested,
       updated_at: now,
     });
@@ -1757,7 +1799,8 @@ async function updatePicklistItems(db: any, ctx: Ctx, body: any): Promise<Respon
   if (!picklistId) return json({ ok: false, error: 'Picklist not found.' }, 404);
 
   const { data: header, error: headErr } = await db.from('picklists')
-    .select('id, status').eq('customer_id', ctx.customerId).eq('id', picklistId).maybeSingle();
+    .select('id, status').eq('customer_id', ctx.customerId).eq('id', picklistId)
+    .is('deleted_at', null).maybeSingle();
   if (headErr) throw new Error(headErr.message);
   if (!header) return json({ ok: false, error: 'Picklist not found.' }, 404);
   if (header.status === 'COMPLETED') {
@@ -1773,16 +1816,18 @@ async function updatePicklistItems(db: any, ctx: Ctx, body: any): Promise<Respon
       return json({ ok: false, error: 'Taken quantity must be a non-negative whole number.' }, 400);
     }
     // Scoped by tenant AND parent picklist so an id from another list/tenant is
-    // a no-op rather than a cross-list write.
+    // a no-op rather than a cross-list write. A tombstoned line is skipped.
     const up = await db.from('picklist_items').update({ taken_qty: taken, updated_at: now })
-      .eq('customer_id', ctx.customerId).eq('picklist_id', picklistId).eq('id', itemId);
+      .eq('customer_id', ctx.customerId).eq('picklist_id', picklistId).eq('id', itemId)
+      .is('deleted_at', null);
     if (up.error) throw new Error(up.error.message);
   }
 
-  // Re-read the whole line set (not just the edited subset) to re-derive status,
-  // exactly like the native repository's progress pass.
+  // Re-read the whole active line set (not just the edited subset) to re-derive
+  // status, exactly like the native repository's progress pass.
   const { data: itemRows, error: itemsErr } = await db.from('picklist_items')
-    .select('requested_qty, taken_qty').eq('customer_id', ctx.customerId).eq('picklist_id', picklistId);
+    .select('requested_qty, taken_qty, deleted_at').eq('customer_id', ctx.customerId)
+    .eq('picklist_id', picklistId).is('deleted_at', null);
   if (itemsErr) throw new Error(itemsErr.message);
   const status = derivePicklistStatus(itemRows ?? []);
 
@@ -1836,7 +1881,8 @@ async function togglePicklistItem(db: any, ctx: Ctx, body: any): Promise<Respons
   if (!picklistId || !itemId) return json({ ok: false, error: 'Picklist not found.' }, 404);
 
   const { data: header, error: headErr } = await db.from('picklists')
-    .select('id, status').eq('customer_id', ctx.customerId).eq('id', picklistId).maybeSingle();
+    .select('id, status').eq('customer_id', ctx.customerId).eq('id', picklistId)
+    .is('deleted_at', null).maybeSingle();
   if (headErr) throw new Error(headErr.message);
   if (!header) return json({ ok: false, error: 'Picklist not found.' }, 404);
   if (header.status === 'COMPLETED') {
@@ -1845,18 +1891,20 @@ async function togglePicklistItem(db: any, ctx: Ctx, body: any): Promise<Respons
 
   const { data: item, error: itemErr } = await db.from('picklist_items')
     .select('id, requested_qty').eq('customer_id', ctx.customerId)
-    .eq('picklist_id', picklistId).eq('id', itemId).maybeSingle();
+    .eq('picklist_id', picklistId).eq('id', itemId).is('deleted_at', null).maybeSingle();
   if (itemErr) throw new Error(itemErr.message);
   if (!item) return json({ ok: false, error: 'Item not found.' }, 404);
 
   const now = new Date().toISOString();
   const taken = isTaken ? Number(item.requested_qty ?? 0) : 0;
   const up = await db.from('picklist_items').update({ taken_qty: taken, updated_at: now })
-    .eq('customer_id', ctx.customerId).eq('picklist_id', picklistId).eq('id', itemId);
+    .eq('customer_id', ctx.customerId).eq('picklist_id', picklistId).eq('id', itemId)
+    .is('deleted_at', null);
   if (up.error) throw new Error(up.error.message);
 
   const { data: itemRows, error: itemsErr } = await db.from('picklist_items')
-    .select('requested_qty, taken_qty').eq('customer_id', ctx.customerId).eq('picklist_id', picklistId);
+    .select('requested_qty, taken_qty, deleted_at').eq('customer_id', ctx.customerId)
+    .eq('picklist_id', picklistId).is('deleted_at', null);
   if (itemsErr) throw new Error(itemsErr.message);
   const status = derivePicklistStatus(itemRows ?? []);
 
@@ -1866,6 +1914,185 @@ async function togglePicklistItem(db: any, ctx: Ctx, body: any): Promise<Respons
 
   await audit(db, ctx.customerId, ctx.userId, 'PICKLIST_UPDATED', `Picklist ${picklistId} item ${itemId} toggled (status ${status}).`);
   return json({ ok: true, status });
+}
+
+// Corrects one line (name, requested quantity, unit, unit price). Price is a
+// display hint, so the line total is recomputed here from price * requested
+// instead of trusting the body. Mirrors the native updatePicklistItem.
+async function updatePicklistItem(db: any, ctx: Ctx, body: any): Promise<Response> {
+  const picklistId = str(body.picklist_id);
+  const itemId = str(body.item_id);
+  if (!picklistId || !itemId) return json({ ok: false, error: 'Item not found.' }, 404);
+
+  const { data: header, error: headErr } = await db.from('picklists')
+    .select('id, status').eq('customer_id', ctx.customerId).eq('id', picklistId)
+    .is('deleted_at', null).maybeSingle();
+  if (headErr) throw new Error(headErr.message);
+  if (!header) return json({ ok: false, error: 'Picklist not found.' }, 404);
+  if (header.status === 'COMPLETED') {
+    return json({ ok: false, error: 'A completed picklist can no longer be edited.' }, 409);
+  }
+
+  // The line must still exist and be active: an UPDATE that matches nothing
+  // would otherwise report success and then re-derive the header from a set
+  // that never contained this id.
+  const { data: existing, error: itemErr } = await db.from('picklist_items')
+    .select('id, taken_qty').eq('customer_id', ctx.customerId)
+    .eq('picklist_id', picklistId).eq('id', itemId)
+    .is('deleted_at', null).maybeSingle();
+  if (itemErr) throw new Error(itemErr.message);
+  if (!existing) return json({ ok: false, error: 'Item not found.' }, 404);
+
+  const productName = str(body.product_name);
+  const requested = Number(body.requested_qty ?? 0);
+  if (!productName) return json({ ok: false, error: 'Every item needs a product name.' }, 400);
+  if (!Number.isInteger(requested) || requested <= 0) {
+    return json({ ok: false, error: 'Requested quantity must be a positive whole number.' }, 400);
+  }
+  const unit = str(body.unit) || null;
+  const rawPrice = Number(body.unit_price_minor_units ?? 0);
+  if (!Number.isInteger(rawPrice) || rawPrice < 0) {
+    return json({ ok: false, error: 'Price must be a whole, non-negative number of cents.' }, 400);
+  }
+  const unitPrice = rawPrice;
+  // Keep the value (and the computed total) inside what the Postgres `int`
+  // columns can hold, so a huge price is a clear 400 rather than a 500.
+  if (unitPrice > PICKLIST_MAX_MINOR_UNITS ||
+      (unitPrice > 0 && requested > Math.floor(PICKLIST_MAX_MINOR_UNITS / unitPrice))) {
+    return json({ ok: false, error: 'Price is too large for that quantity.' }, 400);
+  }
+  const lineTotal = unitPrice * requested;
+
+  // Lowering the requested quantity must never leave the line "more taken than
+  // requested": clamp the stored progress to the new ceiling.
+  const storedTaken = Number(existing.taken_qty ?? 0);
+  const takenQty = Math.min(
+    Math.max(Number.isInteger(storedTaken) ? storedTaken : 0, 0),
+    requested,
+  );
+
+  const now = new Date().toISOString();
+  const up = await db.from('picklist_items').update({
+    product_name: productName,
+    requested_qty: requested,
+    taken_qty: takenQty,
+    unit,
+    unit_price_minor_units: unitPrice,
+    line_total_minor_units: lineTotal,
+    updated_at: now,
+  }).eq('customer_id', ctx.customerId).eq('picklist_id', picklistId).eq('id', itemId)
+    .is('deleted_at', null).select('id');
+  if (up.error) throw new Error(up.error.message);
+  // Belt and braces: if the row vanished between the read and the write, fail
+  // loudly instead of reporting a phantom edit.
+  if (!Array.isArray(up.data) || up.data.length === 0) {
+    return json({ ok: false, error: 'Item not found.' }, 404);
+  }
+
+  const { data: itemRows, error: itemsErr } = await db.from('picklist_items')
+    .select('requested_qty, taken_qty, deleted_at').eq('customer_id', ctx.customerId)
+    .eq('picklist_id', picklistId).is('deleted_at', null);
+  if (itemsErr) throw new Error(itemsErr.message);
+  const status = derivePicklistStatus(itemRows ?? []);
+
+  const upHeader = await db.from('picklists').update({ status, updated_at: now })
+    .eq('customer_id', ctx.customerId).eq('id', picklistId);
+  if (upHeader.error) throw new Error(upHeader.error.message);
+
+  await audit(db, ctx.customerId, ctx.userId, 'PICKLIST_UPDATED', `Picklist ${picklistId} item ${itemId} edited (status ${status}).`);
+  return json({ ok: true, status });
+}
+
+// Soft-deletes one line. When it was the last active line the header is
+// tombstoned too, so the queue never shows an empty list.
+async function deletePicklistItem(db: any, ctx: Ctx, body: any): Promise<Response> {
+  const picklistId = str(body.picklist_id);
+  const itemId = str(body.item_id);
+  if (!picklistId || !itemId) return json({ ok: false, error: 'Item not found.' }, 404);
+
+  const { data: header, error: headErr } = await db.from('picklists')
+    .select('id, status').eq('customer_id', ctx.customerId).eq('id', picklistId)
+    .is('deleted_at', null).maybeSingle();
+  if (headErr) throw new Error(headErr.message);
+  if (!header) return json({ ok: false, error: 'Picklist not found.' }, 404);
+  if (header.status === 'COMPLETED') {
+    return json({ ok: false, error: 'A completed picklist can no longer be edited.' }, 409);
+  }
+
+  const now = new Date().toISOString();
+  const up = await db.from('picklist_items').update({ deleted_at: now, updated_at: now })
+    .eq('customer_id', ctx.customerId).eq('picklist_id', picklistId).eq('id', itemId)
+    .is('deleted_at', null).select('id');
+  if (up.error) throw new Error(up.error.message);
+  // Deleting an already-gone line is not a silent success: the caller may be
+  // looking at a stale screen, and reporting the truth lets it refresh.
+  if (!Array.isArray(up.data) || up.data.length === 0) {
+    return json({ ok: false, error: 'Item not found.' }, 404);
+  }
+
+  const { data: remaining, error: itemsErr } = await db.from('picklist_items')
+    .select('requested_qty, taken_qty, deleted_at').eq('customer_id', ctx.customerId)
+    .eq('picklist_id', picklistId).is('deleted_at', null);
+  if (itemsErr) throw new Error(itemsErr.message);
+
+  if ((remaining ?? []).length === 0) {
+    // Last line gone: hide the header as well so no empty list stays queued.
+    const upHeader = await db.from('picklists').update({ deleted_at: now, updated_at: now })
+      .eq('customer_id', ctx.customerId).eq('id', picklistId);
+    if (upHeader.error) throw new Error(upHeader.error.message);
+    await audit(db, ctx.customerId, ctx.userId, 'PICKLIST_DELETED', `Picklist ${picklistId} deleted with its last item ${itemId}.`);
+    return json({ ok: true, status: 'DELETED' });
+  }
+
+  const status = derivePicklistStatus(remaining ?? []);
+  const upHeader = await db.from('picklists').update({ status, updated_at: now })
+    .eq('customer_id', ctx.customerId).eq('id', picklistId);
+  if (upHeader.error) throw new Error(upHeader.error.message);
+
+  await audit(db, ctx.customerId, ctx.userId, 'PICKLIST_UPDATED', `Picklist ${picklistId} item ${itemId} deleted (status ${status}).`);
+  return json({ ok: true, status });
+}
+
+// Soft-deletes a whole list (header + every active line) so every device's
+// pull sees the tombstone and hides it.
+async function deletePicklist(db: any, ctx: Ctx, body: any): Promise<Response> {
+  const picklistId = str(body.picklist_id);
+  if (!picklistId) return json({ ok: false, error: 'Picklist not found.' }, 404);
+
+  const { data: header, error: headErr } = await db.from('picklists')
+    .select('id, status, customer_name, deleted_at').eq('customer_id', ctx.customerId)
+    .eq('id', picklistId).maybeSingle();
+  if (headErr) throw new Error(headErr.message);
+  if (!header) return json({ ok: false, error: 'Picklist not found.' }, 404);
+
+  const now = new Date().toISOString();
+  if (header.deleted_at) {
+    // Idempotent retry: the header was already hidden, but an earlier attempt
+    // may have failed before its lines were tombstoned. Finish the cleanup so
+    // no active line can outlive its list.
+    const cleanup = await db.from('picklist_items').update({ deleted_at: now, updated_at: now })
+      .eq('customer_id', ctx.customerId).eq('picklist_id', picklistId)
+      .is('deleted_at', null);
+    if (cleanup.error) throw new Error(cleanup.error.message);
+    return json({ ok: true });
+  }
+  if (header.status === 'COMPLETED') {
+    return json({ ok: false, error: 'A completed picklist can no longer be edited.' }, 409);
+  }
+
+  // Header first: hiding the list is the critical outcome. If the line update
+  // then fails, the queue is already correct and the idempotent branch above
+  // finishes the cleanup on a retry.
+  const upHeader = await db.from('picklists').update({ deleted_at: now, updated_at: now })
+    .eq('customer_id', ctx.customerId).eq('id', picklistId).is('deleted_at', null);
+  if (upHeader.error) throw new Error(upHeader.error.message);
+
+  const upItems = await db.from('picklist_items').update({ deleted_at: now, updated_at: now })
+    .eq('customer_id', ctx.customerId).eq('picklist_id', picklistId).is('deleted_at', null);
+  if (upItems.error) throw new Error(upItems.error.message);
+
+  await audit(db, ctx.customerId, ctx.userId, 'PICKLIST_DELETED', `Picklist for "${header.customer_name}" (${picklistId}) deleted.`);
+  return json({ ok: true });
 }
 
 // ===========================================================================

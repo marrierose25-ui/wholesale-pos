@@ -48,6 +48,15 @@ class _FakeRepo implements PicklistRepository {
     String picklistId,
     List<PicklistItem> updatedItems,
   ) async {}
+
+  @override
+  Future<void> updatePicklistItem(PicklistItem item) async {}
+
+  @override
+  Future<void> deletePicklistItem(String picklistId, String itemId) async {}
+
+  @override
+  Future<void> deletePicklist(String picklistId) async {}
 }
 
 void main() {

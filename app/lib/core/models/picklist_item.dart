@@ -46,19 +46,30 @@ class PicklistItem {
   bool get isFulfilled => takenQty >= requestedQty;
 
   /// Returns a copy with the fulfillment progress updated. Used by the
-  /// Warehouse screen when a worker ticks an item off; every other field
-  /// (id, parent, requested, pricing) is immutable.
-  PicklistItem copyWith({int? takenQty, DateTime? updatedAt}) {
+  /// Warehouse screen when a worker ticks an item off.
+  ///
+  /// The edit dialog also uses it to correct the line itself (name, requested
+  /// quantity, unit and price); `lineTotalMinorUnits` is normally left null so
+  /// the caller can pass the recomputed value explicitly.
+  PicklistItem copyWith({
+    String? productName,
+    int? requestedQty,
+    int? takenQty,
+    String? unit,
+    int? unitPriceMinorUnits,
+    int? lineTotalMinorUnits,
+    DateTime? updatedAt,
+  }) {
     return PicklistItem(
       id: id,
       picklistId: picklistId,
-      productName: productName,
-      requestedQty: requestedQty,
+      productName: productName ?? this.productName,
+      requestedQty: requestedQty ?? this.requestedQty,
       takenQty: takenQty ?? this.takenQty,
       updatedAt: updatedAt ?? this.updatedAt,
-      unit: unit,
-      unitPriceMinorUnits: unitPriceMinorUnits,
-      lineTotalMinorUnits: lineTotalMinorUnits,
+      unit: unit ?? this.unit,
+      unitPriceMinorUnits: unitPriceMinorUnits ?? this.unitPriceMinorUnits,
+      lineTotalMinorUnits: lineTotalMinorUnits ?? this.lineTotalMinorUnits,
     );
   }
 

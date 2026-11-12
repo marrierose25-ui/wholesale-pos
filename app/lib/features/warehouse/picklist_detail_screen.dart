@@ -1,28 +1,37 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show FilteringTextInputFormatter;
 
 import '../../core/models/picklist.dart';
 import '../../core/models/picklist_item.dart';
 import '../../core/repositories/picklist_repository.dart';
 import '../../core/theme/app_design.dart';
+import '../../core/utils/money_utils.dart';
 import 'warehouse_shared.dart';
 
 /// The warehouse worker's screen for one list: a tick box per product. Ticking
 /// calls [PicklistRepository.toggleItemTaken], which sets the line's taken qty
 /// to its requested qty (or back to 0) and re-derives the header status.
 ///
-/// No prices and no totals here: money is the shop's concern and would only
-/// confuse the person pulling stock. The write is optimistic — the box ticks
-/// instantly and reverts if the save fails. A COMPLETED list is frozen, so
-/// closed history can never be restated. This screen only ever touches the
-/// picklist tables.
+/// Every warehouse account sees money now: the Warehouse tab passes
+/// [showMoney] true for both of its ticks, so the header carries the list's
+/// requested value and each line its unit price and value. The write is
+/// optimistic — the box ticks instantly and reverts if the save fails. A
+/// COMPLETED list is frozen, so closed history can never be restated. This
+/// screen only ever touches the picklist tables.
 class PicklistDetailScreen extends StatefulWidget {
   final PicklistRepository repository;
   final Picklist picklist;
+
+  /// Whether prices and the list total are shown. The Warehouse tab passes
+  /// true for both of its ticks (shop and fill); the default keeps the screen
+  /// safe if it is ever reused somewhere money is not wanted.
+  final bool showMoney;
 
   const PicklistDetailScreen({
     super.key,
     required this.repository,
     required this.picklist,
+    this.showMoney = false,
   });
 
   @override
@@ -121,6 +130,87 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
         SnackBar(content: Text(e.toString().replaceAll('Exception: ', ''))),
       );
     }
+  }
+
+  /// Corrects one line: product name, requested quantity, unit and price. The
+  /// line total is recomputed here from price x quantity and the repository
+  /// re-checks it again, so the two can never disagree.
+  Future<void> _editItem(PicklistItem item) async {
+    if (_readOnly) return;
+    final result = await showDialog<_EditItemResult>(
+      context: context,
+      builder: (_) => _EditItemDialog(item: item),
+    );
+    if (result == null || !mounted) return;
+
+    try {
+      await widget.repository.updatePicklistItem(
+        PicklistItem(
+          id: item.id,
+          picklistId: item.picklistId,
+          productName: result.productName,
+          requestedQty: result.requestedQty,
+          takenQty: item.takenQty,
+          unit: result.unit,
+          unitPriceMinorUnits: result.unitPriceMinorUnits,
+          lineTotalMinorUnits: result.unitPriceMinorUnits * result.requestedQty,
+          updatedAt: DateTime.now(),
+        ),
+      );
+      if (!mounted) return;
+      setState(() => _changed = true);
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      _showError(e);
+    }
+  }
+
+  /// Soft-deletes one line. Deleting the last line also removes the header (in
+  /// the repository), so the screen pops and the queue refreshes instead of
+  /// leaving an empty list behind.
+  Future<void> _deleteItem(PicklistItem item) async {
+    if (_readOnly) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete this entry?'),
+        content: Text(
+          '"${item.productName}" will be removed from this list on every '
+          'device. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            style: FilledButton.styleFrom(backgroundColor: AppDesign.danger),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await widget.repository.deletePicklistItem(widget.picklist.id, item.id);
+      if (!mounted) return;
+      setState(() => _changed = true);
+      await _load();
+      if (!mounted) return;
+      // The last line takes the header with it; there is nothing left to fill.
+      if (_items.isEmpty) Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      _showError(e);
+    }
+  }
+
+  void _showError(Object e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(e.toString().replaceAll('Exception: ', ''))),
+    );
   }
 
   @override
@@ -240,10 +330,40 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
               ),
             ),
           ],
+          if (widget.showMoney && showProgress) ...[
+            const SizedBox(height: 10),
+            Divider(height: 1, thickness: 1, color: AppDesign.stroke),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Text(
+                  'List value',
+                  style: TextStyle(
+                    color: AppDesign.textLo,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  MoneyUtils.formatBr(_requestedTotal),
+                  style: TextStyle(
+                    color: AppDesign.textHi,
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
   }
+
+  /// Value of the whole list as requested: unit price x requested quantity.
+  int get _requestedTotal =>
+      _items.fold(0, (sum, i) => sum + i.unitPriceMinorUnits * i.requestedQty);
 
   Widget _buildCompletedBanner() {
     return Container(
@@ -416,6 +536,18 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
                       '${item.requestedQty}$unit requested',
                       style: TextStyle(color: AppDesign.textLo, fontSize: 11.5),
                     ),
+                    if (widget.showMoney) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        '${MoneyUtils.formatBr(item.unitPriceMinorUnits)} each · '
+                        '${MoneyUtils.formatBr(item.unitPriceMinorUnits * item.requestedQty)}',
+                        style: TextStyle(
+                          color: AppDesign.textLo,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -430,10 +562,218 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
                   ),
                 ),
               ],
+              if (!_readOnly)
+                PopupMenuButton<String>(
+                  tooltip: 'Entry actions',
+                  padding: EdgeInsets.zero,
+                  splashRadius: 18,
+                  icon: Icon(
+                    Icons.more_vert_rounded,
+                    size: 18,
+                    color: AppDesign.textLo,
+                  ),
+                  onSelected: (value) {
+                    if (value == 'edit') _editItem(item);
+                    if (value == 'delete') _deleteItem(item);
+                  },
+                  itemBuilder: (context) => const [
+                    PopupMenuItem<String>(
+                      value: 'edit',
+                      child: Row(
+                        children: [
+                          Icon(Icons.edit_outlined, size: 18),
+                          SizedBox(width: 8),
+                          Text('Edit entry'),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'delete',
+                      child: Row(
+                        children: [
+                          Icon(Icons.delete_outline_rounded, size: 18),
+                          SizedBox(width: 8),
+                          Text('Delete entry'),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+/// What the edit dialog returns. A plain value object keeps the dialog's
+/// controllers owned by [_EditItemDialogState], so they are disposed with the
+/// route instead of while it is still animating out.
+class _EditItemResult {
+  final String productName;
+  final int requestedQty;
+  final String? unit;
+  final int unitPriceMinorUnits;
+
+  const _EditItemResult({
+    required this.productName,
+    required this.requestedQty,
+    required this.unit,
+    required this.unitPriceMinorUnits,
+  });
+}
+
+class _EditItemDialog extends StatefulWidget {
+  final PicklistItem item;
+
+  const _EditItemDialog({required this.item});
+
+  @override
+  State<_EditItemDialog> createState() => _EditItemDialogState();
+}
+
+class _EditItemDialogState extends State<_EditItemDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _name;
+  late final TextEditingController _qty;
+  late final TextEditingController _price;
+  late String _unit;
+
+  @override
+  void initState() {
+    super.initState();
+    _name = TextEditingController(text: widget.item.productName);
+    _qty = TextEditingController(text: widget.item.requestedQty.toString());
+    _price = TextEditingController(
+      text: MoneyUtils.minorUnitsToString(widget.item.unitPriceMinorUnits),
+    );
+    _unit = widget.item.unit ?? '';
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _qty.dispose();
+    _price.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    final qty = int.tryParse(_qty.text.trim()) ?? 0;
+    final unit = _unit.trim();
+    Navigator.of(context).pop(
+      _EditItemResult(
+        productName: _name.text.trim(),
+        requestedQty: qty,
+        unit: unit.isEmpty ? null : unit,
+        unitPriceMinorUnits: MoneyUtils.stringToMinorUnits(_price.text) ?? 0,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final unitOptions = <String>[
+      '',
+      ...kPicklistUnits,
+      if (_unit.isNotEmpty && !kPicklistUnits.contains(_unit)) _unit,
+    ];
+    return AlertDialog(
+      title: const Text('Edit entry'),
+      content: Form(
+        key: _formKey,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: _name,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(
+                  labelText: 'Product name',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) => (value == null || value.trim().isEmpty)
+                    ? 'Product name is required.'
+                    : null,
+              ),
+              const SizedBox(height: 12),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    flex: 3,
+                    child: TextFormField(
+                      controller: _qty,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                      decoration: const InputDecoration(
+                        labelText: 'Qty',
+                        border: OutlineInputBorder(),
+                      ),
+                      validator: (value) {
+                        final qty = int.tryParse(value?.trim() ?? '');
+                        return (qty == null || qty <= 0) ? 'Qty?' : null;
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 4,
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _unit,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Unit',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: [
+                        for (final unit in unitOptions)
+                          DropdownMenuItem(
+                            value: unit,
+                            child: Text(
+                              unit.isEmpty ? '—' : unit,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                      onChanged: (value) => setState(() => _unit = value ?? ''),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _price,
+                keyboardType: TextInputType.number,
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                ],
+                decoration: const InputDecoration(
+                  labelText: 'Unit price (Br)',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (value) {
+                  final text = value?.trim() ?? '';
+                  if (text.isEmpty) return null;
+                  return MoneyUtils.stringToMinorUnits(text) == null
+                      ? 'Enter a valid price.'
+                      : null;
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _save, child: const Text('Save')),
+      ],
     );
   }
 }

@@ -48,6 +48,17 @@ abstract class PicklistRepository {
   /// [isTaken] sets `taken_qty` to the line's `requested_qty` (or back to 0),
   /// so a single tap fulfills a whole line — the auto-save checkbox path.
   Future<void> toggleItemTaken(String picklistId, String itemId, bool isTaken);
+
+  /// Corrects one line (name, requested quantity, unit, unit price). Re-derives
+  /// the header status from the remaining active lines.
+  Future<void> updatePicklistItem(PicklistItem item);
+
+  /// Soft-deletes one line. When it was the last active line the header is
+  /// soft-deleted too, so the list leaves the queue instead of becoming empty.
+  Future<void> deletePicklistItem(String picklistId, String itemId);
+
+  /// Soft-deletes a whole list (header + lines) so every device hides it.
+  Future<void> deletePicklist(String picklistId);
 }
 
 /// SQLite implementation of [PicklistRepository] for the native tills. Every
@@ -65,22 +76,29 @@ class SqflitePicklistRepository implements PicklistRepository {
 
   @override
   Future<List<Picklist>> getPicklists({String? status}) async {
+    final where = <String>['deleted_at IS NULL'];
+    final args = <Object?>[];
+    if (status != null && status.isNotEmpty) {
+      where.add('status = ?');
+      args.add(status);
+    }
     final maps = await _db.query(
       'picklists',
-      where: status == null || status.isEmpty ? null : 'status = ?',
-      whereArgs: status == null || status.isEmpty ? null : [status],
+      where: where.join(' AND '),
+      whereArgs: args,
       orderBy: 'created_at DESC',
     );
     return maps.map(Picklist.fromMap).toList();
   }
 
   /// The line items of one picklist, in a stable creation order (product name)
-  /// so the fulfillment screen keeps the same layout between visits.
+  /// so the fulfillment screen keeps the same layout between visits. Deleted
+  /// lines are filtered out here, never physically removed.
   @override
   Future<List<PicklistItem>> getItems(String picklistId) async {
     final maps = await _db.query(
       'picklist_items',
-      where: 'picklist_id = ?',
+      where: 'picklist_id = ? AND deleted_at IS NULL',
       whereArgs: [picklistId],
       orderBy: 'product_name COLLATE NOCASE ASC',
     );
@@ -106,11 +124,34 @@ class SqflitePicklistRepository implements PicklistRepository {
     if (items.isEmpty) {
       throw Exception('A picklist needs at least one item.');
     }
+    // Validate every line before the transaction so a bad row never leaves a
+    // header behind, and recompute the total here rather than trusting the
+    // caller's copy.
+    final lineTotals = <String, int>{};
+    for (final item in items) {
+      if (item.productName.trim().isEmpty) {
+        throw Exception('Every item needs a product name.');
+      }
+      lineTotals[item.id] = _safeLineTotal(
+        item.unitPriceMinorUnits,
+        item.requestedQty,
+      );
+    }
 
     await _db.transaction((txn) async {
       await txn.insert('picklists', picklist.toMap());
       for (final item in items) {
-        await txn.insert('picklist_items', item.toMap());
+        final takenQty = item.takenQty < 0
+            ? 0
+            : (item.takenQty > item.requestedQty
+                  ? item.requestedQty
+                  : item.takenQty);
+        await txn.insert('picklist_items', {
+          ...item.toMap(),
+          'product_name': item.productName.trim(),
+          'taken_qty': takenQty,
+          'line_total_minor_units': lineTotals[item.id],
+        });
         await _enqueueItem(txn, item.id);
       }
       // Parent last, once its items exist: the header carries the initial
@@ -134,12 +175,14 @@ class SqflitePicklistRepository implements PicklistRepository {
     await _db.transaction((txn) async {
       final headerRows = await txn.query(
         'picklists',
-        columns: ['status'],
+        columns: ['status', 'deleted_at'],
         where: 'id = ?',
         whereArgs: [picklistId],
         limit: 1,
       );
-      if (headerRows.isEmpty) throw Exception('Picklist not found.');
+      if (headerRows.isEmpty || headerRows.first['deleted_at'] != null) {
+        throw Exception('Picklist not found.');
+      }
       final currentStatus = headerRows.first['status'] as String;
       if (currentStatus == Picklist.statusCompleted) {
         throw Exception('A completed picklist can no longer be edited.');
@@ -151,17 +194,17 @@ class SqflitePicklistRepository implements PicklistRepository {
         await txn.update(
           'picklist_items',
           {'taken_qty': item.takenQty, 'updated_at': nowText},
-          where: 'id = ? AND picklist_id = ?',
+          where: 'id = ? AND picklist_id = ? AND deleted_at IS NULL',
           whereArgs: [item.id, picklistId],
         );
         await _enqueueItem(txn, item.id);
       }
 
-      // Re-read every item (not just the edited subset) so the status reflects
-      // the whole list even if a partial save touched only some lines.
+      // Re-read every active item (not just the edited subset) so the status
+      // reflects the whole list even if a partial save touched only some lines.
       final itemRows = await txn.query(
         'picklist_items',
-        where: 'picklist_id = ?',
+        where: 'picklist_id = ? AND deleted_at IS NULL',
         whereArgs: [picklistId],
       );
       final items = itemRows.map(PicklistItem.fromMap).toList();
@@ -178,11 +221,222 @@ class SqflitePicklistRepository implements PicklistRepository {
   }
 
   /// Status from the item set: everything fulfilled → COMPLETED; nothing taken
-  /// at all → PENDING; any middle ground → PARTIAL.
+  /// at all → PENDING; any middle ground → PARTIAL. An empty set is PENDING;
+  /// callers that delete the last line soft-delete the header instead.
   static String _deriveStatus(List<PicklistItem> items) {
+    if (items.isEmpty) return Picklist.statusPending;
     if (items.every((i) => i.isFulfilled)) return Picklist.statusCompleted;
     if (items.every((i) => i.takenQty <= 0)) return Picklist.statusPending;
     return Picklist.statusPartial;
+  }
+
+  /// Corrects one line. Only an active, non-COMPLETED list may be edited, and
+  /// only an active line: a tombstoned row is gone for every surface.
+  @override
+  Future<void> updatePicklistItem(PicklistItem item) async {
+    final productName = item.productName.trim();
+    if (productName.isEmpty) {
+      throw Exception('Every item needs a product name.');
+    }
+    if (item.requestedQty <= 0) {
+      throw Exception('Requested quantity must be a positive whole number.');
+    }
+    final lineTotal = _safeLineTotal(
+      item.unitPriceMinorUnits,
+      item.requestedQty,
+    );
+    await _db.transaction((txn) async {
+      await _requireEditable(txn, item.picklistId);
+
+      // Read the stored progress rather than trusting the caller's copy: the
+      // edit dialog only changes the line definition, so `takenQty` must stay
+      // what the warehouse actually recorded — clamped to the new ceiling.
+      final existing = await txn.query(
+        'picklist_items',
+        columns: ['taken_qty'],
+        where: 'id = ? AND picklist_id = ? AND deleted_at IS NULL',
+        whereArgs: [item.id, item.picklistId],
+        limit: 1,
+      );
+      if (existing.isEmpty) throw Exception('Item not found.');
+      final storedTaken = (existing.first['taken_qty'] as num?)?.toInt() ?? 0;
+      final takenQty = storedTaken < 0
+          ? 0
+          : (storedTaken > item.requestedQty ? item.requestedQty : storedTaken);
+
+      final now = DateTime.now();
+      final nowText = now.toIso8601String();
+      final updated = await txn.update(
+        'picklist_items',
+        {
+          'product_name': productName,
+          'requested_qty': item.requestedQty,
+          'taken_qty': takenQty,
+          'unit': item.unit,
+          'unit_price_minor_units': item.unitPriceMinorUnits,
+          // Recomputed here, never trusted from the caller, so a line total can
+          // never disagree with its own quantity and price.
+          'line_total_minor_units': lineTotal,
+          'updated_at': nowText,
+        },
+        where: 'id = ? AND picklist_id = ? AND deleted_at IS NULL',
+        whereArgs: [item.id, item.picklistId],
+      );
+      if (updated != 1) throw Exception('Item not found.');
+      await _enqueueItem(txn, item.id);
+
+      await _rederiveHeader(txn, item.picklistId, nowText);
+    });
+  }
+
+  /// Largest value the cloud's `int` money columns can hold (2^31 - 1). Native
+  /// edits sync through `pos-api`, so a price or line total beyond this would
+  /// be rejected by the database after the local write had already happened.
+  static const int _maxMinorUnits = 2147483647;
+
+  /// Multiplies price by quantity, rejecting a negative price and an unsafe
+  /// product instead of letting the value overflow the cloud column.
+  static int _safeLineTotal(int unitPriceMinorUnits, int requestedQty) {
+    if (unitPriceMinorUnits < 0) {
+      throw Exception('Price cannot be negative.');
+    }
+    if (requestedQty <= 0) {
+      throw Exception('Requested quantity must be a positive whole number.');
+    }
+    if (unitPriceMinorUnits > _maxMinorUnits ||
+        (unitPriceMinorUnits != 0 &&
+            requestedQty > _maxMinorUnits ~/ unitPriceMinorUnits)) {
+      throw Exception('Price is too large for that quantity.');
+    }
+    return unitPriceMinorUnits * requestedQty;
+  }
+
+  /// Soft-deletes one line. The last active line takes the header with it, so
+  /// the queue never shows an empty list.
+  @override
+  Future<void> deletePicklistItem(String picklistId, String itemId) async {
+    await _db.transaction((txn) async {
+      await _requireEditable(txn, picklistId);
+
+      final now = DateTime.now();
+      final nowText = now.toIso8601String();
+      final updated = await txn.update(
+        'picklist_items',
+        {'deleted_at': nowText, 'updated_at': nowText},
+        where: 'id = ? AND picklist_id = ? AND deleted_at IS NULL',
+        whereArgs: [itemId, picklistId],
+      );
+      if (updated != 1) throw Exception('Item not found.');
+      await _enqueueItem(txn, itemId);
+
+      final remaining = await txn.query(
+        'picklist_items',
+        columns: ['id'],
+        where: 'picklist_id = ? AND deleted_at IS NULL',
+        whereArgs: [picklistId],
+        limit: 1,
+      );
+      if (remaining.isEmpty) {
+        await _softDeleteHeader(txn, picklistId, nowText);
+      } else {
+        await _rederiveHeader(txn, picklistId, nowText);
+      }
+    });
+  }
+
+  /// Soft-deletes the whole list. Its lines are tombstoned too, so a device
+  /// that still holds them cannot surface one through a direct item read.
+  @override
+  Future<void> deletePicklist(String picklistId) async {
+    await _db.transaction((txn) async {
+      final headerRows = await txn.query(
+        'picklists',
+        columns: ['id', 'status', 'deleted_at'],
+        where: 'id = ?',
+        whereArgs: [picklistId],
+        limit: 1,
+      );
+      if (headerRows.isEmpty || headerRows.first['deleted_at'] != null) {
+        throw Exception('Picklist not found.');
+      }
+      if (headerRows.first['status'] == Picklist.statusCompleted) {
+        throw Exception('A completed picklist can no longer be edited.');
+      }
+      final nowText = DateTime.now().toIso8601String();
+      final itemRows = await txn.query(
+        'picklist_items',
+        columns: ['id'],
+        where: 'picklist_id = ? AND deleted_at IS NULL',
+        whereArgs: [picklistId],
+      );
+      for (final row in itemRows) {
+        final itemId = row['id'] as String;
+        await txn.update(
+          'picklist_items',
+          {'deleted_at': nowText, 'updated_at': nowText},
+          where: 'id = ?',
+          whereArgs: [itemId],
+        );
+        await _enqueueItem(txn, itemId);
+      }
+      await _softDeleteHeader(txn, picklistId, nowText);
+    });
+  }
+
+  /// Refuses an edit on a missing, tombstoned or COMPLETED list.
+  static Future<void> _requireEditable(
+    DatabaseExecutor txn,
+    String picklistId,
+  ) async {
+    final rows = await txn.query(
+      'picklists',
+      columns: ['status', 'deleted_at'],
+      where: 'id = ?',
+      whereArgs: [picklistId],
+      limit: 1,
+    );
+    if (rows.isEmpty || rows.first['deleted_at'] != null) {
+      throw Exception('Picklist not found.');
+    }
+    if (rows.first['status'] == Picklist.statusCompleted) {
+      throw Exception('A completed picklist can no longer be edited.');
+    }
+  }
+
+  /// Re-reads the active lines and writes the derived header status.
+  static Future<void> _rederiveHeader(
+    DatabaseExecutor txn,
+    String picklistId,
+    String nowText,
+  ) async {
+    final rows = await txn.query(
+      'picklist_items',
+      where: 'picklist_id = ? AND deleted_at IS NULL',
+      whereArgs: [picklistId],
+    );
+    final status = _deriveStatus(rows.map(PicklistItem.fromMap).toList());
+    await txn.update(
+      'picklists',
+      {'status': status, 'updated_at': nowText},
+      where: 'id = ?',
+      whereArgs: [picklistId],
+    );
+    await _enqueuePicklist(txn, picklistId);
+  }
+
+  /// Marks the header itself deleted and queues it.
+  static Future<void> _softDeleteHeader(
+    DatabaseExecutor txn,
+    String picklistId,
+    String nowText,
+  ) async {
+    await txn.update(
+      'picklists',
+      {'deleted_at': nowText, 'updated_at': nowText},
+      where: 'id = ?',
+      whereArgs: [picklistId],
+    );
+    await _enqueuePicklist(txn, picklistId);
   }
 
   // ------------------------------------------------------------------
@@ -219,29 +473,18 @@ class SqflitePicklistRepository implements PicklistRepository {
     bool isTaken,
   ) async {
     await _db.transaction((txn) async {
-      final headerRows = await txn.query(
-        'picklists',
-        columns: ['status'],
-        where: 'id = ?',
-        whereArgs: [picklistId],
-        limit: 1,
-      );
-      if (headerRows.isEmpty) throw Exception('Picklist not found.');
-      if (headerRows.first['status'] == Picklist.statusCompleted) {
-        throw Exception('A completed picklist can no longer be edited.');
-      }
+      await _requireEditable(txn, picklistId);
 
       final itemRows = await txn.query(
         'picklist_items',
-        where: 'id = ? AND picklist_id = ?',
+        where: 'id = ? AND picklist_id = ? AND deleted_at IS NULL',
         whereArgs: [itemId, picklistId],
         limit: 1,
       );
       if (itemRows.isEmpty) throw Exception('Item not found.');
       final requested = (itemRows.first['requested_qty'] as num?)?.toInt() ?? 0;
 
-      final now = DateTime.now();
-      final nowText = now.toIso8601String();
+      final nowText = DateTime.now().toIso8601String();
       await txn.update(
         'picklist_items',
         {'taken_qty': isTaken ? requested : 0, 'updated_at': nowText},
@@ -250,23 +493,9 @@ class SqflitePicklistRepository implements PicklistRepository {
       );
       await _enqueueItem(txn, itemId);
 
-      // Re-read the whole line set so the header status reflects every item,
+      // Re-read the active line set so the header status reflects every item,
       // not just the one tapped.
-      final allRows = await txn.query(
-        'picklist_items',
-        where: 'picklist_id = ?',
-        whereArgs: [picklistId],
-      );
-      final newStatus = _deriveStatus(
-        allRows.map(PicklistItem.fromMap).toList(),
-      );
-      await txn.update(
-        'picklists',
-        {'status': newStatus, 'updated_at': nowText},
-        where: 'id = ?',
-        whereArgs: [picklistId],
-      );
-      await _enqueuePicklist(txn, picklistId);
+      await _rederiveHeader(txn, picklistId, nowText);
     });
   }
 

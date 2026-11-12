@@ -4,6 +4,7 @@ import 'package:cryptography/cryptography.dart' as cryptography;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:wholesale_pos_app/core/database/local_database.dart';
+import 'package:wholesale_pos_app/core/repositories/picklist_repository.dart';
 import 'package:wholesale_pos_app/core/repositories/user_repository.dart';
 import 'package:wholesale_pos_app/core/sync/sync_backend.dart';
 import 'package:wholesale_pos_app/core/sync/sync_outbox_entry.dart';
@@ -252,6 +253,87 @@ void main() {
       expect('${sale['created_at']}'.contains('+'), isFalse);
     });
 
+    test('lands a picklist line with its unit and price', () async {
+      final applier = SyncPullApplier(db);
+
+      await applier.apply(
+        pageOf('picklists', [
+          {
+            'id': 'pl-1',
+            'customer_name': 'Aymen',
+            'status': 'PENDING',
+            'created_by': 'user-1',
+            'created_at': '2026-11-06T08:00:00+00:00',
+            'updated_at': '2026-11-06T08:00:00+00:00',
+          },
+        ]),
+      );
+      await applier.apply(
+        pageOf('picklist_items', [
+          {
+            'id': 'pi-1',
+            'picklist_id': 'pl-1',
+            'product_name': 'Sugar',
+            'requested_qty': 5,
+            'taken_qty': 0,
+            'unit': 'Karton',
+            'unit_price_minor_units': 4550,
+            'line_total_minor_units': 22750,
+            'updated_at': '2026-11-06T08:00:00+00:00',
+          },
+        ]),
+      );
+
+      final item = (await db.query('picklist_items')).single;
+      expect(item['unit'], 'Karton');
+      expect(item['unit_price_minor_units'], 4550);
+      expect(item['line_total_minor_units'], 22750);
+    });
+
+    test('lands a soft-delete tombstone on a picklist and its lines', () async {
+      final applier = SyncPullApplier(db);
+
+      await applier.apply(
+        pageOf('picklists', [
+          {
+            'id': 'pl-1',
+            'customer_name': 'Aymen',
+            'status': 'PENDING',
+            'created_by': 'user-1',
+            'created_at': '2026-11-06T08:00:00+00:00',
+            'updated_at': '2026-11-11T09:00:00+00:00',
+            'deleted_at': '2026-11-11T09:00:00+00:00',
+          },
+        ]),
+      );
+      await applier.apply(
+        pageOf('picklist_items', [
+          {
+            'id': 'pi-1',
+            'picklist_id': 'pl-1',
+            'product_name': 'Sugar',
+            'requested_qty': 5,
+            'taken_qty': 0,
+            'unit': 'Karton',
+            'unit_price_minor_units': 4550,
+            'line_total_minor_units': 22750,
+            'updated_at': '2026-11-11T09:00:00+00:00',
+            'deleted_at': '2026-11-11T09:00:00+00:00',
+          },
+        ]),
+      );
+
+      final header = (await db.query('picklists')).single;
+      expect(header['deleted_at'], isNotNull);
+      final item = (await db.query('picklist_items')).single;
+      expect(item['deleted_at'], isNotNull);
+
+      // The queue and fill screen never surface a tombstoned row.
+      final repository = SqflitePicklistRepository(db);
+      expect(await repository.getPicklists(), isEmpty);
+      expect(await repository.getItems('pl-1'), isEmpty);
+    });
+
     test('carries the account credential so the account can sign in', () async {
       await SyncPullApplier(db).apply(pageOf('users', [cloudUser()]));
 
@@ -358,89 +440,79 @@ void main() {
       expect(await db.query('sales'), hasLength(2));
     });
 
-    test(
-      'merges a local open shift into the cloud open shift on fresh sync',
-      () async {
-        await seedLocalSale(
-          db,
-          saleId: 'local-sale',
-          receipt: 'REC-L',
-          shiftStatus: 'OPEN',
-        );
-        await db.insert('cash_movements', {
-          'id': 'local-cm',
-          'shift_id': 'local-shift',
-          'type': 'CREDIT',
-          'amount_minor_units': 5000,
-          'reason': 'Float',
-          'created_at': DateTime.now().toIso8601String(),
-          'user_id': 'local-user',
-        });
-        // A sale voided against the local shift exercises voided_shift_id merge.
-        await db.insert('sales', {
-          'id': 'voided-sale',
-          'receipt_number': 'REC-V',
-          'cashier_id': 'local-user',
-          'device_id': 'local-device',
-          'shift_id': 'local-shift',
-          'payment_method': 'CASH',
-          'subtotal_minor_units': 100,
-          'discount_minor_units': 0,
-          'total_minor_units': 100,
-          'amount_paid_minor_units': 100,
-          'change_minor_units': 0,
-          'status': 'VOIDED',
-          'voided_shift_id': 'local-shift',
-          'created_at': DateTime.now().toIso8601String(),
-        });
+    test('merges a local open shift into the cloud open shift on fresh sync', () async {
+      await seedLocalSale(
+        db,
+        saleId: 'local-sale',
+        receipt: 'REC-L',
+        shiftStatus: 'OPEN',
+      );
+      await db.insert('cash_movements', {
+        'id': 'local-cm',
+        'shift_id': 'local-shift',
+        'type': 'CREDIT',
+        'amount_minor_units': 5000,
+        'reason': 'Float',
+        'created_at': DateTime.now().toIso8601String(),
+        'user_id': 'local-user',
+      });
+      // A sale voided against the local shift exercises voided_shift_id merge.
+      await db.insert('sales', {
+        'id': 'voided-sale',
+        'receipt_number': 'REC-V',
+        'cashier_id': 'local-user',
+        'device_id': 'local-device',
+        'shift_id': 'local-shift',
+        'payment_method': 'CASH',
+        'subtotal_minor_units': 100,
+        'discount_minor_units': 0,
+        'total_minor_units': 100,
+        'amount_paid_minor_units': 100,
+        'change_minor_units': 0,
+        'status': 'VOIDED',
+        'voided_shift_id': 'local-shift',
+        'created_at': DateTime.now().toIso8601String(),
+      });
 
-        final report = await SyncPullApplier(db).apply(
-          pageOf('shifts', [cloudShift(id: 'cloud-shift', status: 'OPEN')]),
-        );
+      final report = await SyncPullApplier(db).apply(
+        pageOf('shifts', [cloudShift(id: 'cloud-shift', status: 'OPEN')]),
+      );
 
-        expect(report.shifts, 1);
-        // The local empty/open shift was merged away.
-        expect(
-          await db.query(
-            'shifts',
-            where: 'id = ?',
-            whereArgs: ['local-shift'],
-          ),
-          isEmpty,
-        );
-        // The cloud shift is now the one true OPEN drawer.
-        final cloud = (await db.query(
-          'shifts',
-          where: 'id = ?',
-          whereArgs: ['cloud-shift'],
-        )).single;
-        expect(cloud['status'], 'OPEN');
-        expect(
-          await db.query('shifts', where: "status = 'OPEN'"),
-          hasLength(1),
-        );
-        // Sales and cash movements moved to the cloud shift.
-        final sale = (await db.query(
-          'sales',
-          where: 'id = ?',
-          whereArgs: ['local-sale'],
-        )).single;
-        expect(sale['shift_id'], 'cloud-shift');
-        final voided = (await db.query(
-          'sales',
-          where: 'id = ?',
-          whereArgs: ['voided-sale'],
-        )).single;
-        expect(voided['shift_id'], 'cloud-shift');
-        expect(voided['voided_shift_id'], 'cloud-shift');
-        final movement = (await db.query(
-          'cash_movements',
-          where: 'id = ?',
-          whereArgs: ['local-cm'],
-        )).single;
-        expect(movement['shift_id'], 'cloud-shift');
-      },
-    );
+      expect(report.shifts, 1);
+      // The local empty/open shift was merged away.
+      expect(
+        await db.query('shifts', where: 'id = ?', whereArgs: ['local-shift']),
+        isEmpty,
+      );
+      // The cloud shift is now the one true OPEN drawer.
+      final cloud = (await db.query(
+        'shifts',
+        where: 'id = ?',
+        whereArgs: ['cloud-shift'],
+      )).single;
+      expect(cloud['status'], 'OPEN');
+      expect(await db.query('shifts', where: "status = 'OPEN'"), hasLength(1));
+      // Sales and cash movements moved to the cloud shift.
+      final sale = (await db.query(
+        'sales',
+        where: 'id = ?',
+        whereArgs: ['local-sale'],
+      )).single;
+      expect(sale['shift_id'], 'cloud-shift');
+      final voided = (await db.query(
+        'sales',
+        where: 'id = ?',
+        whereArgs: ['voided-sale'],
+      )).single;
+      expect(voided['shift_id'], 'cloud-shift');
+      expect(voided['voided_shift_id'], 'cloud-shift');
+      final movement = (await db.query(
+        'cash_movements',
+        where: 'id = ?',
+        whereArgs: ['local-cm'],
+      )).single;
+      expect(movement['shift_id'], 'cloud-shift');
+    });
 
     test('a CLOSED shift arriving without a closing count is filled in', () async {
       // The cloud can send a closed shift with no figure (a till closed while
@@ -800,6 +872,60 @@ void main() {
       );
       expect(await db.query('sales'), hasLength(1));
     });
+
+    test(
+      'a one-time backfill re-reads picklist lines pulled before pricing',
+      () async {
+        // A row the old applier landed without the schema-21 price columns.
+        await db.insert('picklists', {
+          'id': 'pl-1',
+          'customer_name': 'Aymen',
+          'status': 'PENDING',
+          'created_by': 'user-1',
+          'created_at': '2026-11-06T07:00:00',
+          'updated_at': '2026-11-06T07:00:00',
+        });
+        await db.insert('picklist_items', {
+          'id': 'pi-1',
+          'picklist_id': 'pl-1',
+          'product_name': 'Sugar',
+          'requested_qty': 5,
+          'taken_qty': 0,
+          'unit': null,
+          'unit_price_minor_units': 0,
+          'line_total_minor_units': 0,
+          'updated_at': '2026-11-06T07:00:00',
+        });
+        // The cursor had already moved past it, so a normal pull would skip it.
+        await db.insert('settings', {
+          'key': CloudSyncPuller.cursorKeyFor('picklist_items'),
+          'value': jsonEncode({'received_at': 'stamp-1', 'id': '1'}),
+        });
+
+        final backend = PagingBackend({
+          'picklist_items': [
+            {
+              'id': 'pi-1',
+              'picklist_id': 'pl-1',
+              'product_name': 'Sugar',
+              'requested_qty': 5,
+              'taken_qty': 0,
+              'unit': 'Karton',
+              'unit_price_minor_units': 4550,
+              'line_total_minor_units': 22750,
+              'updated_at': '2026-11-06T08:00:00+00:00',
+            },
+          ],
+        });
+
+        await CloudSyncPuller(backend: backend, db: db).pullNow();
+
+        final item = (await db.query('picklist_items')).single;
+        expect(item['unit'], 'Karton');
+        expect(item['unit_price_minor_units'], 4550);
+        expect(item['line_total_minor_units'], 22750);
+      },
+    );
   });
 
   group('SyncService', () {

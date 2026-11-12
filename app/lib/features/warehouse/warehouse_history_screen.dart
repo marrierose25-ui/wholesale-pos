@@ -11,10 +11,9 @@ import 'warehouse_shared.dart';
 /// a list of days, then the customers served that day, then a compact ledger
 /// of exactly what each customer took.
 ///
-/// [showMoney] is true for the shop side (owner or `warehouse` tick) and false
-/// for a fill-only worker. Prices and totals are hidden — and the totals are
-/// not even fetched — when money is off, so a warehouse screen can never
-/// surface an amount by accident.
+/// [showMoney] is now true for every warehouse tick (shop creator and fill
+/// worker alike), so both see prices and totals; the flag stays so the screens
+/// still default to hiding money if they are ever reused elsewhere.
 class WarehouseHistoryScreen extends StatefulWidget {
   final PicklistRepository repository;
   final bool showMoney;
@@ -243,7 +242,7 @@ class PicklistDayScreen extends StatefulWidget {
 
 class _PicklistDayScreenState extends State<PicklistDayScreen> {
   /// Picklist id -> value of the goods taken (unit price x taken quantity).
-  /// Empty for a fill-only worker, who never asks for the item rows here.
+  /// Empty only when money is off, in which case the item rows are not fetched.
   Map<String, int> _totals = const {};
 
   @override
@@ -536,7 +535,7 @@ class _PicklistTakenScreenState extends State<PicklistTakenScreen> {
 }
 
 /// Caption row aligned with [_TakenRow]'s columns. Price and Total only appear
-/// when the shop side is looking; the picker's ledger stops at Asked.
+/// when money is on; otherwise the ledger stops at Asked.
 class _TakenLedgerHeader extends StatelessWidget {
   final int count;
   final bool showMoney;
@@ -590,7 +589,7 @@ class _TakenLedgerHeader extends StatelessWidget {
 }
 
 /// One product line: name, the quantity actually taken, what was asked for and
-/// — on the shop side only — the unit price and the value taken.
+/// — when money is on — the unit price and the value taken.
 class _TakenRow extends StatelessWidget {
   final PicklistItem item;
   final bool showMoney;

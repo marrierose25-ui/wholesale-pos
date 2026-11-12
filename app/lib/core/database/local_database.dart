@@ -13,7 +13,7 @@ import '../utils/app_logger.dart';
 
 class LocalDatabase {
   static const String databaseName = 'wholesale_pos.db';
-  static const int schemaVersion = 21;
+  static const int schemaVersion = 22;
   static const String deviceIdFileName = 'device_id.txt';
   static const String themeSettingKey = 'theme_mode';
 
@@ -606,6 +606,23 @@ class LocalDatabase {
         )
       ''');
     }
+    if (oldVersion < 22) {
+      // Warehouse Picklist edit/delete: a soft-delete tombstone on both the
+      // header and its lines. A physical delete would vanish from one device
+      // and never reach the others (the sync feed has no delete channel), so
+      // the row stays and every read filters `deleted_at IS NULL`. Additive and
+      // guarded, so a re-run is a no-op.
+      final headerCols = await db.rawQuery('PRAGMA table_info(picklists)');
+      if (!headerCols.any((column) => column['name'] == 'deleted_at')) {
+        await db.execute('ALTER TABLE picklists ADD COLUMN deleted_at TEXT');
+      }
+      final itemCols = await db.rawQuery('PRAGMA table_info(picklist_items)');
+      if (!itemCols.any((column) => column['name'] == 'deleted_at')) {
+        await db.execute(
+          'ALTER TABLE picklist_items ADD COLUMN deleted_at TEXT',
+        );
+      }
+    }
   }
 
   /// Proof photos are BLOBs in their own table (schema 16), one per movement.
@@ -971,7 +988,8 @@ class LocalDatabase {
         status TEXT NOT NULL DEFAULT 'PENDING',
         created_by TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT
       )
     ''');
 
@@ -986,6 +1004,7 @@ class LocalDatabase {
         unit_price_minor_units INTEGER NOT NULL DEFAULT 0,
         line_total_minor_units INTEGER NOT NULL DEFAULT 0,
         updated_at TEXT NOT NULL,
+        deleted_at TEXT,
         FOREIGN KEY(picklist_id) REFERENCES picklists(id) ON DELETE CASCADE
       )
     ''');

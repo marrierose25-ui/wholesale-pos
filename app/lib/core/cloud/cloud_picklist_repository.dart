@@ -101,4 +101,29 @@ class CloudPicklistRepository implements PicklistRepository {
       'is_taken': isTaken,
     });
   }
+
+  @override
+  Future<void> updatePicklistItem(PicklistItem item) async {
+    await _api.call('update_picklist_item', {
+      'picklist_id': item.picklistId,
+      'item_id': item.id,
+      'product_name': item.productName,
+      'requested_qty': item.requestedQty,
+      'unit': item.unit,
+      'unit_price_minor_units': item.unitPriceMinorUnits,
+    });
+  }
+
+  @override
+  Future<void> deletePicklistItem(String picklistId, String itemId) async {
+    await _api.call('delete_picklist_item', {
+      'picklist_id': picklistId,
+      'item_id': itemId,
+    });
+  }
+
+  @override
+  Future<void> deletePicklist(String picklistId) async {
+    await _api.call('delete_picklist', {'picklist_id': picklistId});
+  }
 }

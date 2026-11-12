@@ -591,10 +591,8 @@ class SyncPullApplier {
             'shifts',
             {
               'status': 'OPEN',
-              'closing_cash_minor_units':
-                  values['closing_cash_minor_units'],
-              'expected_cash_minor_units':
-                  values['expected_cash_minor_units'],
+              'closing_cash_minor_units': values['closing_cash_minor_units'],
+              'expected_cash_minor_units': values['expected_cash_minor_units'],
               'closed_at': values['closed_at'],
             },
             where: 'id = ?',
@@ -1149,6 +1147,9 @@ class SyncPullApplier {
         'created_by': _str(row['created_by']) ?? '',
         'created_at': _localIso(row['created_at']) ?? _nowIso(),
         'updated_at': _localIso(row['updated_at']) ?? _nowIso(),
+        // Soft-delete tombstone: a list removed on any device leaves this row
+        // in place so the deletion reaches every other device; reads filter it.
+        'deleted_at': _localIso(row['deleted_at']),
       };
 
       if (!await _exists(txn, 'picklists', id)) {
@@ -1201,7 +1202,15 @@ class SyncPullApplier {
         'product_name': productName,
         'requested_qty': _int(row['requested_qty']),
         'taken_qty': _int(row['taken_qty']),
+        // Schema 21 pricing. These ride the cloud row and must land here too,
+        // otherwise a list created in the PWA shows 0.00 Br on the till even
+        // though the cloud has the price.
+        'unit': _str(row['unit']),
+        'unit_price_minor_units': _int(row['unit_price_minor_units']),
+        'line_total_minor_units': _int(row['line_total_minor_units']),
         'updated_at': _localIso(row['updated_at']) ?? _nowIso(),
+        // Tombstone for a line deleted on another device.
+        'deleted_at': _localIso(row['deleted_at']),
       };
 
       if (!await _exists(txn, 'picklist_items', id)) {
@@ -1393,6 +1402,11 @@ class CloudSyncPuller {
   /// Prefix of the settings key holding one table's last committed cursor.
   static const String cursorSettingKey = 'sync_cursor';
 
+  /// One-time flag for the picklist-pricing repair below. Bump the suffix if a
+  /// future column needs the same re-read.
+  static const String _picklistPriceBackfillKey =
+      'sync_backfill.picklist_item_prices.v1';
+
   /// Ceiling per run, per table, so one enormous backlog cannot pin the till on
   /// the network. The next tick continues from the stored cursor.
   static const int maxPagesPerRun = 20;
@@ -1406,6 +1420,8 @@ class CloudSyncPuller {
 
   Future<SyncApplyReport> pullNow({int pageSize = 1000}) async {
     if (!backend.isConfigured) return SyncApplyReport.empty;
+
+    await _backfillPicklistPrices();
 
     // One table at a time. A keyset cursor only orders rows within a single
     // table, so paging them together would let a busy table push the cursor
@@ -1450,6 +1466,32 @@ class CloudSyncPuller {
       if (!result.hasMore) return (applied, true);
     }
     return (applied, false);
+  }
+
+  /// Older builds pulled `picklist_items` without copying the schema-21 price
+  /// columns, so lines created in the PWA landed here with 0.00 Br. The cursor
+  /// has already moved past those rows, so the corrected applier would never
+  /// see them again. Clear that one cursor once: the next pull re-reads every
+  /// picklist line, and the newest-wins update backfills the price in place.
+  /// A fresh install has no cursor, so this is a no-op beyond setting the flag.
+  Future<void> _backfillPicklistPrices() async {
+    final seen = await db.query(
+      'settings',
+      columns: const ['key'],
+      where: 'key = ?',
+      whereArgs: const [_picklistPriceBackfillKey],
+      limit: 1,
+    );
+    if (seen.isNotEmpty) return;
+    await db.delete(
+      'settings',
+      where: 'key = ?',
+      whereArgs: [cursorKeyFor('picklist_items')],
+    );
+    await db.insert('settings', {
+      'key': _picklistPriceBackfillKey,
+      'value': '1',
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<Map<String, String>?> _readCursor(String table) async {

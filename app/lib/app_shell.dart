@@ -465,8 +465,7 @@ class _MainScaffoldState extends State<MainScaffold>
     // account is allowed to do.
     final picklists = backend.picklists;
     if (picklists != null &&
-        (user.can(FeatureDef.warehouse) ||
-            user.can(FeatureDef.warehouseFill))) {
+        (user.can(FeatureDef.warehouse) || user.can(FeatureDef.warehouseFill))) {
       final def = kFeatures.firstWhere((f) => f.key == FeatureDef.warehouse);
       entries.add(
         _ShellDestination(
@@ -512,8 +511,8 @@ class _MainScaffoldState extends State<MainScaffold>
         _NavItem(i, entries[i].icon, entries[i].label),
     ];
     // The first [pillCount] destinations lead the bottom pill; the rest live in
-    // the hamburger drawer. At most 4, but never more than the visible count.
-    final pillCount = entries.length < 4 ? entries.length : 4;
+    // the hamburger drawer. At most 5, but never more than the visible count.
+    final pillCount = entries.length < 5 ? entries.length : 5;
     final pillItems = allNavItems.take(pillCount).toList();
     final drawerItems = allNavItems.skip(pillCount).toList();
 
