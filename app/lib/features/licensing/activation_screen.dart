@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/licensing/license_validator.dart';
@@ -91,7 +92,7 @@ class _ActivationScreenState extends State<ActivationScreen> {
                           boxShadow: [AppDesign.blueGlow()],
                         ),
                         child: const Icon(
-                          Icons.lock_person_rounded,
+                          CupertinoIcons.lock_shield,
                           size: 42,
                           color: Colors.white,
                         ),
@@ -148,7 +149,7 @@ class _ActivationScreenState extends State<ActivationScreen> {
           'Enter your activation code:',
           style: TextStyle(
             fontWeight: FontWeight.bold,
-            color: Theme.of(context).colorScheme.onSurface,
+            color: AppDesign.textHi,
           ),
         ),
       ),
@@ -185,7 +186,7 @@ class _ActivationScreenState extends State<ActivationScreen> {
       else
         GlowButton(
           label: 'Activate',
-          icon: Icons.bolt_rounded,
+          icon: CupertinoIcons.bolt_fill,
           onPressed: _submit,
         ),
       const SizedBox(height: 16),
@@ -196,7 +197,7 @@ class _ActivationScreenState extends State<ActivationScreen> {
         textAlign: TextAlign.center,
         style: TextStyle(
           fontSize: 12,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
+          color: AppDesign.textLo,
         ),
       ),
     ];

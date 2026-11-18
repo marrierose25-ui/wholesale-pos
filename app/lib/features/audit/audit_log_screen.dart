@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/models/user.dart';
@@ -76,35 +77,52 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
 
     return Scaffold(
       backgroundColor: AppDesign.bg,
-      appBar: AppBar(
-        title: const Text('Audit Logs'),
-        actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadLogs),
-        ],
-      ),
       body: AppBackground(
-        child: _days.isEmpty
-            ? Center(
-                child: Text(
-                  'No audit entries yet.',
-                  style: TextStyle(color: AppDesign.textLo),
-                ),
-              )
-            : RefreshIndicator(
-                onRefresh: _loadLogs,
-                child: ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
-                  itemCount: _days.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 8),
-                  itemBuilder: (context, index) {
-                    final group = _days[index];
-                    return _AuditDayCard(
-                      group: group,
-                      onTap: () => _openDay(group),
-                    );
-                  },
-                ),
+        child: RefreshIndicator(
+          onRefresh: _loadLogs,
+          child: CustomScrollView(
+            slivers: [
+              IosLargeTitle.sliver(
+                context,
+                title: 'Audit Logs',
+                actions: [
+                  IconButton(
+                    icon: const Icon(CupertinoIcons.arrow_clockwise),
+                    onPressed: _loadLogs,
+                  ),
+                ],
               ),
+              if (_days.isEmpty)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: Center(
+                    child: Text(
+                      'No audit entries yet.',
+                      style: TextStyle(color: AppDesign.textLo),
+                    ),
+                  ),
+                )
+              else
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                  sliver: SliverList(
+                    delegate: SliverChildBuilderDelegate((context, index) {
+                      final group = _days[index];
+                      return FadeSlideIn(
+                        delay: Duration(milliseconds: index.clamp(0, 8) * 30),
+                        child: _AuditDayCard(
+                          group: group,
+                          isFirst: index == 0,
+                          isLast: index == _days.length - 1,
+                          onTap: () => _openDay(group),
+                        ),
+                      );
+                    }, childCount: _days.length),
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -113,44 +131,69 @@ class _AuditLogScreenState extends State<AuditLogScreen> {
 /// Level 1 row: the day and how many events it holds.
 class _AuditDayCard extends StatelessWidget {
   final _AuditDay group;
+  final bool isFirst;
+  final bool isLast;
   final VoidCallback onTap;
 
-  const _AuditDayCard({required this.group, required this.onTap});
+  const _AuditDayCard({
+    required this.group,
+    required this.onTap,
+    this.isFirst = false,
+    this.isLast = false,
+  });
 
   @override
   Widget build(BuildContext context) {
     final count = group.logs.length;
-    return GlassCard(
-      radius: AppDesign.radiusCardSm,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+    return Pressable(
       onTap: onTap,
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              SalesByDayScreen.formatDay(group.day),
-              style: TextStyle(
-                color: AppDesign.textHi,
-                fontSize: 14.5,
-                fontWeight: FontWeight.w700,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: AppDesign.card,
+          borderRadius: BorderRadius.vertical(
+            top: isFirst
+                ? const Radius.circular(AppDesign.radiusGrouped)
+                : Radius.zero,
+            bottom: isLast
+                ? const Radius.circular(AppDesign.radiusGrouped)
+                : Radius.zero,
+          ),
+          border: isLast
+              ? null
+              : Border(
+                  bottom: BorderSide(color: AppDesign.stroke, width: 0.5),
+                ),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                SalesByDayScreen.formatDay(group.day),
+                style: TextStyle(
+                  color: AppDesign.textHi,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: -0.2,
+                ),
               ),
             ),
-          ),
-          Text(
-            '$count event${count == 1 ? '' : 's'}',
-            style: TextStyle(
-              color: AppDesign.textLo,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
+            Text(
+              '$count event${count == 1 ? '' : 's'}',
+              style: TextStyle(
+                color: AppDesign.textLo,
+                fontSize: 13,
+                fontWeight: FontWeight.w400,
+              ),
             ),
-          ),
-          const SizedBox(width: 4),
-          Icon(
-            Icons.chevron_right_rounded,
-            color: AppDesign.textFaint,
-            size: 20,
-          ),
-        ],
+            const SizedBox(width: 4),
+            Icon(
+              CupertinoIcons.chevron_right,
+              color: AppDesign.textFaint,
+              size: 18,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -172,7 +215,11 @@ class AuditDayScreen extends StatelessWidget {
         child: ListView.builder(
           padding: const EdgeInsets.symmetric(vertical: 8),
           itemCount: logs.length,
-          itemBuilder: (context, index) => _AuditEntryRow(log: logs[index]),
+          itemBuilder: (context, index) => FadeSlideIn(
+            delay: Duration(milliseconds: index.clamp(0, 12) * 20),
+            duration: const Duration(milliseconds: 280),
+            child: _AuditEntryRow(log: logs[index]),
+          ),
         ),
       ),
     );
@@ -192,15 +239,15 @@ class _AuditEntryRow extends StatelessWidget {
     final details = log['details'] as String? ?? '';
     final date = DateTime.parse(log['created_at'] as String);
 
-    Color iconColor = AppDesign.blueBright;
-    IconData icon = Icons.info;
+    Color iconColor = AppDesign.accent;
+    IconData icon = CupertinoIcons.info;
 
     if (action == 'SALE_VOIDED') {
       iconColor = AppDesign.danger;
-      icon = Icons.cancel;
+      icon = CupertinoIcons.xmark_circle;
     } else if (action == 'SALE_COMPLETED') {
       iconColor = AppDesign.success;
-      icon = Icons.check_circle;
+      icon = CupertinoIcons.checkmark_circle_fill;
     }
 
     return Padding(

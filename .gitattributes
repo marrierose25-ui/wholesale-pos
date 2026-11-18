@@ -1,0 +1,28 @@
+# Canonical line endings are LF everywhere (index, checkout, CI).
+#
+# The repo is edited on Windows and built on Linux; with git's global
+# `core.autocrlf=true` the two disagree, and files that are byte-identical
+# after normalisation still show up as modified forever. Declaring the rule
+# here makes the working tree match the index, so `git status` only reports
+# real edits. `git config core.autocrlf false` (repo-local) is the companion
+# setting for a Windows clone.
+* text=auto eol=lf
+
+# Binary assets: never touch their bytes or diff them as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.wav binary
+*.mp3 binary
+*.ttf binary
+*.otf binary
+*.woff2 binary
+*.zip binary
+*.apk binary
+*.aab binary
+*.db binary
+*.sqlite binary
+*.p12 binary
+*.jks binary

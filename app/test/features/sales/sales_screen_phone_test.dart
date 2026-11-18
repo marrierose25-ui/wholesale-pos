@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -86,13 +87,13 @@ void main() {
 
       // The decluttered POS is a single action: just the glowing + circle,
       // no title, no description, no button label anywhere.
-      expect(find.byIcon(Icons.add), findsOneWidget);
+      expect(find.byIcon(CupertinoIcons.plus), findsOneWidget);
       expect(find.text('Ring up a single item'), findsNothing);
       expect(find.text('New Sale'), findsNothing);
       expect(tester.takeException(), isNull); // main screen alone must fit
 
       // Tap the + circle to open the dialog and ring up one item.
-      await tester.tap(find.byIcon(Icons.add));
+      await tester.tap(find.byIcon(CupertinoIcons.plus));
       await pumpFrames();
       expect(find.text('Price (Br)'), findsOneWidget);
 
@@ -119,7 +120,7 @@ void main() {
       // window so the fields stay visible above the on-screen keyboard.
       await tester.tap(find.text('Next'));
       await pumpFrames();
-      expect(find.text('Payment Method'), findsOneWidget);
+      expect(find.text('Payment'), findsOneWidget);
 
       // Payment method starts unselected and is required: completing without a
       // pick is blocked with an inline error, not a saved sale.
@@ -128,10 +129,10 @@ void main() {
       await pumpFrames(3);
       expect(find.text('Select a payment method.'), findsOneWidget);
 
-      // Three till choices: Cash, Bank Transfer, Loan. Pick Cash to proceed.
-      expect(find.widgetWithText(ChoiceChip, 'Loan'), findsOneWidget);
-      expect(find.widgetWithText(ChoiceChip, 'Bank Transfer'), findsOneWidget);
-      await tester.tap(find.widgetWithText(ChoiceChip, 'Cash'));
+      // Three till choices: Cash, Bank, Loan. Pick Cash to proceed.
+      expect(find.text('Loan'), findsOneWidget);
+      expect(find.text('Bank'), findsOneWidget);
+      await tester.tap(find.text('Cash'));
       await pumpFrames();
 
       // A reason is required before the sale can be completed.

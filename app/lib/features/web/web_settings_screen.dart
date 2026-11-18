@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/auth/session_store.dart';
@@ -125,7 +126,7 @@ class _WebSettingsScreenState extends State<WebSettingsScreen> {
               padding: EdgeInsets.zero,
               child: SwitchListTile(
                 secondary: Icon(
-                  widget.isDarkMode ? Icons.dark_mode : Icons.light_mode,
+                  widget.isDarkMode ? CupertinoIcons.moon : CupertinoIcons.sun_max,
                 ),
                 title: const Text('Dark Mode'),
                 value: widget.isDarkMode,
@@ -143,15 +144,15 @@ class _WebSettingsScreenState extends State<WebSettingsScreen> {
               child: Column(
                 children: [
                   ListTile(
-                    leading: const Icon(Icons.lock_reset),
+                    leading: const Icon(CupertinoIcons.lock_rotation_open),
                     title: const Text('Change Password'),
                     subtitle: const Text('Update your sign-in password'),
-                    trailing: const Icon(Icons.chevron_right),
+                    trailing: const Icon(CupertinoIcons.chevron_right),
                     onTap: _changePassword,
                   ),
                   const Divider(height: 1),
                   SwitchListTile(
-                    secondary: const Icon(Icons.login),
+                    secondary: const Icon(CupertinoIcons.square_arrow_right),
                     title: const Text('Stay signed in in this browser'),
                     subtitle: const Text(
                       'Reopen the app straight to the register without '
@@ -163,7 +164,7 @@ class _WebSettingsScreenState extends State<WebSettingsScreen> {
                   ),
                   const Divider(height: 1),
                   ListTile(
-                    leading: const Icon(Icons.logout, color: AppTheme.danger),
+                    leading: const Icon(CupertinoIcons.arrow_right_to_line, color: AppTheme.danger),
                     title: const Text(
                       'Logout',
                       style: TextStyle(color: AppTheme.danger),

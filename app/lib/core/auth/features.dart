@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 
 /// A single tickable feature-tab permission. Both application shells build
 /// their navigation from [kFeatures] filtered by `User.can(key)`, so this
@@ -35,22 +35,26 @@ class FeatureDef {
 /// regardless of its ticks. 'register_history' is no longer a nav tab — it
 /// ticks the "Register History" button that lives inside the Register screen.
 const List<FeatureDef> kFeatures = [
-  FeatureDef('dashboard', 'Dashboard', Icons.dashboard),
-  FeatureDef('pos', 'POS', Icons.shopping_cart),
-  FeatureDef('register', 'Register', Icons.point_of_sale),
+  FeatureDef('dashboard', 'Dashboard', CupertinoIcons.square_grid_2x2),
+  FeatureDef('pos', 'POS', CupertinoIcons.cart),
+  FeatureDef('register', 'Register', CupertinoIcons.creditcard),
   // Tickable, but deliberately absent from [kDefaultStaffPermissions]: the
   // owner hands out this area one account at a time, never as a default.
-  FeatureDef('finance', 'Money Tracking', Icons.account_balance_wallet),
+  FeatureDef('finance', 'Money Tracking', CupertinoIcons.money_dollar_circle),
   // Independent fulfillment feature (Warehouse Picklists). Ticked per account
   // like any other staff surface; deliberately not a default, so an upgrade
   // never hands a cashier a tab they did not have before.
-  FeatureDef(FeatureDef.warehouse, 'Warehouse', Icons.inventory_2),
-  FeatureDef(FeatureDef.warehouseFill, 'Warehouse Filling', Icons.checklist),
-  FeatureDef('reports', 'Reports', Icons.bar_chart),
-  FeatureDef('users', 'Users', Icons.people),
-  FeatureDef('audit', 'Audit Logs', Icons.security),
-  FeatureDef('register_history', 'Register History', Icons.account_tree),
-  FeatureDef('history', 'Sales History', Icons.history),
+  FeatureDef(FeatureDef.warehouse, 'Warehouse', CupertinoIcons.cube_box),
+  FeatureDef(
+    FeatureDef.warehouseFill,
+    'Warehouse Filling',
+    CupertinoIcons.checkmark_rectangle,
+  ),
+  FeatureDef('reports', 'Reports', CupertinoIcons.chart_bar),
+  FeatureDef('users', 'Users', CupertinoIcons.person_2),
+  FeatureDef('audit', 'Audit Logs', CupertinoIcons.lock_shield),
+  FeatureDef('register_history', 'Register History', CupertinoIcons.arrow_branch),
+  FeatureDef('history', 'Sales History', CupertinoIcons.time),
 ];
 
 /// The features a brand-new staff account receives when the owner adds it

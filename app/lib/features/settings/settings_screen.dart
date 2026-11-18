@@ -1,4 +1,5 @@
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:sqflite/sqflite.dart';
 
@@ -253,13 +254,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final failing = status.isFailing;
     final IconData icon;
     if (!status.configured) {
-      icon = Icons.cloud_off;
+      icon = CupertinoIcons.wifi_exclamationmark;
     } else if (failing) {
-      icon = Icons.cloud_off;
+      icon = CupertinoIcons.wifi_exclamationmark;
     } else if (status.isConnected) {
-      icon = Icons.cloud_done;
+      icon = CupertinoIcons.checkmark_circle;
     } else {
-      icon = Icons.cloud_sync;
+      icon = CupertinoIcons.arrow_2_circlepath;
     }
 
     final queued = status.queued;
@@ -274,7 +275,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ListTile(
             leading: Icon(
               icon,
-              color: failing ? AppTheme.danger : AppDesign.blueBright,
+              color: failing ? AppTheme.danger : AppDesign.accent,
             ),
             title: const Text('Cloud Sync'),
             subtitle: Text(subtitle),
@@ -286,15 +287,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : IconButton(
-                    icon: const Icon(Icons.sync),
+                    icon: const Icon(CupertinoIcons.arrow_2_circlepath),
                     tooltip: 'Sync now',
                     onPressed: status.configured ? _syncNow : null,
                   ),
           ),
           if (_isOwner && status.authenticationFailed) ...[
-            const Divider(height: 1),
+            const Divider(height: 1, indent: 56),
             ListTile(
-              leading: const Icon(Icons.vpn_key),
+              leading: const Icon(CupertinoIcons.lock),
               title: const Text('Activate this device'),
               subtitle: const Text(
                 'Paste the shop activation code once. Sales already recorded '
@@ -302,7 +303,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 'next sync.',
               ),
               isThreeLine: true,
-              trailing: const Icon(Icons.chevron_right),
+              trailing: const Icon(CupertinoIcons.chevron_right),
               onTap: _isSyncing ? null : _activateThisDevice,
             ),
           ],
@@ -331,181 +332,221 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppTheme.background,
-      appBar: AppBar(title: const Text('Settings')),
       body: AppBackground(
-        child: ListView(
-          padding: const EdgeInsets.all(24),
-          children: [
-            GlassCard(
-              padding: EdgeInsets.zero,
-              child: ListTile(
-                leading: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: const BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: AppDesign.buttonGradient,
-                  ),
-                  child: Center(
-                    child: Text(
-                      widget.currentUser.username.isEmpty
-                          ? '?'
-                          : widget.currentUser.username[0].toUpperCase(),
-                      style: const TextStyle(
-                        color: AppDesign.onBlue,
-                        fontWeight: FontWeight.w700,
+        child: CustomScrollView(
+          slivers: [
+            IosLargeTitle.sliver(context, title: 'Settings'),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+              sliver: SliverList(
+                delegate: SliverChildListDelegate([
+                  GlassCard(
+                    padding: EdgeInsets.zero,
+                    child: ListTile(
+                      leading: Container(
+                        width: 40,
+                        height: 40,
+                        decoration: const BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: AppDesign.buttonGradient,
+                        ),
+                        child: Center(
+                          child: Text(
+                            widget.currentUser.username.isEmpty
+                                ? '?'
+                                : widget.currentUser.username[0].toUpperCase(),
+                            style: const TextStyle(
+                              color: AppDesign.onBlue,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
                       ),
+                      title: Text(
+                        widget.currentUser.username,
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      subtitle: Text('Role: ${widget.currentUser.role}'),
                     ),
                   ),
-                ),
-                title: Text(
-                  widget.currentUser.username,
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-                subtitle: Text('Role: ${widget.currentUser.role}'),
-              ),
-            ),
-            const SizedBox(height: 24),
-            const Text(
-              'Appearance',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-            ),
-            const SizedBox(height: 8),
-            GlassCard(
-              padding: EdgeInsets.zero,
-              child: SwitchListTile(
-                secondary: Icon(
-                  widget.isDarkMode ? Icons.dark_mode : Icons.light_mode,
-                ),
-                title: const Text('Dark Mode'),
-                value: widget.isDarkMode,
-                onChanged: (value) => widget.onToggleTheme(),
-              ),
-            ),
-            const SizedBox(height: 24),
-            const Text(
-              'Account',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-            ),
-            const SizedBox(height: 8),
-            GlassCard(
-              padding: EdgeInsets.zero,
-              child: Column(
-                children: [
-                  ListTile(
-                    leading: const Icon(Icons.lock_reset),
-                    title: const Text('Change Password'),
-                    subtitle: const Text('Update your sign-in password'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: _changePassword,
+                  const SizedBox(height: 24),
+                  // iOS grouped-list section label: small, secondary, quiet.
+                  Text(
+                    'Appearance',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                      color: AppDesign.textLo,
+                      letterSpacing: 0.2,
+                    ),
                   ),
+                  const SizedBox(height: 8),
+                  GlassCard(
+                    padding: EdgeInsets.zero,
+                    child: SwitchListTile(
+                      secondary: Icon(
+                        widget.isDarkMode
+                            ? CupertinoIcons.moon
+                            : CupertinoIcons.sun_max,
+                      ),
+                      title: const Text('Dark Mode'),
+                      value: widget.isDarkMode,
+                      onChanged: (value) => widget.onToggleTheme(),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  Text(
+                    'Account',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                      color: AppDesign.textLo,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  GlassCard(
+                    padding: EdgeInsets.zero,
+                    child: Column(
+                      children: [
+                        ListTile(
+                          leading: const Icon(
+                            CupertinoIcons.lock_rotation_open,
+                          ),
+                          title: const Text('Change Password'),
+                          subtitle: const Text('Update your sign-in password'),
+                          trailing: const Icon(CupertinoIcons.chevron_right),
+                          onTap: _changePassword,
+                        ),
+                        if (_isOwner) ...[
+                          const Divider(height: 1, indent: 56),
+                          ListTile(
+                            leading: const Icon(CupertinoIcons.desktopcomputer),
+                            title: const Text('My devices'),
+                            subtitle: const Text(
+                              'See which phones and PCs are using your activation '
+                              'code, deactivate a lost one, or redeem a seat voucher.',
+                            ),
+                            trailing: const Icon(CupertinoIcons.chevron_right),
+                            onTap: _openDevicesScreen,
+                          ),
+                        ],
+                        const Divider(height: 1, indent: 56),
+                        SwitchListTile(
+                          secondary: const Icon(
+                            CupertinoIcons.square_arrow_right,
+                          ),
+                          title: const Text('Stay signed in on this PC'),
+                          subtitle: const Text(
+                            'Reopen the app straight to the register without '
+                            're-entering the password for 12 hours. Off by default '
+                            'for shared tills.',
+                          ),
+                          value: _rememberLogin,
+                          onChanged: _toggleRemember,
+                        ),
+                        const Divider(height: 1, indent: 56),
+                        ListTile(
+                          leading: const Icon(
+                            CupertinoIcons.arrow_right_to_line,
+                            color: AppTheme.danger,
+                          ),
+                          title: const Text(
+                            'Logout',
+                            style: TextStyle(color: AppTheme.danger),
+                          ),
+                          onTap: widget.onLogout,
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (widget.syncRuntime != null) ...[
+                    const SizedBox(height: 24),
+                    Text(
+                      'Cloud Sync',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                        color: AppDesign.textLo,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    ValueListenableBuilder<SyncStatus>(
+                      valueListenable: widget.syncRuntime!.service.status,
+                      builder: (context, status, _) => _syncCard(status),
+                    ),
+                  ],
                   if (_isOwner) ...[
-                    const Divider(height: 1),
-                    ListTile(
-                      leading: const Icon(Icons.devices_other),
-                      title: const Text('My devices'),
-                      subtitle: const Text(
-                        'See which phones and PCs are using your activation '
-                        'code, deactivate a lost one, or redeem a seat voucher.',
+                    const SizedBox(height: 24),
+                    Text(
+                      'Data Management',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                        color: AppDesign.textLo,
+                        letterSpacing: 0.2,
                       ),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: _openDevicesScreen,
+                    ),
+                    const SizedBox(height: 8),
+                    GlassCard(
+                      padding: EdgeInsets.zero,
+                      child: Column(
+                        children: [
+                          ListTile(
+                            leading: Icon(
+                              CupertinoIcons.square_arrow_down,
+                              color: AppDesign.accent,
+                            ),
+                            title: const Text('Export Data (Backup)'),
+                            subtitle: const Text(
+                              'Owner only. The backup includes password hashes, so '
+                              'store it securely.',
+                            ),
+                            trailing: _isExporting
+                                ? const SizedBox(
+                                    width: 24,
+                                    height: 24,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(CupertinoIcons.chevron_right),
+                            onTap: _isExporting ? null : _exportData,
+                          ),
+                          const Divider(height: 1, indent: 56),
+                          ListTile(
+                            leading: const Icon(
+                              CupertinoIcons.square_arrow_up,
+                              color: AppDesign.warning,
+                            ),
+                            title: const Text('Restore Data (Import)'),
+                            subtitle: const Text(
+                              'Restore from a previous JSON backup',
+                            ),
+                            trailing: _isImporting
+                                ? const SizedBox(
+                                    width: 24,
+                                    height: 24,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(CupertinoIcons.chevron_right),
+                            onTap: _isImporting ? null : _importData,
+                          ),
+                        ],
+                      ),
                     ),
                   ],
-                  const Divider(height: 1),
-                  SwitchListTile(
-                    secondary: const Icon(Icons.login),
-                    title: const Text('Stay signed in on this PC'),
-                    subtitle: const Text(
-                      'Reopen the app straight to the register without '
-                      're-entering the password for 12 hours. Off by default '
-                      'for shared tills.',
+                  const SizedBox(height: 24),
+                  Center(
+                    child: Text(
+                      'Wholesale POS • Database schema v${LocalDatabase.schemaVersion}',
+                      style: TextStyle(color: AppTheme.muted, fontSize: 12),
                     ),
-                    value: _rememberLogin,
-                    onChanged: _toggleRemember,
                   ),
-                  const Divider(height: 1),
-                  ListTile(
-                    leading: const Icon(Icons.logout, color: AppTheme.danger),
-                    title: const Text(
-                      'Logout',
-                      style: TextStyle(color: AppTheme.danger),
-                    ),
-                    onTap: widget.onLogout,
-                  ),
-                ],
-              ),
-            ),
-            if (widget.syncRuntime != null) ...[
-              const SizedBox(height: 24),
-              const Text(
-                'Cloud Sync',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-              ),
-              const SizedBox(height: 8),
-              ValueListenableBuilder<SyncStatus>(
-                valueListenable: widget.syncRuntime!.service.status,
-                builder: (context, status, _) => _syncCard(status),
-              ),
-            ],
-            if (_isOwner) ...[
-              const SizedBox(height: 24),
-              const Text(
-                'Data Management',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-              ),
-              const SizedBox(height: 8),
-              GlassCard(
-                padding: EdgeInsets.zero,
-                child: Column(
-                  children: [
-                    ListTile(
-                      leading: const Icon(
-                        Icons.download,
-                        color: AppDesign.blueBright,
-                      ),
-                      title: const Text('Export Data (Backup)'),
-                      subtitle: const Text(
-                        'Owner only. The backup includes password hashes, so '
-                        'store it securely.',
-                      ),
-                      trailing: _isExporting
-                          ? const SizedBox(
-                              width: 24,
-                              height: 24,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.chevron_right),
-                      onTap: _isExporting ? null : _exportData,
-                    ),
-                    const Divider(height: 1),
-                    ListTile(
-                      leading: const Icon(
-                        Icons.upload,
-                        color: AppDesign.warning,
-                      ),
-                      title: const Text('Restore Data (Import)'),
-                      subtitle: const Text(
-                        'Restore from a previous JSON backup',
-                      ),
-                      trailing: _isImporting
-                          ? const SizedBox(
-                              width: 24,
-                              height: 24,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.chevron_right),
-                      onTap: _isImporting ? null : _importData,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-            const SizedBox(height: 24),
-            Center(
-              child: Text(
-                'Wholesale POS • Database schema v${LocalDatabase.schemaVersion}',
-                style: TextStyle(color: AppTheme.muted, fontSize: 12),
+                ]),
               ),
             ),
           ],

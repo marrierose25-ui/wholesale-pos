@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
@@ -6,6 +7,7 @@ import '../../core/repositories/sale_repository.dart';
 import '../../core/repositories/shift_repository.dart';
 import '../../core/theme/app_design.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/date_range.dart';
 import '../../core/utils/money_utils.dart';
 import 'sale.dart';
 import 'sale_item.dart';
@@ -39,10 +41,27 @@ class SalesScreenState extends State<SalesScreen> {
   bool _isProcessing = false;
   Shift? _activeShift;
 
+  /// Today's tally for the status strip — loaded silently and refreshed
+  /// after every recorded sale so the numbers are never stale.
+  Map<String, int> _todayStats = const {};
+
   @override
   void initState() {
     super.initState();
     loadShift();
+    _loadTodayStats();
+  }
+
+  Future<void> _loadTodayStats() async {
+    try {
+      final stats = await widget.saleRepository.getDashboardStats(
+        userId: widget.currentUser.id,
+        period: DateRange.today(),
+      );
+      if (mounted) setState(() => _todayStats = stats);
+    } catch (_) {
+      // The strip is decorative context — a failed read just leaves dashes.
+    }
   }
 
   /// Guarantees a perpetual open shift so a sale can always be recorded. Safe
@@ -64,22 +83,53 @@ class SalesScreenState extends State<SalesScreen> {
         .showSnackBar(SnackBar(content: Text(message)));
   }
 
-  Future<void> _newSale() async {
-    if (_isProcessing) return;
-    final draft = await showDialog<_SaleDraft>(
+  /// iOS bottom sheet for the sale flow: slides up from the bottom, capped at
+  /// 560px and centered on wide screens, 28px top corners, systemBackground.
+  /// barrierDismissible stays false — a half-typed sale is data loss.
+  Future<T?> _showSaleSheet<T>(Widget child) {
+    return showCupertinoModalPopup<T>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const _SaleDialog(),
+      builder: (context) => CupertinoTheme(
+        data: CupertinoThemeData(brightness: Theme.of(context).brightness),
+        child: Align(
+          alignment: Alignment.bottomCenter,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560),
+            child: Container(
+              decoration: BoxDecoration(
+                color: AppDesign.card,
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(28),
+                ),
+                boxShadow: AppDesign.cardShadow(),
+              ),
+              clipBehavior: Clip.antiAlias,
+              // The sheet body is Material (TextField, SnackBar, chips), but a
+              // Cupertino modal popup supplies no Material ancestor. Without
+              // this the New Sale sheet throws "No Material widget found" the
+              // moment it opens. Transparency keeps the sheet colour above.
+              child: Material(
+                type: MaterialType.transparency,
+                child: SafeArea(top: false, child: child),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
+  }
+
+  Future<void> _newSale() async {
+    if (_isProcessing) return;
+    final draft = await _showSaleSheet<_SaleDraft>(const _SaleDialog());
     if (draft == null) return;
     if (!mounted) return;
 
     // Second step: choose how the sale is settled and why. Back/cancel returns
     // null and abandons the sale without saving anything.
-    final settlement = await showDialog<_SaleSettlement>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => _PaymentDialog(draft: draft),
+    final settlement = await _showSaleSheet<_SaleSettlement>(
+      _PaymentDialog(draft: draft),
     );
     if (settlement == null) return;
 
@@ -143,6 +193,7 @@ class SalesScreenState extends State<SalesScreen> {
       // Refresh every data screen and switch the shell to the Register tab so
       // the cashier immediately sees the drawer move.
       widget.onSaleCompleted();
+      _loadTodayStats();
     } catch (e) {
       if (!mounted) return;
       _showMessage(
@@ -159,63 +210,112 @@ class SalesScreenState extends State<SalesScreen> {
       child: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              GlassCard(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 32,
-                    vertical: 40,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // The + circle is the one and only action: tap it to
-                      // ring up a sale. No labels, no descriptions.
-                      InkWell(
-                        onTap: _isProcessing ? null : _newSale,
-                        customBorder: const CircleBorder(),
-                        child: Ink(
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            gradient: AppDesign.buttonGradient,
-                            boxShadow: [AppDesign.blueGlow(alpha: 0.4)],
+          child: FadeSlideIn(
+            child: GlassCard(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 32,
+                  vertical: 40,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Today's tally — quiet context above the one action.
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _todayStat(
+                            'Sales today',
+                            '${_todayStats['sales_count'] ?? 0}',
                           ),
-                          child: Container(
-                            width: 88,
-                            height: 88,
-                            alignment: Alignment.center,
-                            child: AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 180),
-                              child: _isProcessing
-                                  ? const SizedBox(
-                                      key: ValueKey('spinner'),
-                                      width: 34,
-                                      height: 34,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 3,
-                                        color: AppDesign.onBlue,
-                                      ),
-                                    )
-                                  : const Icon(
-                                      key: ValueKey('plus'),
-                                      Icons.add,
-                                      size: 48,
+                        ),
+                        Container(
+                          width: 1,
+                          height: 30,
+                          color: AppDesign.stroke,
+                        ),
+                        Expanded(
+                          child: _todayStat(
+                            "Today's total",
+                            MoneyUtils.formatBr(_todayStats['revenue'] ?? 0),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 28),
+                    // The + circle is the one and only action: tap it to
+                    // ring up a sale. No labels, no descriptions.
+                    CupertinoButton(
+                      padding: EdgeInsets.zero,
+                      color: AppDesign.blue,
+                      disabledColor: AppDesign.blue.withValues(alpha: 0.4),
+                      borderRadius: BorderRadius.circular(44),
+                      onPressed: _isProcessing ? null : _newSale,
+                      child: SizedBox(
+                        width: 88,
+                        height: 88,
+                        child: Center(
+                          child: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 180),
+                            child: _isProcessing
+                                ? const SizedBox(
+                                    key: ValueKey('spinner'),
+                                    width: 34,
+                                    height: 34,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 3,
                                       color: AppDesign.onBlue,
                                     ),
-                            ),
+                                  )
+                                : const Icon(
+                                    key: ValueKey('plus'),
+                                    CupertinoIcons.plus,
+                                    size: 48,
+                                    color: AppDesign.onBlue,
+                                  ),
                           ),
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
-            ],
+            ),
           ),
         ),
       ),
+    );
+  }
+
+  /// One cell of the today's-tally strip: a small secondary label over a
+  /// bold tabular figure, centered in its half of the row.
+  Widget _todayStat(String label, String value) {
+    return Column(
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            color: AppDesign.textLo,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.2,
+          ),
+        ),
+        const SizedBox(height: 4),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            value,
+            style: TextStyle(
+              color: AppDesign.textHi,
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.4,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -344,147 +444,169 @@ class _SaleDialogState extends State<_SaleDialog> {
       200.0,
       520.0,
     );
-    return AlertDialog(
-      // Default horizontal insets (40) squeeze the content past a phone's
-      // usable width; tightening them keeps the row of controls inside 390px.
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-      title: const Text('New Sale'),
-      content: MediaQuery(
-        data: media.copyWith(viewInsets: EdgeInsets.zero),
-        child: ConstrainedBox(
-          // Cap the dialog at 420 on wide screens but let it shrink to the
-          // viewport on a phone, so the fixed 420 never overflows a narrow width.
-          constraints: BoxConstraints(maxWidth: 420, maxHeight: maxBodyHeight),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Flexible(
-                child: SingleChildScrollView(
-                  clipBehavior: Clip.none,
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      TextField(
-                        controller: _nameController,
-                        autofocus: true,
-                        textCapitalization: TextCapitalization.sentences,
-                        decoration: const InputDecoration(
-                          labelText: 'Name',
-                          hintText: 'What was sold',
-                        ),
-                        onChanged: (_) => setState(() => _error = null),
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: _quantityController,
-                              keyboardType:
-                                  const TextInputType.numberWithOptions(
-                                    decimal: true,
-                                  ),
-                              decoration: const InputDecoration(
-                                labelText: 'Quantity',
-                                hintText: 'e.g. 2',
-                              ),
-                              onChanged: (_) => setState(() => _error = null),
-                            ),
+    return CupertinoPageScaffold(
+      backgroundColor: Colors.transparent,
+      navigationBar: CupertinoNavigationBar(
+        middle: const Text('New Sale'),
+        leading: CupertinoButton(
+          padding: EdgeInsets.zero,
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        trailing: CupertinoButton(
+          padding: EdgeInsets.zero,
+          onPressed: _submit,
+          child: const Text(
+            'Next',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ),
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: MediaQuery(
+          data: media.copyWith(viewInsets: EdgeInsets.zero),
+          child: ConstrainedBox(
+            // Cap the sheet at 560 on wide screens but let it shrink to the
+            // viewport on a phone, so it never overflows a narrow width.
+            constraints: BoxConstraints(
+              maxWidth: 560,
+              maxHeight: maxBodyHeight,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Flexible(
+                  child: SingleChildScrollView(
+                    clipBehavior: Clip.none,
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        TextField(
+                          controller: _nameController,
+                          autofocus: true,
+                          textCapitalization: TextCapitalization.sentences,
+                          decoration: const InputDecoration(
+                            labelText: 'Name',
+                            hintText: 'What was sold',
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: DropdownButtonFormField<String>(
-                              initialValue: _unit,
-                              isDense: true,
-                              isExpanded: true,
-                              decoration: const InputDecoration(
-                                labelText: 'Unit',
-                              ),
-                              items: [
-                                for (final unit in _saleUnits)
-                                  DropdownMenuItem(
-                                    value: unit,
-                                    child: Text(unit),
-                                  ),
-                              ],
-                              onChanged: (value) => setState(
-                                () => _unit = value ?? _saleUnits.first,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: _priceController,
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
+                          onChanged: (_) => setState(() => _error = null),
                         ),
-                        decoration: const InputDecoration(
-                          labelText: 'Price (Br)',
-                          hintText: 'e.g. 500',
-                        ),
-                        onChanged: (_) => setState(() => _error = null),
-                      ),
-                      const SizedBox(height: 16),
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).scaffoldBackgroundColor,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: AppTheme.border),
-                        ),
-                        child: Row(
+                        const SizedBox(height: 12),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text(
-                              'Total',
-                              style: TextStyle(fontWeight: FontWeight.w600),
-                            ),
-                            const SizedBox(width: 8),
                             Expanded(
-                              child: FittedBox(
-                                fit: BoxFit.scaleDown,
-                                alignment: Alignment.centerRight,
-                                child: Text(
-                                  lineTotal == null
-                                      ? '—'
-                                      : MoneyUtils.formatBr(lineTotal),
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                  ),
+                              child: TextField(
+                                controller: _quantityController,
+                                keyboardType:
+                                    const TextInputType.numberWithOptions(
+                                      decimal: true,
+                                    ),
+                                decoration: const InputDecoration(
+                                  labelText: 'Quantity',
+                                  hintText: 'e.g. 2',
+                                ),
+                                onChanged: (_) => setState(() => _error = null),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: DropdownButtonFormField<String>(
+                                initialValue: _unit,
+                                isDense: true,
+                                isExpanded: true,
+                                decoration: const InputDecoration(
+                                  labelText: 'Unit',
+                                ),
+                                items: [
+                                  for (final unit in _saleUnits)
+                                    DropdownMenuItem(
+                                      value: unit,
+                                      child: Text(unit),
+                                    ),
+                                ],
+                                onChanged: (value) => setState(
+                                  () => _unit = value ?? _saleUnits.first,
                                 ),
                               ),
                             ),
                           ],
                         ),
-                      ),
-                    ],
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _priceController,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          decoration: const InputDecoration(
+                            labelText: 'Price (Br)',
+                            hintText: 'e.g. 500',
+                          ),
+                          onChanged: (_) => setState(() => _error = null),
+                        ),
+                        const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: AppDesign.card,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: AppTheme.border),
+                          ),
+                          child: Row(
+                            children: [
+                              const Text(
+                                'Total',
+                                style: TextStyle(fontWeight: FontWeight.w600),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  alignment: Alignment.centerRight,
+                                  child: AnimatedSwitcher(
+                                    duration: const Duration(milliseconds: 160),
+                                    child: Text(
+                                      lineTotal == null
+                                          ? '—'
+                                          : MoneyUtils.formatBr(lineTotal),
+                                      key: ValueKey(lineTotal),
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 16,
+                                        fontFeatures: [
+                                          FontFeature.tabularFigures(),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                Text(
-                  _error!,
-                  style: const TextStyle(color: AppTheme.danger, fontSize: 13),
-                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    _error!,
+                    style: const TextStyle(
+                      color: AppTheme.danger,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(onPressed: _submit, child: const Text('Next')),
-      ],
     );
   }
 }
@@ -539,122 +661,135 @@ class _PaymentDialogState extends State<_PaymentDialog> {
       120.0,
       420.0,
     );
-    return AlertDialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-      title: const Text('Payment Method'),
-      content: MediaQuery(
-        data: media.copyWith(viewInsets: EdgeInsets.zero),
-        child: ConstrainedBox(
-          // Cap at 360 on wide screens but never exceed the space above the
-          // keyboard, so the summary row can't overflow a narrow phone.
-          constraints: BoxConstraints(maxWidth: 360, maxHeight: maxBodyHeight),
-          child: SingleChildScrollView(
-            clipBehavior: Clip.none,
-            padding: const EdgeInsets.only(top: 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).scaffoldBackgroundColor,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: AppTheme.border),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        widget.draft.name,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              widget.draft.quantityText,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(color: AppTheme.muted),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: FittedBox(
-                              fit: BoxFit.scaleDown,
-                              alignment: Alignment.centerRight,
+    const methods = <(String, String)>[
+      ('CASH', 'Cash'),
+      ('BANK', 'Bank'),
+      ('LOAN', 'Loan'),
+    ];
+    final selectedIndex = methods.indexWhere((m) => m.$1 == _paymentMethod);
+    return CupertinoPageScaffold(
+      backgroundColor: Colors.transparent,
+      navigationBar: CupertinoNavigationBar(
+        middle: const Text('Payment'),
+        leading: CupertinoButton(
+          padding: EdgeInsets.zero,
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Back'),
+        ),
+        trailing: CupertinoButton(
+          padding: EdgeInsets.zero,
+          onPressed: _complete,
+          child: const Text(
+            'Complete',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ),
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: MediaQuery(
+          data: media.copyWith(viewInsets: EdgeInsets.zero),
+          child: ConstrainedBox(
+            // Cap at 560 on wide screens but never exceed the space above the
+            // keyboard, so the summary row can't overflow a narrow phone.
+            constraints: BoxConstraints(
+              maxWidth: 560,
+              maxHeight: maxBodyHeight,
+            ),
+            child: SingleChildScrollView(
+              clipBehavior: Clip.none,
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: AppDesign.cardSoft,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.draft.name,
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Flexible(
                               child: Text(
-                                MoneyUtils.formatBr(
-                                  widget.draft.lineTotalMinorUnits,
-                                ),
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 16,
+                                widget.draft.quantityText,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(color: AppTheme.muted),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerRight,
+                                child: Text(
+                                  MoneyUtils.formatBr(
+                                    widget.draft.lineTotalMinorUnits,
+                                  ),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                    fontFeatures: [
+                                      FontFeature.tabularFigures(),
+                                    ],
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final option in const <(String, String)>[
-                      ('CASH', 'Cash'),
-                      ('BANK', 'Bank Transfer'),
-                      ('LOAN', 'Loan'),
-                    ])
-                      ChoiceChip(
-                        label: Text(option.$2),
-                        selected: _paymentMethod == option.$1,
-                        onSelected: (_) => setState(() {
-                          _paymentMethod = option.$1;
-                          _error = null;
-                        }),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _reasonController,
-                  textInputAction: TextInputAction.done,
-                  decoration: const InputDecoration(
-                    labelText: 'Reason / Reference',
-                    hintText: 'Why is this sale being recorded?',
-                  ),
-                  onChanged: (_) {
-                    if (_error != null) setState(() => _error = null);
-                  },
-                  onSubmitted: (_) => _complete(),
-                ),
-                if (_error != null) ...[
-                  const SizedBox(height: 12),
-                  Text(
-                    _error!,
-                    style: const TextStyle(
-                      color: AppTheme.danger,
-                      fontSize: 13,
+                          ],
+                        ),
+                      ],
                     ),
                   ),
+                  const SizedBox(height: 16),
+                  PillTabs(
+                    labels: [for (final m in methods) m.$2],
+                    // -1 == nothing picked yet, so the dialog never implies
+                    // Cash is chosen while Complete still rejects the sale.
+                    selected: selectedIndex,
+                    onSelect: (i) => setState(() {
+                      _paymentMethod = methods[i].$1;
+                      _error = null;
+                    }),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _reasonController,
+                    textInputAction: TextInputAction.done,
+                    decoration: const InputDecoration(
+                      labelText: 'Reason / Reference',
+                      hintText: 'Why is this sale being recorded?',
+                    ),
+                    onChanged: (_) {
+                      if (_error != null) setState(() => _error = null);
+                    },
+                    onSubmitted: (_) => _complete(),
+                  ),
+                  if (_error != null) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      _error!,
+                      style: const TextStyle(
+                        color: AppTheme.danger,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Back'),
-        ),
-        FilledButton(onPressed: _complete, child: const Text('Complete')),
-      ],
     );
   }
 }

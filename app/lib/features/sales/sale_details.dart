@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/models/user.dart';
 import '../../core/repositories/sale_repository.dart';
+import '../../core/theme/app_design.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/date_formatter.dart';
 import '../../core/utils/money_utils.dart';
@@ -155,7 +156,10 @@ class _SaleDetailsDialogState extends State<_SaleDetailsDialog> {
                           Expanded(child: Text(item.productNameSnapshot)),
                           Text(
                             MoneyUtils.formatBr(item.lineTotalMinorUnits),
-                            style: const TextStyle(fontWeight: FontWeight.w500),
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w500,
+                              fontFeatures: [FontFeature.tabularFigures()],
+                            ),
                           ),
                         ],
                       ),
@@ -164,7 +168,7 @@ class _SaleDetailsDialogState extends State<_SaleDetailsDialog> {
                         '${MoneyUtils.formatBr(item.unitPriceSnapshotMinorUnits)} each'
                         '${item.hasManualLineTotal ? ' (manual amount)' : ''}',
                         style: TextStyle(
-                          color: Theme.of(context).textTheme.bodySmall?.color,
+                          color: AppDesign.textLo,
                           fontSize: 12,
                         ),
                       ),
@@ -172,7 +176,7 @@ class _SaleDetailsDialogState extends State<_SaleDetailsDialog> {
                         Text(
                           'Note: ${item.notes}',
                           style: TextStyle(
-                            color: Theme.of(context).textTheme.bodySmall?.color,
+                            color: AppDesign.textLo,
                             fontSize: 12,
                           ),
                         ),
@@ -190,7 +194,10 @@ class _SaleDetailsDialogState extends State<_SaleDetailsDialog> {
                   ),
                   Text(
                     MoneyUtils.formatBr(sale.totalMinorUnits),
-                    style: const TextStyle(fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontFeatures: [FontFeature.tabularFigures()],
+                    ),
                   ),
                 ],
               ),
@@ -204,7 +211,7 @@ class _SaleDetailsDialogState extends State<_SaleDetailsDialog> {
                   Text(
                     'Voided at ${formatAddisDateTime(sale.voidedAt!)}',
                     style: TextStyle(
-                      color: Theme.of(context).textTheme.bodySmall?.color,
+                      color: AppDesign.textLo,
                       fontSize: 12,
                     ),
                   ),
@@ -258,7 +265,7 @@ class _SaleDetailsDialogState extends State<_SaleDetailsDialog> {
             child: Text(
               label,
               style: TextStyle(
-                color: Theme.of(context).textTheme.bodySmall?.color,
+                color: AppDesign.textLo,
                 fontSize: 12,
               ),
             ),

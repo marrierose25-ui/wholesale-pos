@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/models/user.dart';
@@ -44,7 +45,7 @@ class _MovementRow extends StatelessWidget {
           children: [
             Icon(
               // Credit arrow points down, debit arrow points up.
-              m.isDeposit ? Icons.south_west_rounded : Icons.north_east_rounded,
+              m.isDeposit ? CupertinoIcons.arrow_down_left : CupertinoIcons.arrow_up_right,
               size: 18,
               color: typeColor,
             ),
@@ -93,7 +94,7 @@ class _MovementRow extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       const Icon(
-                        Icons.photo_camera_outlined,
+                        CupertinoIcons.camera,
                         size: 13,
                         color: AppDesign.blue,
                       ),
@@ -155,7 +156,7 @@ Future<void> _openProof(BuildContext context, CashMovement m) async {
             top: 8,
             right: 8,
             child: IconButton(
-              icon: const Icon(Icons.close, color: Colors.white),
+              icon: const Icon(CupertinoIcons.xmark, color: Colors.white),
               onPressed: () => Navigator.of(dialogContext).pop(),
             ),
           ),

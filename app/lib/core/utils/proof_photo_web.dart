@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:js_interop';
 import 'dart:typed_data';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:web/web.dart' as web;
 
@@ -20,12 +21,12 @@ Future<String?> pickProofPhoto(BuildContext context) async {
         mainAxisSize: MainAxisSize.min,
         children: [
           ListTile(
-            leading: const Icon(Icons.photo_camera_outlined),
+            leading: const Icon(CupertinoIcons.camera),
             title: const Text('Take a photo'),
             onTap: () => Navigator.pop(context, true),
           ),
           ListTile(
-            leading: const Icon(Icons.photo_library_outlined),
+            leading: const Icon(CupertinoIcons.photo_on_rectangle),
             title: const Text('Choose from files'),
             onTap: () => Navigator.pop(context, false),
           ),

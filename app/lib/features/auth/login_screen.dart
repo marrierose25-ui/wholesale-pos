@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/models/user.dart';
@@ -180,7 +181,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           boxShadow: [AppDesign.blueGlow()],
                         ),
                         child: const Icon(
-                          Icons.storefront_rounded,
+                          CupertinoIcons.bag_fill,
                           size: 34,
                           color: Colors.white,
                         ),
@@ -234,8 +235,8 @@ class _LoginScreenState extends State<LoginScreen> {
                                 : 'Hide password',
                             icon: Icon(
                               _obscurePassword
-                                  ? Icons.visibility
-                                  : Icons.visibility_off,
+                                  ? CupertinoIcons.eye
+                                  : CupertinoIcons.eye_slash,
                               size: 20,
                             ),
                             onPressed: () => setState(
@@ -287,7 +288,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       else
                         GlowButton(
                           label: buttonLabel,
-                          icon: Icons.login_rounded,
+                          icon: CupertinoIcons.square_arrow_right,
                           onPressed: _submit,
                         ),
                     ],

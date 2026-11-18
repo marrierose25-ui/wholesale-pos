@@ -61,6 +61,13 @@ dependencies:
   # Short "new picklist" chime for the warehouse queue. Plays on web, Windows
   # and Android from one asset, so the alert sounds the same on every device.
   audioplayers: ^6.8.1
+  # Native Apple-style icons (money, credit-card, building-2, etc.) used across
+  # the dashboard redesign. Included as a font asset here so they are baked into
+  # the web bundle rather than relying on the SDK-internal transitive copy.
+  cupertino_icons: ^1.0.8
+  # Direction B typography: Geist (body) and Geist Mono (data/monetary values).
+  # The TTFs are bundled under assets/fonts and declared below, so no runtime
+  # fetch or google_fonts dependency is involved.
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -98,6 +105,31 @@ flutter:
   # For details regarding adding assets from package dependencies, see
   # https://flutter.dev/to/asset-from-package
 
+  # Custom fonts. Declared as TTF because that is the format the Flutter
+  # engine loads on Android, Windows and iOS; woff2 only decodes on web, which
+  # is why the same bundle would silently fall back to the platform default on
+  # the till. The `assets/fonts/` directory must not be listed under `assets:`
+  # as well, or every face is bundled twice.
+  fonts:
+    - family: Geist
+      fonts:
+        - asset: assets/fonts/Geist-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Geist-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Geist-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Geist-Bold.ttf
+          weight: 700
+    - family: Geist Mono
+      fonts:
+        - asset: assets/fonts/GeistMono-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/GeistMono-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/GeistMono-SemiBold.ttf
+          weight: 600
+
   # To add custom fonts to your application, add a fonts section here,
   # in this "flutter" section. Each entry in this list should have a
   # "family" key with the font family name, and a "fonts" key with a
@@ -115,5 +147,5 @@ flutter:
   #       - asset: fonts/TrajanPro_Bold.ttf
   #         weight: 700
   #
-  # For details regarding fonts from package dependencies,
-  # see https://flutter.dev/to/font-from-package
+  # For details regarding fonts from package dependencies, see
+  # https://flutter.dev/to/font-from-package

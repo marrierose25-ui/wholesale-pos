@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -144,7 +145,7 @@ class WarehouseScreenState extends State<WarehouseScreen> {
           content: Row(
             children: [
               const Icon(
-                Icons.notifications_active,
+                CupertinoIcons.bell_fill,
                 color: AppDesign.onBlue,
                 size: 20,
               ),
@@ -295,7 +296,7 @@ class WarehouseScreenState extends State<WarehouseScreen> {
         actions: [
           TextButton.icon(
             onPressed: _openHistory,
-            icon: const Icon(Icons.history, size: 18),
+            icon: const Icon(CupertinoIcons.time, size: 18),
             label: const Text('History'),
             style: TextButton.styleFrom(
               foregroundColor: AppDesign.textHi,
@@ -423,7 +424,7 @@ class WarehouseScreenState extends State<WarehouseScreen> {
       child: Column(
         children: [
           Icon(
-            Icons.inventory_2_outlined,
+            CupertinoIcons.cube_box,
             size: 30,
             color: AppDesign.textFaint,
           ),
@@ -522,7 +523,7 @@ class WarehouseScreenState extends State<WarehouseScreen> {
                     'WL-$shortId',
                     style: TextStyle(
                       color: AppDesign.isDark
-                          ? AppDesign.blueBright
+                          ? AppDesign.accent
                           : AppDesign.blue,
                       fontSize: 11.5,
                       fontWeight: FontWeight.w700,
@@ -534,7 +535,7 @@ class WarehouseScreenState extends State<WarehouseScreen> {
                     padding: EdgeInsets.zero,
                     splashRadius: 18,
                     icon: Icon(
-                      Icons.more_vert_rounded,
+                      CupertinoIcons.ellipsis,
                       size: 18,
                       color: AppDesign.textLo,
                     ),
@@ -546,7 +547,7 @@ class WarehouseScreenState extends State<WarehouseScreen> {
                         value: 'delete',
                         child: Row(
                           children: [
-                            Icon(Icons.delete_outline_rounded, size: 18),
+                            Icon(CupertinoIcons.trash, size: 18),
                             SizedBox(width: 8),
                             Text('Delete list'),
                           ],
@@ -635,7 +636,7 @@ class WarehouseScreenState extends State<WarehouseScreen> {
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: AppDesign.isDark
-                            ? AppDesign.blueBright
+                            ? AppDesign.accent
                             : AppDesign.blue,
                         fontSize: 11.5,
                         fontWeight: FontWeight.w600,
@@ -643,7 +644,7 @@ class WarehouseScreenState extends State<WarehouseScreen> {
                     ),
                   ),
                   Icon(
-                    Icons.chevron_right_rounded,
+                    CupertinoIcons.chevron_right,
                     color: AppDesign.textFaint,
                     size: 17,
                   ),
@@ -715,8 +716,8 @@ class _ModeSwitch extends StatelessWidget {
       ),
       child: Row(
         children: [
-          _segment('To Fill', Icons.checklist, showFill, () => onChanged(true)),
-          _segment('New List', Icons.add, !showFill, () => onChanged(false)),
+          _segment('To Fill', CupertinoIcons.checkmark_rectangle, showFill, () => onChanged(true)),
+          _segment('New List', CupertinoIcons.plus, !showFill, () => onChanged(false)),
         ],
       ),
     );
@@ -789,7 +790,7 @@ class _NewListButton extends StatelessWidget {
           width: 88,
           height: 88,
           alignment: Alignment.center,
-          child: const Icon(Icons.add, size: 48, color: AppDesign.onBlue),
+          child: const Icon(CupertinoIcons.plus, size: 48, color: AppDesign.onBlue),
         ),
       ),
     );

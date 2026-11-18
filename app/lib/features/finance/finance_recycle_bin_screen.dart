@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/models/finance_category.dart';
@@ -137,7 +138,7 @@ class _FinanceRecycleBinScreenState extends State<FinanceRecycleBinScreen> {
                     'The recycle bin is empty.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      color: Theme.of(context).textTheme.bodySmall?.color,
+                      color: AppDesign.textLo,
                     ),
                   ),
                 ),
@@ -156,7 +157,7 @@ class _FinanceRecycleBinScreenState extends State<FinanceRecycleBinScreen> {
       child: GlassCard(
         padding: EdgeInsets.zero,
         child: ListTile(
-          leading: Icon(Icons.person_off, color: AppTheme.muted),
+          leading: Icon(CupertinoIcons.person_crop_circle_badge_xmark, color: AppTheme.muted),
           title: Text(
             category.name,
             style: const TextStyle(fontWeight: FontWeight.w600),
@@ -173,7 +174,7 @@ class _FinanceRecycleBinScreenState extends State<FinanceRecycleBinScreen> {
               ),
               IconButton(
                 tooltip: 'Delete forever',
-                icon: const Icon(Icons.delete_forever, color: AppTheme.danger),
+                icon: const Icon(CupertinoIcons.trash, color: AppTheme.danger),
                 onPressed: () => _deleteForever(category),
               ),
             ],

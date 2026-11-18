@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite/sqflite.dart';
@@ -152,12 +153,12 @@ void main() {
       // Debits tab: only the photo-carrying withdrawal, with its badge.
       await tapTab(tester, 'Debits');
       expect(find.text('Bank drop'), findsOneWidget);
-      expect(find.byIcon(Icons.photo_camera_outlined), findsOneWidget);
+      expect(find.byIcon(CupertinoIcons.camera), findsOneWidget);
 
       // Credits tab: the deposit row carries no badge.
       await tapTab(tester, 'Credits');
       expect(find.text('Float top-up'), findsOneWidget);
-      expect(find.byIcon(Icons.photo_camera_outlined), findsNothing);
+      expect(find.byIcon(CupertinoIcons.camera), findsNothing);
     });
 
     expect(tester.takeException(), isNull);
@@ -187,7 +188,7 @@ void main() {
         await tester.pump();
       }
       await tapTab(tester, 'Debits');
-      expect(find.byIcon(Icons.photo_camera_outlined), findsOneWidget);
+      expect(find.byIcon(CupertinoIcons.camera), findsOneWidget);
     });
 
     expect(tester.takeException(), isNull);

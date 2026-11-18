@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite/sqflite.dart';
@@ -65,7 +66,7 @@ void main() {
   }
 
   Future<void> openDialogWithValues(WidgetTester tester) async {
-    await tester.tap(find.byIcon(Icons.add));
+    await tester.tap(find.byIcon(CupertinoIcons.plus));
     await pumpFrames(tester);
     await tester.enterText(find.widgetWithText(TextField, 'Name'), 'Sugar');
     await tester.enterText(find.widgetWithText(TextField, 'Quantity'), '2');
@@ -108,9 +109,9 @@ void main() {
       // Next opens the compact payment window: all three choices are offered.
       await tester.tap(find.text('Next'));
       await pumpFrames(tester);
-      expect(find.text('Payment Method'), findsOneWidget);
-      for (final label in ['Cash', 'Bank Transfer', 'Loan']) {
-        expect(find.widgetWithText(ChoiceChip, label), findsOneWidget);
+      expect(find.text('Payment'), findsOneWidget);
+      for (final label in ['Cash', 'Bank', 'Loan']) {
+        expect(find.text(label), findsOneWidget);
       }
     });
 
@@ -133,7 +134,7 @@ void main() {
       // Step 1 ends with Next; the payment choice lives on the next window.
       await tester.tap(find.text('Next'));
       await pumpFrames(tester);
-      expect(find.text('Payment Method'), findsOneWidget);
+      expect(find.text('Payment'), findsOneWidget);
 
       // No selection yet -> Complete is rejected with an inline error.
       await tester.tap(find.text('Complete'));
@@ -141,7 +142,7 @@ void main() {
       expect(find.text('Select a payment method.'), findsOneWidget);
 
       // Pick Loan; a reason is still required, so Complete stays blocked.
-      await tester.tap(find.widgetWithText(ChoiceChip, 'Loan'));
+      await tester.tap(find.text('Loan'));
       await pumpFrames(tester);
       await tester.tap(find.text('Complete'));
       await pumpFrames(tester, 3);

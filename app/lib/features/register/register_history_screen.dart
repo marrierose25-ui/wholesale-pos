@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/models/user.dart';
@@ -179,19 +180,25 @@ class RegisterHistoryScreenState extends State<RegisterHistoryScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppDesign.bg,
-      appBar: AppBar(
-        title: const Text('Register History'),
-        actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: load),
-          const SizedBox(width: 16),
-        ],
-      ),
       body: AppBackground(
-        child: Column(
-          children: [
-            _buildFilterBar(),
-            Expanded(child: _buildBody()),
-          ],
+        child: RefreshIndicator(
+          onRefresh: () => load(silent: true),
+          child: CustomScrollView(
+            slivers: [
+              IosLargeTitle.sliver(
+                context,
+                title: 'Register History',
+                actions: [
+                  IconButton(
+                    icon: const Icon(CupertinoIcons.arrow_clockwise),
+                    onPressed: load,
+                  ),
+                ],
+              ),
+              SliverToBoxAdapter(child: _buildFilterBar()),
+              ..._buildBodySlivers(),
+            ],
+          ),
         ),
       ),
     );
@@ -207,12 +214,12 @@ class RegisterHistoryScreenState extends State<RegisterHistoryScreen> {
             controller: _searchController,
             decoration: InputDecoration(
               hintText: 'Search reason, user, amount...',
-              prefixIcon: const Icon(Icons.search),
+              prefixIcon: const Icon(CupertinoIcons.search),
               suffixIcon: _searchController.text.isEmpty
                   ? null
                   : IconButton(
                       tooltip: 'Clear search',
-                      icon: const Icon(Icons.clear),
+                      icon: const Icon(CupertinoIcons.xmark),
                       onPressed: () {
                         _searchController.clear();
                         load();
@@ -248,48 +255,70 @@ class RegisterHistoryScreenState extends State<RegisterHistoryScreen> {
     );
   }
 
-  Widget _buildBody() {
+  List<Widget> _buildBodySlivers() {
     if (_isLoading && _days.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
+      return const [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      ];
     }
     if (_error != null && _days.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(_error!),
-            const SizedBox(height: 8),
-            TextButton(onPressed: load, child: const Text('Retry')),
-          ],
-        ),
-      );
-    }
-    if (_days.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(
-            _hasActiveFilters
-                ? 'No movements match these filters.'
-                : 'No register history recorded yet.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: AppDesign.textLo),
+      return [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(_error!),
+                const SizedBox(height: 8),
+                TextButton(onPressed: load, child: const Text('Retry')),
+              ],
+            ),
           ),
         ),
-      );
+      ];
     }
-    return RefreshIndicator(
-      onRefresh: () => load(silent: true),
-      child: ListView.separated(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
-        itemCount: _days.length,
-        separatorBuilder: (_, _) => const SizedBox(height: 12),
-        itemBuilder: (context, index) {
-          final group = _days[index];
-          return _MovementDayCard(group: group, onTap: () => _openDay(group));
-        },
+    if (_days.isEmpty) {
+      return [
+        SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(
+                _hasActiveFilters
+                    ? 'No movements match these filters.'
+                    : 'No register history recorded yet.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: AppDesign.textLo),
+              ),
+            ),
+          ),
+        ),
+      ];
+    }
+    return [
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        sliver: SliverList(
+          delegate: SliverChildBuilderDelegate((context, index) {
+            final group = _days[index];
+            return FadeSlideIn(
+              delay: Duration(milliseconds: index.clamp(0, 8) * 30),
+              child: _MovementDayCard(
+                group: group,
+                isFirst: index == 0,
+                isLast: index == _days.length - 1,
+                onTap: () => _openDay(group),
+              ),
+            );
+          }, childCount: _days.length),
+        ),
       ),
-    );
+    ];
   }
 
   void _openDay(_MovementDayGroup group) {
@@ -333,9 +362,16 @@ class _MovementDayGroup {
 /// Level 1 row: the day, its movement count and its net.
 class _MovementDayCard extends StatelessWidget {
   final _MovementDayGroup group;
+  final bool isFirst;
+  final bool isLast;
   final VoidCallback onTap;
 
-  const _MovementDayCard({required this.group, required this.onTap});
+  const _MovementDayCard({
+    required this.group,
+    required this.onTap,
+    this.isFirst = false,
+    this.isLast = false,
+  });
 
   String _relativeLabel() {
     final now = DateTime.now();
@@ -364,53 +400,72 @@ class _MovementDayCard extends StatelessWidget {
             ? '-'
             : ''}'
         '${MoneyUtils.formatBr(net.abs())}';
-    return GlassCard(
-      radius: AppDesign.radiusCardSm,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+    return Pressable(
       onTap: onTap,
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  SalesByDayScreen.formatDay(group.day),
-                  style: TextStyle(
-                    color: AppDesign.textHi,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                  ),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: AppDesign.card,
+          borderRadius: BorderRadius.vertical(
+            top: isFirst
+                ? const Radius.circular(AppDesign.radiusGrouped)
+                : Radius.zero,
+            bottom: isLast
+                ? const Radius.circular(AppDesign.radiusGrouped)
+                : Radius.zero,
+          ),
+          border: isLast
+              ? null
+              : Border(
+                  bottom: BorderSide(color: AppDesign.stroke, width: 0.5),
                 ),
-                const SizedBox(height: 3),
-                Text(
-                  relative.isEmpty ? countLabel : '$relative · $countLabel',
-                  style: TextStyle(
-                    color: AppDesign.textLo,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    SalesByDayScreen.formatDay(group.day),
+                    style: TextStyle(
+                      color: AppDesign.textHi,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: -0.2,
+                    ),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 2),
+                  Text(
+                    relative.isEmpty ? countLabel : '$relative · $countLabel',
+                    style: TextStyle(
+                      color: AppDesign.textLo,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 12),
-          Text(
-            netText,
-            style: TextStyle(
-              color: netColor,
-              fontSize: 15,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.3,
+            const SizedBox(width: 12),
+            Text(
+              netText,
+              style: TextStyle(
+                color: netColor,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.3,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
             ),
-          ),
-          const SizedBox(width: 4),
-          Icon(
-            Icons.chevron_right_rounded,
-            color: AppDesign.textFaint,
-            size: 20,
-          ),
-        ],
+            const SizedBox(width: 4),
+            Icon(
+              CupertinoIcons.chevron_right,
+              color: AppDesign.textFaint,
+              size: 18,
+            ),
+          ],
+        ),
       ),
     );
   }

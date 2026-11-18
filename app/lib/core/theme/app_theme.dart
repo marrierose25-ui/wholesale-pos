@@ -23,12 +23,12 @@ class AppTheme {
   static const Color _darkTextLo = Color(0xFF9AA6BF);
 
   // ---- Fixed light surfaces. --------------------------------------------
-  static const Color _lightBg = Color(0xFFF4F6FC);
+  static const Color _lightBg = Color(0xFFFAFAFA);
   static const Color _lightCard = Color(0xFFFFFFFF);
-  static const Color _lightInput = Color(0xFFF1F4FB);
-  static const Color _lightStroke = Color(0x140A1330);
-  static const Color _lightTextHi = Color(0xFF0B1220);
-  static const Color _lightTextLo = Color(0xFF5A6478);
+  static const Color _lightInput = Color(0xFFF3F4F6);
+  static const Color _lightStroke = Color(0x14E5E7EB);
+  static const Color _lightTextHi = Color(0xFF111827);
+  static const Color _lightTextLo = Color(0xFF6B7280);
 
   // ---- Public palette (mirrors AppDesign; surface/text are dynamic) -----
   static Color get background => AppDesign.bg;
@@ -42,7 +42,7 @@ class AppTheme {
   static const Color success = AppDesign.success;
   static const Color warning = AppDesign.warning;
 
-  static const String _font = 'Segoe UI';
+  static const String _font = 'Geist';
 
   static ThemeData light() => _build(_lightScheme(), false);
   static ThemeData dark() => _build(_darkScheme(), true);
@@ -96,7 +96,7 @@ class AppTheme {
 
     return ThemeData(
       useMaterial3: true,
-      fontFamily: _font,
+      
       colorScheme: scheme,
       scaffoldBackgroundColor: scaffoldBg,
       // InkSparkle is Material 3's fluid highlight — the ripple hugs the
@@ -117,7 +117,6 @@ class AppTheme {
           fontSize: 19,
           fontWeight: FontWeight.w700,
           letterSpacing: -0.4,
-          fontFamily: _font,
         ),
         iconTheme: IconThemeData(color: scheme.onSurface),
       ),
@@ -146,7 +145,7 @@ class AppTheme {
             fontWeight: FontWeight.w700,
             fontSize: 14.5,
             letterSpacing: 0.1,
-            fontFamily: _font,
+            
           ),
         ),
       ),
@@ -164,7 +163,7 @@ class AppTheme {
             fontWeight: FontWeight.w700,
             fontSize: 14.5,
             letterSpacing: 0.1,
-            fontFamily: _font,
+            
           ),
         ),
       ),
@@ -180,7 +179,7 @@ class AppTheme {
           textStyle: const TextStyle(
             fontWeight: FontWeight.w600,
             fontSize: 14,
-            fontFamily: _font,
+            
           ),
         ),
       ),
@@ -190,7 +189,7 @@ class AppTheme {
           foregroundColor: isDark ? AppDesign.blueBright : AppDesign.blue,
           textStyle: const TextStyle(
             fontWeight: FontWeight.w600,
-            fontFamily: _font,
+            
           ),
         ),
       ),
@@ -240,12 +239,12 @@ class AppTheme {
           color: scheme.onSurface,
           fontSize: 15.5,
           fontWeight: FontWeight.w600,
-          fontFamily: _font,
+          
         ),
         subtitleTextStyle: TextStyle(
           color: scheme.onSurfaceVariant,
           fontSize: 13,
-          fontFamily: _font,
+          
         ),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
@@ -268,7 +267,7 @@ class AppTheme {
           color: scheme.onSurface,
           fontSize: 18,
           fontWeight: FontWeight.w700,
-          fontFamily: _font,
+          
         ),
       ),
 
@@ -323,7 +322,7 @@ class AppTheme {
 
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
-        backgroundColor: isDark ? _darkCardSoft : _darkBg,
+        backgroundColor: isDark ? _darkCardSoft : _lightCard,
         contentTextStyle: TextStyle(color: Colors.white, fontFamily: _font),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
@@ -335,7 +334,7 @@ class AppTheme {
         dividerColor: Colors.transparent,
         labelStyle: const TextStyle(
           fontWeight: FontWeight.w700,
-          fontFamily: _font,
+          
         ),
       ),
     );

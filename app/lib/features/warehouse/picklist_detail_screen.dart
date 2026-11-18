@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show FilteringTextInputFormatter;
 
@@ -221,7 +222,7 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
         // Popping with `true` when anything was toggled tells the directory to
         // refresh (and nudge the sync engine); otherwise back is a no-op.
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
+          icon: const Icon(CupertinoIcons.chevron_left),
           onPressed: () => Navigator.of(context).pop(_changed ? true : null),
           tooltip: 'Back',
         ),
@@ -261,7 +262,7 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
     final picked = _items.where((i) => i.isFulfilled).length;
     final total = _items.length;
     final showProgress = !_isLoading && _error == null && total > 0;
-    final progressColor = _readOnly ? AppDesign.success : AppDesign.blueBright;
+    final progressColor = _readOnly ? AppDesign.success : AppDesign.accent;
 
     return GlassCard(
       padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
@@ -376,7 +377,7 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
       child: Row(
         children: [
           const Icon(
-            Icons.check_circle_outline,
+            CupertinoIcons.checkmark_circle,
             color: AppDesign.success,
             size: 18,
           ),
@@ -400,7 +401,7 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
     return GlassCard(
       child: Column(
         children: [
-          Icon(Icons.error_outline, color: AppDesign.danger, size: 28),
+          Icon(CupertinoIcons.exclamationmark_circle, color: AppDesign.danger, size: 28),
           const SizedBox(height: 8),
           Text(
             _error!,
@@ -421,7 +422,7 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
         child: Column(
           children: [
             Icon(
-              Icons.inventory_2_outlined,
+              CupertinoIcons.cube_box,
               size: 30,
               color: AppDesign.textFaint,
             ),
@@ -568,7 +569,7 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
                   padding: EdgeInsets.zero,
                   splashRadius: 18,
                   icon: Icon(
-                    Icons.more_vert_rounded,
+                    CupertinoIcons.ellipsis,
                     size: 18,
                     color: AppDesign.textLo,
                   ),
@@ -581,7 +582,7 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
                       value: 'edit',
                       child: Row(
                         children: [
-                          Icon(Icons.edit_outlined, size: 18),
+                          Icon(CupertinoIcons.pencil, size: 18),
                           SizedBox(width: 8),
                           Text('Edit entry'),
                         ],
@@ -591,7 +592,7 @@ class _PicklistDetailScreenState extends State<PicklistDetailScreen> {
                       value: 'delete',
                       child: Row(
                         children: [
-                          Icon(Icons.delete_outline_rounded, size: 18),
+                          Icon(CupertinoIcons.trash, size: 18),
                           SizedBox(width: 8),
                           Text('Delete entry'),
                         ],

@@ -12,6 +12,13 @@ Thumbs.db
 # IDE
 .idea/
 .vscode/
+.vs/
+
+# Local AI/agent tooling state (never shared, often contains screenshots,
+# browser caches and machine-specific paths).
+.claude/
+.devin/
+.playwright-mcp/
 
 # Flutter (THIS PREVENTS THE 134MB BLOAT)
 app/build/
@@ -45,6 +52,7 @@ app/.wrangler/
 walkthrough_shots/
 /shots/
 /*.png
+app/dashboard_screenshot.png
 
 # Agent-session leftovers: patch dumps and one-off fix scripts.
 /batch_*.txt

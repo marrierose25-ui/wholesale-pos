@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
@@ -821,7 +822,12 @@ class _MainLayoutState extends State<MainLayout> {
     );
     // Settings is always visible regardless of ticks (logout / theme).
     entries.add(
-      _ShellDestination('settings', 'Settings', Icons.settings, settingsScreen),
+      _ShellDestination(
+        'settings',
+        'Settings',
+        CupertinoIcons.gear,
+        settingsScreen,
+      ),
     );
 
     _navFeatureKeys = [for (final e in entries) e.key];
@@ -847,7 +853,7 @@ class _MainLayoutState extends State<MainLayout> {
               .firstWhere(
                 (i) => i.index == _selectedIndex,
                 orElse: () =>
-                    _NavItem(settingsIndex, Icons.settings, 'Settings'),
+                    _NavItem(settingsIndex, CupertinoIcons.gear, 'Settings'),
               )
               .label;
           return Scaffold(
@@ -858,7 +864,7 @@ class _MainLayoutState extends State<MainLayout> {
             extendBody: false,
             appBar: AppBar(
               leading: IconButton(
-                icon: const Icon(Icons.menu),
+                icon: const Icon(CupertinoIcons.line_horizontal_3),
                 onPressed: () => _scaffoldKey.currentState?.openDrawer(),
               ),
               title: Text(title),
@@ -869,18 +875,14 @@ class _MainLayoutState extends State<MainLayout> {
           );
         }
 
-        final sidebarWidth = constraints.maxWidth < 900 ? 200.0 : 250.0;
+        // iPadOS sidebar: 220–240px, secondarySystemGroupedBackground.
+        final sidebarWidth = constraints.maxWidth < 900 ? 220.0 : 240.0;
         return Scaffold(
           body: Row(
             children: [
               Container(
                 width: sidebarWidth,
-                decoration: BoxDecoration(
-                  color: AppDesign.bgElevated,
-                  border: Border(
-                    right: BorderSide(color: AppDesign.stroke, width: 1),
-                  ),
-                ),
+                decoration: BoxDecoration(color: AppDesign.bgElevated),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -889,16 +891,14 @@ class _MainLayoutState extends State<MainLayout> {
                       child: Row(
                         children: [
                           Container(
-                            padding: const EdgeInsets.all(8),
+                            width: 34,
+                            height: 34,
                             decoration: BoxDecoration(
-                              gradient: AppDesign.buttonGradient,
-                              borderRadius: BorderRadius.circular(10),
-                              boxShadow: [
-                                AppDesign.blueGlow(alpha: 0.5, blur: 16),
-                              ],
+                              color: AppDesign.blue,
+                              borderRadius: BorderRadius.circular(9),
                             ),
                             child: const Icon(
-                              Icons.storefront,
+                              CupertinoIcons.bag_fill,
                               color: AppDesign.onBlue,
                               size: 18,
                             ),
@@ -912,7 +912,7 @@ class _MainLayoutState extends State<MainLayout> {
                                 fontWeight: FontWeight.w600,
                                 fontSize: 16,
                                 letterSpacing: -0.5,
-                                color: Theme.of(context).colorScheme.onSurface,
+                                color: AppDesign.textHi,
                               ),
                             ),
                           ),
@@ -946,7 +946,7 @@ class _MainLayoutState extends State<MainLayout> {
                               height: 32,
                               decoration: const BoxDecoration(
                                 shape: BoxShape.circle,
-                                gradient: AppDesign.buttonGradient,
+                                color: AppDesign.blue,
                               ),
                               child: Center(
                                 child: Text(
@@ -986,7 +986,7 @@ class _MainLayoutState extends State<MainLayout> {
                               ),
                             ),
                             Icon(
-                              Icons.settings,
+                              CupertinoIcons.gear,
                               size: 16,
                               color: AppDesign.textLo,
                             ),
@@ -1025,7 +1025,7 @@ class _MainLayoutState extends State<MainLayout> {
           decoration: BoxDecoration(
             color: AppDesign.bgElevated.withValues(alpha: 0.92),
             borderRadius: BorderRadius.circular(AppDesign.radiusPill),
-            border: Border.all(color: AppDesign.strokeStrong),
+            border: Border.all(color: AppDesign.stroke),
             boxShadow: AppDesign.cardShadow(),
           ),
           child: Material(
@@ -1056,7 +1056,7 @@ class _MainLayoutState extends State<MainLayout> {
           Icon(
             it.icon,
             size: 22,
-            color: sel ? AppDesign.blueBright : AppDesign.textLo,
+            color: sel ? AppDesign.accent : AppDesign.textLo,
           ),
           const SizedBox(height: 3),
           Text(
@@ -1066,7 +1066,7 @@ class _MainLayoutState extends State<MainLayout> {
             style: TextStyle(
               fontSize: 10.5,
               fontWeight: sel ? FontWeight.w700 : FontWeight.w500,
-              color: sel ? AppDesign.textHi : AppDesign.textLo,
+              color: sel ? AppDesign.accent : AppDesign.textLo,
             ),
           ),
         ],
@@ -1076,37 +1076,30 @@ class _MainLayoutState extends State<MainLayout> {
 
   Widget _buildNavItem(int index, IconData icon, String label) {
     final isSelected = _selectedIndex == index;
+    final accent = AppDesign.accent;
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
-      child: InkWell(
+      child: Pressable(
         onTap: () {
           setState(() => _selectedIndex = index);
           _loadScreen(index, silent: true);
         },
-        borderRadius: BorderRadius.circular(12),
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
           decoration: BoxDecoration(
-            color: isSelected
-                ? AppDesign.blue.withValues(alpha: 0.16)
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: isSelected
-                  ? AppDesign.blue.withValues(alpha: 0.35)
-                  : Colors.transparent,
-            ),
-            boxShadow: isSelected
-                ? [AppDesign.blueGlow(alpha: 0.18, blur: 16)]
-                : null,
+            // iOS sidebar selection: neutral tertiarySystemFill pill, accent
+            // icon + label — never a solid color block.
+            color: isSelected ? AppDesign.tertiaryFill : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
           ),
           child: Row(
             children: [
               Icon(
                 icon,
                 size: 19,
-                color: isSelected ? AppDesign.blueBright : AppDesign.textLo,
+                color: isSelected ? accent : AppDesign.textLo,
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -1115,8 +1108,8 @@ class _MainLayoutState extends State<MainLayout> {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 13.5,
-                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                    color: isSelected ? AppDesign.textHi : AppDesign.textLo,
+                    fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                    color: isSelected ? accent : AppDesign.textLo,
                   ),
                 ),
               ),
@@ -1140,13 +1133,13 @@ class _MainLayoutState extends State<MainLayout> {
                 children: [
                   CircleAvatar(
                     radius: 18,
-                    backgroundColor: Theme.of(context).colorScheme.primary,
+                    backgroundColor: AppDesign.blue,
                     child: Text(
                       widget.currentUser.username.isEmpty
                           ? '?'
                           : widget.currentUser.username[0].toUpperCase(),
                       style: TextStyle(
-                        color: Theme.of(context).colorScheme.onPrimary,
+                        color: AppDesign.onBlue,
                       ),
                     ),
                   ),
@@ -1163,7 +1156,7 @@ class _MainLayoutState extends State<MainLayout> {
                           widget.currentUser.role,
                           style: TextStyle(
                             fontSize: 12,
-                            color: Theme.of(context).textTheme.bodySmall?.color,
+                            color: AppDesign.textLo,
                           ),
                         ),
                       ],
@@ -1180,7 +1173,7 @@ class _MainLayoutState extends State<MainLayout> {
                   for (final item in drawerItems)
                     ListTile(
                       selected: _selectedIndex == item.index,
-                      selectedTileColor: Theme.of(context).colorScheme.surface,
+                      selectedTileColor: AppDesign.card,
                       leading: Icon(item.icon, size: 20),
                       title: Text(item.label),
                       onTap: () {
@@ -1306,13 +1299,13 @@ class _StartupErrorAppState extends State<_StartupErrorApp> {
                                   strokeWidth: 2,
                                 ),
                               )
-                            : const Icon(Icons.refresh, size: 18),
+                            : const Icon(CupertinoIcons.arrow_clockwise, size: 18),
                         label: Text(_retrying ? 'Retrying…' : 'Retry'),
                         onPressed: _retrying ? null : _retry,
                       ),
                       const SizedBox(width: 12),
                       ElevatedButton.icon(
-                        icon: const Icon(Icons.copy, size: 18),
+                        icon: const Icon(CupertinoIcons.doc_on_doc, size: 18),
                         label: const Text('Copy log file location'),
                         onPressed: logPath == null
                             ? null

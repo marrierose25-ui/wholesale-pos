@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_design.dart';
@@ -81,7 +82,7 @@ class _WebActivationGateState extends State<WebActivationGate> {
                           boxShadow: [AppDesign.blueGlow()],
                         ),
                         child: const Icon(
-                          Icons.storefront_rounded,
+                          CupertinoIcons.bag_fill,
                           size: 34,
                           color: Colors.white,
                         ),
@@ -146,7 +147,7 @@ class _WebActivationGateState extends State<WebActivationGate> {
                       else
                         GlowButton(
                           label: 'Connect',
-                          icon: Icons.link_rounded,
+                          icon: CupertinoIcons.link,
                           onPressed: _submit,
                         ),
                     ],

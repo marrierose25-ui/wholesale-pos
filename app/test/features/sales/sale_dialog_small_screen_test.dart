@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite/sqflite.dart';
@@ -88,7 +89,7 @@ void main() {
         );
         await pumpFrames(tester);
 
-        await tester.tap(find.byIcon(Icons.add));
+        await tester.tap(find.byIcon(CupertinoIcons.plus));
         await pumpFrames(tester);
         await tester.enterText(
           find.widgetWithText(TextField, 'Name'),
@@ -121,9 +122,9 @@ void main() {
         // Step 2: Loan needs the reason field, the tallest payment window.
         await tester.tap(find.text('Next'));
         await pumpFrames(tester);
-        await tester.ensureVisible(find.widgetWithText(ChoiceChip, 'Loan'));
+        await tester.ensureVisible(find.text('Loan'));
         await pumpFrames(tester, 2);
-        await tester.tap(find.widgetWithText(ChoiceChip, 'Loan'));
+        await tester.tap(find.text('Loan'));
         await pumpFrames(tester);
         await tester.ensureVisible(
           find.widgetWithText(TextField, 'Reason / Reference'),

@@ -15,7 +15,7 @@ Color picklistStatusColor(String status) {
     case Picklist.statusCompleted:
       return AppDesign.success;
     case Picklist.statusPartial:
-      return AppDesign.blueBright;
+      return AppDesign.accent;
     default:
       return AppDesign.warning;
   }

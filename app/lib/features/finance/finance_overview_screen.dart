@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/models/user.dart';
@@ -180,11 +181,11 @@ class FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
         title: const Text('Money Tracking'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.delete_outline),
+            icon: const Icon(CupertinoIcons.trash),
             tooltip: 'Recycle Bin',
             onPressed: _openRecycleBin,
           ),
-          IconButton(icon: const Icon(Icons.refresh), onPressed: load),
+          IconButton(icon: const Icon(CupertinoIcons.arrow_clockwise), onPressed: load),
           const SizedBox(width: 16),
         ],
       ),
@@ -215,10 +216,7 @@ class FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
                           Text(
                             'Pending Across Everyone',
                             style: TextStyle(
-                              color: Theme.of(context)
-                                  .textTheme
-                                  .bodySmall
-                                  ?.color,
+                              color: AppDesign.textLo,
                               fontSize: 13,
                               fontWeight: FontWeight.w500,
                             ),
@@ -229,7 +227,7 @@ class FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
                             style: TextStyle(
                               fontSize: 28,
                               fontWeight: FontWeight.bold,
-                              color: Theme.of(context).colorScheme.primary,
+                              color: AppDesign.blue,
                             ),
                           ),
                         ],
@@ -246,7 +244,7 @@ class FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
                           'money for.',
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            color: Theme.of(context).textTheme.bodySmall?.color,
+                            color: AppDesign.textLo,
                           ),
                         ),
                       ),
@@ -258,7 +256,7 @@ class FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _showAddPersonDialog,
-        icon: const Icon(Icons.person_add),
+        icon: const Icon(CupertinoIcons.person_badge_plus),
         label: const Text('Add Person'),
       ),
     );

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/models/finance_entry.dart';
@@ -258,7 +259,7 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
                   child: Text(
                     'No entries yet.',
                     style: TextStyle(
-                      color: Theme.of(context).textTheme.bodySmall?.color,
+                      color: AppDesign.textLo,
                     ),
                   ),
                 ),
@@ -277,7 +278,7 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _showAddEntryDialog(),
-        icon: const Icon(Icons.add),
+        icon: const Icon(CupertinoIcons.plus),
         label: const Text('Add Entry'),
       ),
     );
@@ -299,7 +300,7 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
                     Text(
                       'Pending',
                       style: TextStyle(
-                        color: Theme.of(context).textTheme.bodySmall?.color,
+                        color: AppDesign.textLo,
                         fontSize: 13,
                       ),
                     ),
@@ -309,7 +310,7 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.bold,
-                        color: Theme.of(context).colorScheme.primary,
+                        color: AppDesign.blue,
                       ),
                     ),
                   ],
@@ -329,7 +330,7 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
                     Text(
                       'Taken (Completed)',
                       style: TextStyle(
-                        color: Theme.of(context).textTheme.bodySmall?.color,
+                        color: AppDesign.textLo,
                         fontSize: 13,
                       ),
                     ),
@@ -358,12 +359,12 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
         controller: _searchController,
         decoration: InputDecoration(
           hintText: 'Search source or description...',
-          prefixIcon: const Icon(Icons.search),
+          prefixIcon: const Icon(CupertinoIcons.search),
           isDense: true,
           suffixIcon: _searchController.text.isEmpty
               ? null
               : IconButton(
-                  icon: const Icon(Icons.clear),
+                  icon: const Icon(CupertinoIcons.xmark),
                   onPressed: () {
                     _searchController.clear();
                     _load();
@@ -384,7 +385,7 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
         padding: EdgeInsets.zero,
         child: ListTile(
           leading: Icon(
-            isPending ? Icons.schedule_rounded : Icons.check_circle_rounded,
+            isPending ? CupertinoIcons.clock : CupertinoIcons.checkmark_circle_fill,
             color: isPending ? AppDesign.warning : AppDesign.success,
           ),
           title: Text(
@@ -621,7 +622,7 @@ class _EntryDialogState extends State<_EntryDialog> {
           child: InputDecorator(
             decoration: const InputDecoration(
               labelText: 'Date',
-              suffixIcon: Icon(Icons.calendar_today, size: 18),
+              suffixIcon: Icon(CupertinoIcons.calendar, size: 18),
             ),
             child: Text(
               '${_selectedDate.year}-'
@@ -652,8 +653,7 @@ class _EntryDialogState extends State<_EntryDialog> {
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest
-                .withValues(alpha: 0.3),
+            color: AppDesign.cardSoft.withValues(alpha: 0.3),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Column(

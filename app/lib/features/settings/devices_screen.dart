@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/licensing/activation_client.dart';
@@ -209,7 +210,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
         actions: [
           IconButton(
             onPressed: _loading ? null : _load,
-            icon: const Icon(Icons.refresh),
+            icon: const Icon(CupertinoIcons.arrow_clockwise),
             tooltip: 'Refresh',
           ),
         ],
@@ -282,7 +283,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
                                             strokeWidth: 2,
                                           ),
                                         )
-                                      : const Icon(Icons.confirmation_number),
+                                      : const Icon(CupertinoIcons.number),
                                   label: const Text('Redeem'),
                                 ),
                               ),
@@ -327,7 +328,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
       return [
         const GlassCard(
           child: ListTile(
-            leading: Icon(Icons.info_outline),
+            leading: Icon(CupertinoIcons.info_circle),
             title: Text('No devices listed yet.'),
           ),
         ),
@@ -362,7 +363,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
     final subtitleParts = <String>[_mask(fp)];
     if (lastSeen != null) subtitleParts.add('Last seen $lastSeen');
     return ListTile(
-      leading: Icon(isSelf ? Icons.phone_android : Icons.devices_other),
+      leading: Icon(isSelf ? CupertinoIcons.device_phone_portrait : CupertinoIcons.desktopcomputer),
       title: Row(
         children: [
           Flexible(child: Text(name)),
@@ -401,7 +402,7 @@ class _HeaderCard extends StatelessWidget {
     return GlassCard(
       padding: EdgeInsets.zero,
       child: ListTile(
-        leading: const Icon(Icons.vpn_key),
+        leading: const Icon(CupertinoIcons.lock),
         title: Text(
           'Activation code ${activationCodeMasked ?? ''}',
           style: const TextStyle(fontWeight: FontWeight.bold),
@@ -429,7 +430,7 @@ class _ErrorCard extends StatelessWidget {
           children: [
             Row(
               children: const [
-                Icon(Icons.warning_amber_rounded, color: AppTheme.danger),
+                Icon(CupertinoIcons.exclamationmark_triangle, color: AppTheme.danger),
                 SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -464,11 +465,11 @@ class _ThisDeviceChip extends StatelessWidget {
         color: AppDesign.blue.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(12),
       ),
-      child: const Text(
+      child: Text(
         'This device',
         style: TextStyle(
           fontSize: 11,
-          color: AppDesign.blueBright,
+          color: AppDesign.accent,
           fontWeight: FontWeight.bold,
         ),
       ),

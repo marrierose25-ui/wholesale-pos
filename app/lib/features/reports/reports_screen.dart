@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/models/user.dart';
@@ -128,7 +129,7 @@ class ReportsScreenState extends State<ReportsScreen> {
       appBar: AppBar(
         title: const Text('Reports'),
         actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: loadReports),
+          IconButton(icon: const Icon(CupertinoIcons.arrow_clockwise), onPressed: loadReports),
           const SizedBox(width: 16),
         ],
       ),
@@ -190,7 +191,7 @@ class ReportsScreenState extends State<ReportsScreen> {
             ),
         ActionChip(
           avatar: Icon(
-            Icons.date_range,
+            CupertinoIcons.calendar,
             size: 16,
             color: _period == ReportPeriod.custom
                 ? Colors.white
@@ -218,7 +219,7 @@ class ReportsScreenState extends State<ReportsScreen> {
             padding: const EdgeInsets.all(24),
             child: Row(
               children: [
-                const IconChip(icon: Icons.inventory_2_rounded, size: 38),
+                const IconChip(icon: CupertinoIcons.cube_box_fill, size: 38),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
@@ -295,7 +296,7 @@ class ReportsScreenState extends State<ReportsScreen> {
             padding: const EdgeInsets.all(24),
             child: Row(
               children: [
-                const IconChip(icon: Icons.people_alt_rounded, size: 38),
+                const IconChip(icon: CupertinoIcons.person_2, size: 38),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(

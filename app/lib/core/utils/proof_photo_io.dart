@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -21,12 +22,12 @@ Future<String?> pickProofPhoto(BuildContext context) async {
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(Icons.photo_camera_outlined),
+              leading: const Icon(CupertinoIcons.camera),
               title: const Text('Take a photo'),
               onTap: () => Navigator.pop(context, _ProofSource.camera),
             ),
             ListTile(
-              leading: const Icon(Icons.photo_library_outlined),
+              leading: const Icon(CupertinoIcons.photo_on_rectangle),
               title: const Text('Choose from gallery'),
               onTap: () => Navigator.pop(context, _ProofSource.gallery),
             ),

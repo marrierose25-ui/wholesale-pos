@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite/sqflite.dart';
@@ -86,7 +87,7 @@ void main() {
       await pumpAt(tester, const Size(800, 1180));
 
       // The compact-only hamburger must be gone...
-      expect(find.byIcon(Icons.menu), findsNothing);
+      expect(find.byIcon(CupertinoIcons.line_horizontal_3), findsNothing);
       // ...and the sidebar's brand + nav labels render instead.
       expect(find.text('Settings'), findsWidgets);
       expect(find.text('Wholesale POS'), findsWidgets);
@@ -98,7 +99,7 @@ void main() {
   ) async {
     // 1280x800 ~ a 10" tablet in landscape (>= 900dp -> full-width sidebar).
     await pumpAt(tester, const Size(1280, 800));
-    expect(find.byIcon(Icons.menu), findsNothing);
+    expect(find.byIcon(CupertinoIcons.line_horizontal_3), findsNothing);
     expect(find.text('Wholesale POS'), findsWidgets);
   });
 
@@ -107,6 +108,6 @@ void main() {
   ) async {
     // Companion guard: proves the breakpoint is width-driven, not always-wide.
     await pumpAt(tester, const Size(390, 844));
-    expect(find.byIcon(Icons.menu), findsOneWidget);
+    expect(find.byIcon(CupertinoIcons.line_horizontal_3), findsOneWidget);
   });
 }

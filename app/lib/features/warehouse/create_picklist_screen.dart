@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show FilteringTextInputFormatter;
 import 'package:uuid/uuid.dart';
@@ -321,7 +322,7 @@ class _CreatePicklistScreenState extends State<CreatePicklistScreen> {
             ? null
             : IconButton(
                 onPressed: _saving ? null : _back,
-                icon: const Icon(Icons.arrow_back),
+                icon: const Icon(CupertinoIcons.chevron_left),
                 tooltip: 'Back to customer',
               ),
         title: const Text('New List'),
@@ -383,11 +384,11 @@ class _CreatePicklistScreenState extends State<CreatePicklistScreen> {
             height: 50,
             child: OutlinedButton.icon(
               onPressed: _saving ? null : _addItem,
-              icon: const Icon(Icons.add, size: 20),
+              icon: const Icon(CupertinoIcons.plus, size: 20),
               label: const Text('Add Product'),
               style: OutlinedButton.styleFrom(
                 foregroundColor: AppDesign.isDark
-                    ? AppDesign.blueBright
+                    ? AppDesign.accent
                     : AppDesign.blue,
                 side: BorderSide(color: AppDesign.blue.withValues(alpha: 0.45)),
                 shape: RoundedRectangleBorder(
@@ -414,7 +415,7 @@ class _CreatePicklistScreenState extends State<CreatePicklistScreen> {
           Row(
             children: [
               const IconChip(
-                icon: Icons.person_outline,
+                icon: CupertinoIcons.person,
                 size: 34,
                 color: AppDesign.blue,
               ),
@@ -440,7 +441,7 @@ class _CreatePicklistScreenState extends State<CreatePicklistScreen> {
                   _oneTimeMode = true;
                   _selectedCustomer = null;
                 }),
-                icon: const Icon(Icons.edit_outlined, size: 17),
+                icon: const Icon(CupertinoIcons.pencil, size: 17),
                 label: const Text('New customer (not saved)'),
               ),
             ),
@@ -449,7 +450,7 @@ class _CreatePicklistScreenState extends State<CreatePicklistScreen> {
               alignment: Alignment.centerLeft,
               child: TextButton.icon(
                 onPressed: () => setState(() => _oneTimeMode = false),
-                icon: const Icon(Icons.list_alt_outlined, size: 17),
+                icon: const Icon(CupertinoIcons.list_bullet, size: 17),
                 label: const Text('Pick a saved customer'),
               ),
             ),
@@ -466,7 +467,7 @@ class _CreatePicklistScreenState extends State<CreatePicklistScreen> {
         decoration: const InputDecoration(
           labelText: 'Customer Name',
           hintText: 'Type the name',
-          prefixIcon: Icon(Icons.edit_outlined, size: 20),
+          prefixIcon: Icon(CupertinoIcons.pencil, size: 20),
         ),
         validator: (v) => (v == null || v.trim().isEmpty)
             ? 'Customer name is required.'
@@ -488,7 +489,7 @@ class _CreatePicklistScreenState extends State<CreatePicklistScreen> {
             isExpanded: true,
             decoration: const InputDecoration(
               labelText: 'Select Customer',
-              prefixIcon: Icon(Icons.storefront_outlined, size: 20),
+              prefixIcon: Icon(CupertinoIcons.bag, size: 20),
             ),
             items: [
               for (final c in _customers)
@@ -518,8 +519,8 @@ class _CreatePicklistScreenState extends State<CreatePicklistScreen> {
             ),
             child: IconButton(
               onPressed: _addCustomerDialog,
-              icon: const Icon(Icons.add, size: 22),
-              color: AppDesign.isDark ? AppDesign.blueBright : AppDesign.blue,
+              icon: const Icon(CupertinoIcons.plus, size: 22),
+              color: AppDesign.isDark ? AppDesign.accent : AppDesign.blue,
               tooltip: 'Add customer',
             ),
           ),
@@ -593,7 +594,7 @@ class _CreatePicklistScreenState extends State<CreatePicklistScreen> {
                   'PRODUCT ${index + 1}',
                   style: TextStyle(
                     color: AppDesign.isDark
-                        ? AppDesign.blueBright
+                        ? AppDesign.accent
                         : AppDesign.blue,
                     fontSize: 10.5,
                     fontWeight: FontWeight.w800,
@@ -604,7 +605,7 @@ class _CreatePicklistScreenState extends State<CreatePicklistScreen> {
               const Spacer(),
               IconButton(
                 onPressed: canRemove ? () => _removeItem(index) : null,
-                icon: const Icon(Icons.delete_outline, size: 20),
+                icon: const Icon(CupertinoIcons.trash, size: 20),
                 tooltip: 'Remove product',
                 style: IconButton.styleFrom(
                   foregroundColor: AppDesign.danger,
@@ -742,7 +743,7 @@ class _CreatePicklistScreenState extends State<CreatePicklistScreen> {
                       MoneyUtils.formatBr(draft.lineTotalMinor),
                       style: TextStyle(
                         color: AppDesign.isDark
-                            ? AppDesign.blueBright
+                            ? AppDesign.accent
                             : AppDesign.blue,
                         fontWeight: FontWeight.w800,
                         fontSize: 15,
@@ -827,7 +828,7 @@ class _CreatePicklistScreenState extends State<CreatePicklistScreen> {
       child: customerStep
           ? FilledButton.icon(
               onPressed: _saving ? null : _next,
-              icon: const Icon(Icons.arrow_forward, size: 20),
+              icon: const Icon(CupertinoIcons.chevron_right, size: 20),
               label: const Text('Next'),
               style: _footerButtonStyle(),
             )
@@ -842,7 +843,7 @@ class _CreatePicklistScreenState extends State<CreatePicklistScreen> {
                         color: AppDesign.onBlue,
                       ),
                     )
-                  : const Icon(Icons.send_outlined, size: 20),
+                  : const Icon(CupertinoIcons.paperplane, size: 20),
               label: Text(_saving ? 'Sending…' : 'Send to Warehouse'),
               style: _footerButtonStyle(),
             ),

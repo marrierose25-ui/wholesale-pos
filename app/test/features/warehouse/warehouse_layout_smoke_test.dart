@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wholesale_pos_app/core/auth/features.dart';
@@ -184,7 +185,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // Step one: the + opens the customer step, not the product form.
-    await tester.tap(find.byIcon(Icons.add));
+    await tester.tap(find.byIcon(CupertinoIcons.plus));
     await tester.pumpAndSettle();
     expect(find.text('Step 1 of 2'), findsOneWidget);
     expect(find.text('Select Customer'), findsOneWidget);
@@ -252,7 +253,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.add));
+    await tester.tap(find.byIcon(CupertinoIcons.plus));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Select Customer'));
     await tester.pumpAndSettle();
@@ -351,7 +352,7 @@ void main() {
 
     expect(find.text('New List'), findsOneWidget);
     // The action is now a single large + circle, not a labelled card.
-    expect(find.byIcon(Icons.add), findsOneWidget);
+    expect(find.byIcon(CupertinoIcons.plus), findsOneWidget);
     expect(find.text('Lists to fill'), findsNothing);
     // History is read-only and available to the shop side too (with money).
     expect(find.text('History'), findsOneWidget);
@@ -455,7 +456,7 @@ void main() {
     await tester.pumpAndSettle();
     // The mode switch itself has an add icon; the body's large + circle is the
     // second one.
-    expect(find.byIcon(Icons.add), findsNWidgets(2));
+    expect(find.byIcon(CupertinoIcons.plus), findsNWidgets(2));
     expect(find.text('Lists to fill'), findsNothing);
     expect(tester.takeException(), isNull);
   });
@@ -558,7 +559,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.more_vert_rounded).first);
+    await tester.tap(find.byIcon(CupertinoIcons.ellipsis).first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Edit entry'));
     await tester.pumpAndSettle();
@@ -595,7 +596,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.more_vert_rounded).first);
+    await tester.tap(find.byIcon(CupertinoIcons.ellipsis).first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Delete entry'));
     await tester.pumpAndSettle();
@@ -623,7 +624,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.more_vert_rounded));
+    await tester.tap(find.byIcon(CupertinoIcons.ellipsis));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Delete list'));
     await tester.pumpAndSettle();

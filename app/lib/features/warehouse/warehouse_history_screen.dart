@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/models/picklist.dart';
@@ -74,7 +75,7 @@ class _WarehouseHistoryScreenState extends State<WarehouseHistoryScreen> {
         title: const Text('History'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh),
+            icon: const Icon(CupertinoIcons.arrow_clockwise),
             tooltip: 'Refresh',
             onPressed: _load,
           ),
@@ -209,7 +210,7 @@ class _DayCard extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Icon(
-            Icons.chevron_right_rounded,
+            CupertinoIcons.chevron_right,
             color: AppDesign.textFaint,
             size: 19,
           ),
@@ -382,7 +383,7 @@ class _CustomerRow extends StatelessWidget {
             const SizedBox(width: 8),
             PicklistStatusChip(status: picklist.status),
             Icon(
-              Icons.chevron_right_rounded,
+              CupertinoIcons.chevron_right,
               color: AppDesign.textFaint,
               size: 18,
             ),

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
@@ -465,7 +466,8 @@ class _MainScaffoldState extends State<MainScaffold>
     // account is allowed to do.
     final picklists = backend.picklists;
     if (picklists != null &&
-        (user.can(FeatureDef.warehouse) || user.can(FeatureDef.warehouseFill))) {
+        (user.can(FeatureDef.warehouse) ||
+            user.can(FeatureDef.warehouseFill))) {
       final def = kFeatures.firstWhere((f) => f.key == FeatureDef.warehouse);
       entries.add(
         _ShellDestination(
@@ -498,7 +500,12 @@ class _MainScaffoldState extends State<MainScaffold>
     );
     // Settings is always visible regardless of ticks (logout / theme).
     entries.add(
-      _ShellDestination('settings', 'Settings', Icons.settings, settingsScreen),
+      _ShellDestination(
+        'settings',
+        'Settings',
+        CupertinoIcons.gear,
+        settingsScreen,
+      ),
     );
 
     _navFeatureKeys = [for (final e in entries) e.key];
@@ -524,7 +531,7 @@ class _MainScaffoldState extends State<MainScaffold>
               .firstWhere(
                 (i) => i.index == _selectedIndex,
                 orElse: () =>
-                    _NavItem(settingsIndex, Icons.settings, 'Settings'),
+                    _NavItem(settingsIndex, CupertinoIcons.gear, 'Settings'),
               )
               .label;
           return Scaffold(
@@ -533,7 +540,7 @@ class _MainScaffoldState extends State<MainScaffold>
             extendBody: false,
             appBar: AppBar(
               leading: IconButton(
-                icon: const Icon(Icons.menu),
+                icon: const Icon(CupertinoIcons.line_horizontal_3),
                 onPressed: () => _scaffoldKey.currentState?.openDrawer(),
               ),
               title: Text(title),
@@ -544,50 +551,49 @@ class _MainScaffoldState extends State<MainScaffold>
           );
         }
 
-        final sidebarWidth = constraints.maxWidth < 900 ? 200.0 : 250.0;
+        // Linear sidebar: 220–240px, white surface, #E5E7EB hairline divider.
+        final sidebarWidth = constraints.maxWidth < 900 ? 220.0 : 240.0;
         return Scaffold(
           body: Row(
             children: [
               Container(
                 width: sidebarWidth,
-                decoration: BoxDecoration(
-                  color: AppDesign.bgElevated,
-                  border: Border(
-                    right: BorderSide(color: AppDesign.stroke, width: 1),
-                  ),
-                ),
+                decoration: BoxDecoration(color: AppDesign.bgElevated),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Padding(
-                      padding: const EdgeInsets.all(24.0),
+                      padding: const EdgeInsets.all(20.0),
                       child: Row(
                         children: [
                           Container(
-                            padding: const EdgeInsets.all(8),
+                            width: 30,
+                            height: 30,
                             decoration: BoxDecoration(
-                              gradient: AppDesign.buttonGradient,
-                              borderRadius: BorderRadius.circular(10),
-                              boxShadow: [
-                                AppDesign.blueGlow(alpha: 0.5, blur: 16),
-                              ],
+                              color: AppDesign.blue,
+                              borderRadius: BorderRadius.circular(8),
                             ),
-                            child: const Icon(
-                              Icons.storefront,
-                              color: AppDesign.onBlue,
-                              size: 18,
+                            child: const Center(
+                              child: Text(
+                                'W',
+                                style: TextStyle(
+                                  color: AppDesign.onBlue,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 15,
+                                ),
+                              ),
                             ),
                           ),
-                          const SizedBox(width: 12),
+                          const SizedBox(width: 10),
                           Flexible(
                             child: Text(
                               'Wholesale POS',
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 fontWeight: FontWeight.w600,
-                                fontSize: 16,
-                                letterSpacing: -0.5,
-                                color: Theme.of(context).colorScheme.onSurface,
+                                fontSize: 15,
+                                letterSpacing: -0.3,
+                                color: AppDesign.textHi,
                               ),
                             ),
                           ),
@@ -603,7 +609,10 @@ class _MainScaffoldState extends State<MainScaffold>
                         ],
                       ),
                     ),
-                    const Divider(),
+                    Divider(
+                      color: AppDesign.stroke,
+                      thickness: 1,
+                    ),
                     InkWell(
                       onTap: () => _selectTab(settingsIndex),
                       child: Padding(
@@ -616,9 +625,9 @@ class _MainScaffoldState extends State<MainScaffold>
                             Container(
                               width: 32,
                               height: 32,
-                              decoration: const BoxDecoration(
+                              decoration: BoxDecoration(
                                 shape: BoxShape.circle,
-                                gradient: AppDesign.buttonGradient,
+                                color: AppDesign.blue,
                               ),
                               child: Center(
                                 child: Text(
@@ -643,22 +652,23 @@ class _MainScaffoldState extends State<MainScaffold>
                                     widget.currentUser.username,
                                     style: TextStyle(
                                       fontWeight: FontWeight.w600,
-                                      fontSize: 13,
+                                      fontSize: 12.5,
                                       color: AppDesign.textHi,
                                     ),
                                   ),
                                   Text(
                                     widget.currentUser.role,
                                     style: TextStyle(
-                                      fontSize: 11,
+                                      fontSize: 10.5,
                                       color: AppDesign.textLo,
+                                      fontFamily: AppDesign.fontData,
                                     ),
                                   ),
                                 ],
                               ),
                             ),
                             Icon(
-                              Icons.settings,
+                              CupertinoIcons.gear,
                               size: 16,
                               color: AppDesign.textLo,
                             ),
@@ -700,26 +710,27 @@ class _MainScaffoldState extends State<MainScaffold>
     return SafeArea(
       top: false,
       child: Padding(
-        // Extra bottom clearance lifts the pill above the phone's home-indicator
-        // / gesture zone (and any mobile-browser bottom bar), so its buttons
-        // stay tappable instead of having taps swallowed by the OS.
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
         child: Container(
           height: 62,
           decoration: BoxDecoration(
-            color: AppDesign.bgElevated.withValues(alpha: 0.92),
+            color: AppDesign.bgElevated,
             borderRadius: BorderRadius.circular(AppDesign.radiusPill),
-            border: Border.all(color: AppDesign.strokeStrong),
-            boxShadow: AppDesign.cardShadow(),
-          ),
-          child: Material(
-            type: MaterialType.transparency,
-            borderRadius: BorderRadius.circular(AppDesign.radiusPill),
-            child: Row(
-              children: [
-                for (final it in items) Expanded(child: _pillItem(it)),
-              ],
+            border: Border.all(
+              color: AppDesign.stroke.withValues(alpha: 0.3),
             ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.04),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              for (final it in items) Expanded(child: _pillItem(it)),
+            ],
           ),
         ),
       ),
@@ -737,7 +748,7 @@ class _MainScaffoldState extends State<MainScaffold>
           Icon(
             it.icon,
             size: 22,
-            color: sel ? AppDesign.blueBright : AppDesign.textLo,
+            color: sel ? AppDesign.accent : AppDesign.textLo,
           ),
           const SizedBox(height: 3),
           Text(
@@ -747,7 +758,7 @@ class _MainScaffoldState extends State<MainScaffold>
             style: TextStyle(
               fontSize: 10.5,
               fontWeight: sel ? FontWeight.w700 : FontWeight.w500,
-              color: sel ? AppDesign.textHi : AppDesign.textLo,
+              color: sel ? AppDesign.accent : AppDesign.textLo,
             ),
           ),
         ],
@@ -757,44 +768,39 @@ class _MainScaffoldState extends State<MainScaffold>
 
   Widget _buildNavItem(int index, IconData icon, String label) {
     final isSelected = _selectedIndex == index;
+    final accent = AppDesign.accent;
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
-      child: InkWell(
+      child: Pressable(
         onTap: () => _selectTab(index),
-        borderRadius: BorderRadius.circular(12),
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOutCubic,
+          height: 40,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          alignment: Alignment.centerLeft,
           decoration: BoxDecoration(
             color: isSelected
-                ? AppDesign.blue.withValues(alpha: 0.16)
+                ? AppDesign.blue.withValues(alpha: 0.08)
                 : Colors.transparent,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: isSelected
-                  ? AppDesign.blue.withValues(alpha: 0.35)
-                  : Colors.transparent,
-            ),
-            boxShadow: isSelected
-                ? [AppDesign.blueGlow(alpha: 0.18, blur: 16)]
-                : null,
+            borderRadius: BorderRadius.circular(6),
           ),
           child: Row(
             children: [
               Icon(
                 icon,
-                size: 19,
-                color: isSelected ? AppDesign.blueBright : AppDesign.textLo,
+                size: 18,
+                color: isSelected ? accent : AppDesign.textLo,
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Expanded(
                 child: Text(
                   label,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 13.5,
-                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                    color: isSelected ? AppDesign.textHi : AppDesign.textLo,
+                    fontSize: 14,
+                    fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                    color: isSelected ? accent : AppDesign.textLo,
                   ),
                 ),
               ),
@@ -816,15 +822,23 @@ class _MainScaffoldState extends State<MainScaffold>
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
               child: Row(
                 children: [
-                  CircleAvatar(
-                    radius: 18,
-                    backgroundColor: Theme.of(context).colorScheme.primary,
-                    child: Text(
-                      widget.currentUser.username.isEmpty
-                          ? '?'
-                          : widget.currentUser.username[0].toUpperCase(),
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.onPrimary,
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppDesign.blue,
+                    ),
+                    child: Center(
+                      child: Text(
+                        widget.currentUser.username.isEmpty
+                            ? '?'
+                            : widget.currentUser.username[0].toUpperCase(),
+                        style: const TextStyle(
+                          color: AppDesign.onBlue,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                        ),
                       ),
                     ),
                   ),
@@ -835,13 +849,18 @@ class _MainScaffoldState extends State<MainScaffold>
                       children: [
                         Text(
                           widget.currentUser.username,
-                          style: const TextStyle(fontWeight: FontWeight.w600),
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12.5,
+                            color: AppDesign.textHi,
+                          ),
                         ),
                         Text(
                           widget.currentUser.role,
                           style: TextStyle(
-                            fontSize: 12,
-                            color: Theme.of(context).textTheme.bodySmall?.color,
+                            fontSize: 10.5,
+                            color: AppDesign.textLo,
+                            fontFamily: AppDesign.fontData,
                           ),
                         ),
                       ],
@@ -858,9 +877,17 @@ class _MainScaffoldState extends State<MainScaffold>
                   for (final item in drawerItems)
                     ListTile(
                       selected: _selectedIndex == item.index,
-                      selectedTileColor: Theme.of(context).colorScheme.surface,
-                      leading: Icon(item.icon, size: 20),
-                      title: Text(item.label),
+                      selectedTileColor: AppDesign.blue.withValues(alpha: 0.08),
+                      selectedColor: AppDesign.accent,
+                      leading: Icon(item.icon, size: 18, color: _selectedIndex == item.index ? AppDesign.accent : AppDesign.textLo),
+                      title: Text(
+                        item.label,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: _selectedIndex == item.index ? FontWeight.w600 : FontWeight.w500,
+                          color: _selectedIndex == item.index ? AppDesign.accent : AppDesign.textLo,
+                        ),
+                      ),
                       onTap: () {
                         _selectTab(item.index);
                         Navigator.of(context).pop();

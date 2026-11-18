@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/auth/features.dart';
@@ -224,7 +225,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       appBar: AppBar(
         title: const Text('User Management'),
         actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadUsers),
+          IconButton(icon: const Icon(CupertinoIcons.arrow_clockwise), onPressed: _loadUsers),
         ],
       ),
       body: AppBackground(
@@ -243,7 +244,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                       ? AppDesign.blue
                       : AppDesign.textFaint,
                   foregroundColor: Colors.white,
-                  child: const Icon(Icons.person),
+                  child: const Icon(CupertinoIcons.person_fill),
                 ),
                 title: Text(
                   user.username,
@@ -331,7 +332,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _showAddUserDialog,
-        icon: const Icon(Icons.person_add),
+        icon: const Icon(CupertinoIcons.person_badge_plus),
         label: const Text('Add User'),
       ),
     );

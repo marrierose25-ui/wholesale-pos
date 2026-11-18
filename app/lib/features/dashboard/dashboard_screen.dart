@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/models/user.dart';
@@ -9,6 +10,12 @@ import '../../core/utils/date_range.dart';
 import '../../core/utils/money_utils.dart';
 import 'sales_by_day_screen.dart';
 
+/// Dashboard screen — restyled with native Cupertino widgets and the shared
+/// design-system components ([GlassCard], [IconChip], [TrendChip],
+/// [FadeSlideIn], [PeriodDropdown], [IosLargeTitle]).
+///
+/// Logic is preserved verbatim: same fields, same methods, same data flow.
+/// No repositories, models, or shell code are touched.
 class DashboardScreen extends StatefulWidget {
   final SaleRepository saleRepository;
   final User currentUser;
@@ -22,6 +29,10 @@ class DashboardScreen extends StatefulWidget {
   @override
   State<DashboardScreen> createState() => DashboardScreenState();
 }
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
 
 class DashboardScreenState extends State<DashboardScreen> {
   Map<String, int> _stats = {};
@@ -135,7 +146,10 @@ class DashboardScreenState extends State<DashboardScreen> {
           children: [
             Text(_error!),
             const SizedBox(height: 8),
-            TextButton(onPressed: loadDashboard, child: const Text('Retry')),
+            CupertinoButton(
+              onPressed: loadDashboard,
+              child: const Text('Retry'),
+            ),
           ],
         ),
       );
@@ -143,27 +157,34 @@ class DashboardScreenState extends State<DashboardScreen> {
 
     return Scaffold(
       backgroundColor: AppDesign.bg,
-      appBar: AppBar(
-        title: const Text('Dashboard'),
-        actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: loadDashboard),
-          const SizedBox(width: 16),
-        ],
-      ),
-      body: AppBackground(
-        child: RefreshIndicator(
-          onRefresh: loadDashboard,
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(18, 18, 18, 32),
-            children: [
-              _buildPeriodSelector(),
-              const SizedBox(height: 20),
-              _buildHeroBalance(),
-              const SizedBox(height: 16),
-              _buildMetricGrid(),
+      body: CustomScrollView(
+        slivers: [
+          IosLargeTitle.sliver(
+            context,
+            title: 'Dashboard',
+            actions: [
+              IconButton(
+                icon: const Icon(CupertinoIcons.arrow_clockwise),
+                onPressed: loadDashboard,
+              ),
             ],
           ),
-        ),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 32),
+            sliver: SliverList(
+              delegate: SliverChildListDelegate([
+                _buildPeriodSelector(),
+                const SizedBox(height: 20),
+                FadeSlideIn(
+                  delay: const Duration(milliseconds: 60),
+                  child: _buildHeroBalance(),
+                ),
+                const SizedBox(height: 16),
+                _buildMetricGrid(),
+              ]),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -186,31 +207,43 @@ class DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  /// Big glowing balance figure at the top of the dashboard.
+  /// Big balance figure at the top of the dashboard.
   Widget _buildHeroBalance() {
     final revenue = _stats['revenue'] ?? 0;
     final pct = _prevRevenue > 0
         ? (revenue - _prevRevenue) / _prevRevenue * 100
         : 0.0;
     return GlassCard(
-      padding: const EdgeInsets.all(22),
+      padding: const EdgeInsets.all(28),
+      radius: AppDesign.radiusCard,
+      shadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.04),
+          blurRadius: 12,
+          offset: const Offset(0, 4),
+        ),
+      ],
+      border: Border.all(color: AppDesign.strokeStrong),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const IconChip(
-                icon: Icons.account_balance_wallet_rounded,
-                size: 38,
+              IconChip(
+                icon: CupertinoIcons.money_dollar_circle,
+                size: 42,
+                color: AppDesign.blue,
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  'Total revenue',
+                  'Total Revenue',
                   style: TextStyle(
-                    color: AppDesign.textLo,
-                    fontSize: 13,
+                    color: AppDesign.textFaint,
+                    fontSize: 11,
                     fontWeight: FontWeight.w600,
+                    height: 1.0,
+                    letterSpacing: 0.08,
                   ),
                 ),
               ),
@@ -225,16 +258,17 @@ class DashboardScreenState extends State<DashboardScreen> {
               MoneyUtils.formatBr(revenue),
               style: TextStyle(
                 color: AppDesign.textHi,
-                fontSize: 40,
-                fontWeight: FontWeight.w800,
+                fontSize: 42,
+                fontWeight: FontWeight.w700,
                 letterSpacing: -1,
+                fontFeatures: const [FontFeature.tabularFigures()],
               ),
             ),
           ),
           const SizedBox(height: 6),
           Text(
             _period.label,
-            style: TextStyle(color: AppDesign.textFaint, fontSize: 12),
+            style: TextStyle(color: AppDesign.textLo, fontSize: 12),
           ),
         ],
       ),
@@ -248,32 +282,32 @@ class DashboardScreenState extends State<DashboardScreen> {
       _Metric(
         'Completed Sales',
         '${_stats['sales_count'] ?? 0}',
-        Icons.check_circle_rounded,
+        CupertinoIcons.list_bullet,
         AppDesign.success,
         onTap: _openCompletedSalesByDay,
       ),
       _Metric(
         'Cash Collected',
         MoneyUtils.formatBr(_stats['cash_revenue'] ?? 0),
-        Icons.payments_rounded,
+        CupertinoIcons.creditcard,
         AppDesign.blue,
       ),
       _Metric(
         'Bank Collected',
         MoneyUtils.formatBr(_stats['bank_revenue'] ?? 0),
-        Icons.account_balance_rounded,
-        AppDesign.blueBright,
+        CupertinoIcons.building_2_fill,
+        AppDesign.blue,
       ),
       _Metric(
         'Average / Sale',
         MoneyUtils.formatBr(_stats['average_sale'] ?? 0),
-        Icons.trending_up_rounded,
+        CupertinoIcons.arrow_up_right,
         AppDesign.warning,
       ),
     ];
     return LayoutBuilder(
       builder: (context, constraints) {
-        const spacing = 12.0;
+        const spacing = 16.0;
         final columns = constraints.maxWidth >= 560 ? 4 : 2;
         final itemWidth =
             (constraints.maxWidth - spacing * (columns - 1)) / columns;
@@ -281,8 +315,14 @@ class DashboardScreenState extends State<DashboardScreen> {
           spacing: spacing,
           runSpacing: spacing,
           children: [
-            for (final m in metrics)
-              SizedBox(width: itemWidth, child: _buildMetricCard(m)),
+            for (int i = 0; i < metrics.length; i++)
+              FadeSlideIn(
+                delay: Duration(milliseconds: 80 + i * 50),
+                child: SizedBox(
+                  width: itemWidth,
+                  child: _buildMetricCard(metrics[i]),
+                ),
+              ),
           ],
         );
       },
@@ -290,47 +330,60 @@ class DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildMetricCard(_Metric metric) {
+    final isActive = metric.onTap != null;
     return GlassCard(
-      padding: const EdgeInsets.all(14),
-      radius: AppDesign.radiusCardSm,
+      padding: const EdgeInsets.all(20),
+      radius: AppDesign.radiusCard,
+      shadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.04),
+          blurRadius: 8,
+          offset: const Offset(0, 2),
+        ),
+      ],
+      border: Border.all(color: AppDesign.strokeStrong),
       onTap: metric.onTap,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              IconChip(icon: metric.icon, size: 30, color: metric.color),
+              IconChip(icon: metric.icon, size: 32, color: metric.color),
               const Spacer(),
-              if (metric.onTap != null)
+              if (isActive)
                 Icon(
-                  Icons.open_in_new_rounded,
-                  size: 15,
+                  CupertinoIcons.chevron_right,
+                  size: 14,
                   color: AppDesign.textFaint,
                 ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           Text(
             metric.title,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
               color: AppDesign.textLo,
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              height: 1.0,
+              letterSpacing: 0.08,
+              fontFamily: AppDesign.fontData,
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 8),
           FittedBox(
             fit: BoxFit.scaleDown,
             alignment: Alignment.centerLeft,
             child: Text(
               metric.value,
               style: TextStyle(
-                fontSize: 17,
-                fontWeight: FontWeight.w800,
-                color: AppDesign.textHi,
-                letterSpacing: -0.3,
+                fontSize: 24,
+                fontWeight: FontWeight.w700,
+                color: metric.color,
+                letterSpacing: -0.5,
+                fontFeatures: const [FontFeature.tabularFigures()],
               ),
             ),
           ),
@@ -348,5 +401,6 @@ class _Metric {
   final IconData icon;
   final Color color;
   final VoidCallback? onTap;
+
   const _Metric(this.title, this.value, this.icon, this.color, {this.onTap});
 }

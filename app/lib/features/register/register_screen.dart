@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/models/user.dart';
@@ -199,7 +200,10 @@ class RegisterScreenState extends State<RegisterScreen> {
       appBar: AppBar(
         title: const Text('Cash Register'),
         actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: loadData),
+          IconButton(
+            icon: const Icon(CupertinoIcons.arrow_clockwise),
+            onPressed: loadData,
+          ),
           const SizedBox(width: 16),
         ],
       ),
@@ -236,26 +240,26 @@ class RegisterScreenState extends State<RegisterScreen> {
               _RegStat(
                 'Today Cash Sales',
                 cashSales,
-                Icons.payments_rounded,
+                CupertinoIcons.creditcard,
                 AppDesign.success,
               ),
               _RegStat(
                 'Today Bank Sales',
                 bankSales,
-                Icons.account_balance_rounded,
-                AppDesign.blueBright,
+                CupertinoIcons.building_2_fill,
+                AppDesign.accent,
               ),
               _RegStat(
                 'Today Credits',
                 deposits,
-                Icons.south_west_rounded,
+                CupertinoIcons.arrow_down_left,
                 AppDesign.blue,
                 onTap: () => _showCashMovement('DEPOSIT'),
               ),
               _RegStat(
                 'Today Debits',
                 withdrawals,
-                Icons.north_east_rounded,
+                CupertinoIcons.arrow_up_right,
                 AppDesign.warning,
                 onTap: () => _showCashMovement('WITHDRAWAL'),
               ),
@@ -299,7 +303,7 @@ class RegisterScreenState extends State<RegisterScreen> {
       child: Row(
         children: [
           const IconChip(
-            icon: Icons.history_rounded,
+            icon: CupertinoIcons.time,
             size: 30,
             color: AppDesign.blue,
           ),
@@ -315,7 +319,7 @@ class RegisterScreenState extends State<RegisterScreen> {
             ),
           ),
           Icon(
-            Icons.chevron_right_rounded,
+            CupertinoIcons.chevron_right,
             color: AppDesign.textFaint,
             size: 20,
           ),
@@ -327,12 +331,7 @@ class RegisterScreenState extends State<RegisterScreen> {
   Widget _buildBalanceHero(int balance) {
     return GlassCard(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 22),
-      gradient: const LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [AppDesign.blueDeep, AppDesign.blue],
-      ),
-      border: Border.all(color: AppDesign.blueBright.withValues(alpha: 0.5)),
+      gradient: AppDesign.buttonGradient,
       child: Row(
         children: [
           Expanded(
@@ -359,6 +358,7 @@ class RegisterScreenState extends State<RegisterScreen> {
                       fontSize: 34,
                       fontWeight: FontWeight.w800,
                       letterSpacing: -1,
+                      fontFeatures: [FontFeature.tabularFigures()],
                     ),
                   ),
                 ),
@@ -366,7 +366,7 @@ class RegisterScreenState extends State<RegisterScreen> {
             ),
           ),
           const Icon(
-            Icons.account_balance_wallet_rounded,
+            CupertinoIcons.money_dollar_circle,
             color: Colors.white,
             size: 34,
           ),
@@ -405,6 +405,7 @@ class RegisterScreenState extends State<RegisterScreen> {
                 fontWeight: FontWeight.w800,
                 color: AppDesign.textHi,
                 letterSpacing: -0.3,
+                fontFeatures: const [FontFeature.tabularFigures()],
               ),
             ),
           ),
@@ -412,11 +413,7 @@ class RegisterScreenState extends State<RegisterScreen> {
       ),
     );
     if (stat.onTap == null) return card;
-    return InkWell(
-      onTap: _isProcessing ? null : stat.onTap,
-      borderRadius: BorderRadius.circular(AppDesign.radiusCardSm),
-      child: card,
-    );
+    return Pressable(onTap: _isProcessing ? null : stat.onTap, child: card);
   }
 
   Widget _buildPendingRequestsCard() {
@@ -430,7 +427,7 @@ class RegisterScreenState extends State<RegisterScreen> {
             Row(
               children: [
                 const Icon(
-                  Icons.pending_actions,
+                  CupertinoIcons.clock,
                   color: AppTheme.warning,
                   size: 20,
                 ),
@@ -468,9 +465,8 @@ class RegisterScreenState extends State<RegisterScreen> {
                 child: Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: Theme.of(context).scaffoldBackgroundColor,
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: Theme.of(context).dividerColor),
+                    color: AppDesign.cardSoft,
+                    borderRadius: BorderRadius.circular(12),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -668,8 +664,8 @@ class _CashMovementDialogState extends State<_CashMovementDialog> {
                                     )
                                   : Icon(
                                       _photo == null
-                                          ? Icons.add_a_photo_outlined
-                                          : Icons.photo_camera_outlined,
+                                          ? CupertinoIcons.photo_on_rectangle
+                                          : CupertinoIcons.camera,
                                     ),
                             ),
                           ),
@@ -687,7 +683,7 @@ class _CashMovementDialogState extends State<_CashMovementDialog> {
                             // Tap to remove the attached proof.
                             IconButton(
                               onPressed: () => setState(() => _photo = null),
-                              icon: const Icon(Icons.close),
+                              icon: const Icon(CupertinoIcons.xmark),
                               iconSize: 18,
                               tooltip: 'Remove photo',
                             ),
