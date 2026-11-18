@@ -315,29 +315,38 @@ class _CreatePicklistScreenState extends State<CreatePicklistScreen> {
   @override
   Widget build(BuildContext context) {
     final customerStep = _step == 0;
-    return Scaffold(
-      backgroundColor: AppDesign.bg,
-      appBar: AppBar(
-        leading: customerStep
-            ? null
-            : IconButton(
-                onPressed: _saving ? null : _back,
-                icon: const Icon(CupertinoIcons.chevron_left),
-                tooltip: 'Back to customer',
+    return PopScope(
+      // Step two is a sub-step of the same screen, but the system back button
+      // popped the whole route and lost every typed product row. Send it to
+      // step one instead, exactly like the AppBar chevron.
+      canPop: customerStep || _saving,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _back();
+      },
+      child: Scaffold(
+        backgroundColor: AppDesign.bg,
+        appBar: AppBar(
+          leading: customerStep
+              ? null
+              : IconButton(
+                  onPressed: _saving ? null : _back,
+                  icon: const Icon(CupertinoIcons.chevron_left),
+                  tooltip: 'Back to customer',
+                ),
+          title: const Text('New List'),
+          actions: [
+            Text(
+              customerStep ? 'Step 1 of 2' : 'Step 2 of 2',
+              style: TextStyle(
+                color: AppDesign.textLo,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
               ),
-        title: const Text('New List'),
-        actions: [
-          Text(
-            customerStep ? 'Step 1 of 2' : 'Step 2 of 2',
-            style: TextStyle(
-              color: AppDesign.textLo,
-              fontSize: 12.5,
-              fontWeight: FontWeight.w700,
             ),
-          ),
-          const SizedBox(width: 20),
-        ],
-      ),
+            const SizedBox(width: 20),
+          ],
+        ),
       body: AppBackground(
         child: Column(
           children: [
@@ -347,6 +356,7 @@ class _CreatePicklistScreenState extends State<CreatePicklistScreen> {
             _buildFooter(),
           ],
         ),
+      ),
       ),
     );
   }

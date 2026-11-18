@@ -64,6 +64,14 @@ class SalesScreenState extends State<SalesScreen> {
     }
   }
 
+  /// The POS header's refresh action and the shell's tab hook: re-read the
+  /// tally and make sure the shift is still open. The tally used to refresh
+  /// only after a recorded sale, so landing on a stale tab showed yesterday's
+  /// numbers until the next sale.
+  Future<void> refresh() async {
+    await Future.wait<void>([loadShift(), _loadTodayStats()]);
+  }
+
   /// Guarantees a perpetual open shift so a sale can always be recorded. Safe
   /// to call again from the shell's refresh hook (it is idempotent).
   Future<void> loadShift() async {
@@ -90,28 +98,36 @@ class SalesScreenState extends State<SalesScreen> {
     return showCupertinoModalPopup<T>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => CupertinoTheme(
-        data: CupertinoThemeData(brightness: Theme.of(context).brightness),
-        child: Align(
-          alignment: Alignment.bottomCenter,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 560),
-            child: Container(
-              decoration: BoxDecoration(
-                color: AppDesign.card,
-                borderRadius: const BorderRadius.vertical(
-                  top: Radius.circular(28),
+      builder: (context) => PopScope(
+        // barrierDismissible only blocks taps on the scrim. The Android back
+        // button still popped the route and threw the typed sale away, so the
+        // sheet opts out too and leaves Cancel as the single, deliberate way
+        // out.
+        canPop: false,
+        child: CupertinoTheme(
+          data: CupertinoThemeData(brightness: Theme.of(context).brightness),
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: AppDesign.card,
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(28),
+                  ),
+                  boxShadow: AppDesign.cardShadow(),
                 ),
-                boxShadow: AppDesign.cardShadow(),
-              ),
-              clipBehavior: Clip.antiAlias,
-              // The sheet body is Material (TextField, SnackBar, chips), but a
-              // Cupertino modal popup supplies no Material ancestor. Without
-              // this the New Sale sheet throws "No Material widget found" the
-              // moment it opens. Transparency keeps the sheet colour above.
-              child: Material(
-                type: MaterialType.transparency,
-                child: SafeArea(top: false, child: child),
+                clipBehavior: Clip.antiAlias,
+                // The sheet body is Material (TextField, SnackBar, chips), but
+                // a Cupertino modal popup supplies no Material ancestor.
+                // Without this the New Sale sheet throws "No Material widget
+                // found" the moment it opens. Transparency keeps the sheet
+                // colour above.
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: SafeArea(top: false, child: child),
+                ),
               ),
             ),
           ),
@@ -206,78 +222,91 @@ class SalesScreenState extends State<SalesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return AppBackground(
-      child: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: FadeSlideIn(
-            child: GlassCard(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 32,
-                  vertical: 40,
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Today's tally — quiet context above the one action.
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _todayStat(
-                            'Sales today',
-                            '${_todayStats['sales_count'] ?? 0}',
+    return Scaffold(
+      backgroundColor: AppDesign.bg,
+      appBar: AppBar(
+        title: const Text('Point of Sale'),
+        actions: [
+          IconButton(
+            icon: const Icon(CupertinoIcons.arrow_clockwise),
+            onPressed: refresh,
+          ),
+          const SizedBox(width: 16),
+        ],
+      ),
+      body: AppBackground(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: FadeSlideIn(
+              child: GlassCard(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 32,
+                    vertical: 40,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Today's tally — quiet context above the one action.
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _todayStat(
+                              'Sales today',
+                              '${_todayStats['sales_count'] ?? 0}',
+                            ),
                           ),
-                        ),
-                        Container(
-                          width: 1,
-                          height: 30,
-                          color: AppDesign.stroke,
-                        ),
-                        Expanded(
-                          child: _todayStat(
-                            "Today's total",
-                            MoneyUtils.formatBr(_todayStats['revenue'] ?? 0),
+                          Container(
+                            width: 1,
+                            height: 30,
+                            color: AppDesign.stroke,
                           ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 28),
-                    // The + circle is the one and only action: tap it to
-                    // ring up a sale. No labels, no descriptions.
-                    CupertinoButton(
-                      padding: EdgeInsets.zero,
-                      color: AppDesign.blue,
-                      disabledColor: AppDesign.blue.withValues(alpha: 0.4),
-                      borderRadius: BorderRadius.circular(44),
-                      onPressed: _isProcessing ? null : _newSale,
-                      child: SizedBox(
-                        width: 88,
-                        height: 88,
-                        child: Center(
-                          child: AnimatedSwitcher(
-                            duration: const Duration(milliseconds: 180),
-                            child: _isProcessing
-                                ? const SizedBox(
-                                    key: ValueKey('spinner'),
-                                    width: 34,
-                                    height: 34,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 3,
+                          Expanded(
+                            child: _todayStat(
+                              "Today's total",
+                              MoneyUtils.formatBr(_todayStats['revenue'] ?? 0),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 28),
+                      // The + circle is the one and only action: tap it to
+                      // ring up a sale. No labels, no descriptions.
+                      CupertinoButton(
+                        padding: EdgeInsets.zero,
+                        color: AppDesign.blue,
+                        disabledColor: AppDesign.blue.withValues(alpha: 0.4),
+                        borderRadius: BorderRadius.circular(44),
+                        onPressed: _isProcessing ? null : _newSale,
+                        child: SizedBox(
+                          width: 88,
+                          height: 88,
+                          child: Center(
+                            child: AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 180),
+                              child: _isProcessing
+                                  ? const SizedBox(
+                                      key: ValueKey('spinner'),
+                                      width: 34,
+                                      height: 34,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 3,
+                                        color: AppDesign.onBlue,
+                                      ),
+                                    )
+                                  : const Icon(
+                                      key: ValueKey('plus'),
+                                      CupertinoIcons.plus,
+                                      size: 48,
                                       color: AppDesign.onBlue,
                                     ),
-                                  )
-                                : const Icon(
-                                    key: ValueKey('plus'),
-                                    CupertinoIcons.plus,
-                                    size: 48,
-                                    color: AppDesign.onBlue,
-                                  ),
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),

@@ -575,6 +575,51 @@ class TrendChip extends StatelessWidget {
   }
 }
 
+/// The letter shown inside an account avatar.
+///
+/// Till identities are phone numbers, so the first character is usually a
+/// digit -- "0" reads as a broken counter, not a person. Digits and the
+/// punctuation of a formatted phone number fall back to a person glyph; any
+/// real letter (Amharic included) is a meaningful initial.
+///
+/// Lives here rather than in a shell: the native shell (main.dart) and the web
+/// shell (app_shell.dart) each draw their own sidebar.
+class IdentityAvatar extends StatelessWidget {
+  final String identity;
+  final double fontSize;
+
+  const IdentityAvatar({
+    super.key,
+    required this.identity,
+    this.fontSize = 13,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final trimmed = identity.trim();
+    final first = trimmed.isEmpty ? '' : trimmed[0];
+    final initial = RegExp(r'[0-9+\-()\s]').hasMatch(first)
+        ? null
+        : first.toUpperCase();
+
+    if (initial == null) {
+      return Icon(
+        CupertinoIcons.person_fill,
+        size: fontSize + 4,
+        color: AppDesign.onBlue,
+      );
+    }
+    return Text(
+      initial,
+      style: TextStyle(
+        color: AppDesign.onBlue,
+        fontWeight: FontWeight.w700,
+        fontSize: fontSize,
+      ),
+    );
+  }
+}
+
 /// Section header with an optional trailing "View all" action.
 class SectionHeader extends StatelessWidget {
   final String title;
@@ -802,13 +847,20 @@ class IosLargeTitle {
     BuildContext context, {
     required String title,
     List<Widget> actions = const [],
+    bool? showBackButton,
   }) {
+    // Pushed screens built on this header (Register History, Sales by Day,
+    // Audit) had no way out but the system back button. iOS puts a back
+    // chevron in the nav zone, so imply one whenever this route can pop --
+    // tab screens sit at the root, so they stay clean.
+    final canPop = showBackButton ?? Navigator.of(context).canPop();
     return SliverPersistentHeader(
       pinned: true,
       delegate: _IosLargeTitleDelegate(
         title: title,
         actions: actions,
         topPad: MediaQuery.paddingOf(context).top,
+        onBack: canPop ? () => Navigator.of(context).maybePop() : null,
       ),
     );
   }
@@ -819,11 +871,15 @@ class _IosLargeTitleDelegate extends SliverPersistentHeaderDelegate {
     required this.title,
     required this.actions,
     required this.topPad,
+    this.onBack,
   });
 
   final String title;
   final List<Widget> actions;
   final double topPad;
+
+  /// Non-null when this route can pop; draws the iOS back chevron.
+  final VoidCallback? onBack;
 
   static const double _navH = IosLargeTitle._navHeight;
   static const double _largeH = IosLargeTitle._largeHeight;
@@ -866,9 +922,25 @@ class _IosLargeTitleDelegate extends SliverPersistentHeaderDelegate {
             height: _navH + _largeH,
             child: Stack(
               children: [
+                // Back chevron for pushed routes, in the nav zone above the
+                // large title (iOS keeps the large title at the margin).
+                if (onBack != null)
+                  Positioned(
+                    left: 4,
+                    top: 0,
+                    height: _navH,
+                    child: IconButton(
+                      tooltip: MaterialLocalizations.of(
+                        context,
+                      ).backButtonTooltip,
+                      icon: const Icon(CupertinoIcons.chevron_back),
+                      color: AppDesign.accent,
+                      onPressed: onBack,
+                    ),
+                  ),
                 // Small collapsed title, left-aligned like the old AppBar.
                 Positioned(
-                  left: 16,
+                  left: onBack != null ? 48 : 16,
                   right: 72,
                   top: 0,
                   height: _navH,

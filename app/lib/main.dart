@@ -677,7 +677,7 @@ class _MainLayoutState extends State<MainLayout> {
     _registerKey.currentState?.loadData(silent: true);
     _dashboardKey.currentState?.loadDashboard(silent: true);
     _reportsKey.currentState?.loadReports();
-    _salesKey.currentState?.loadShift();
+    _salesKey.currentState?.refresh();
     _financeKey.currentState?.load(silent: true);
     _warehouseKey.currentState?.refresh(silent: true);
   }
@@ -695,7 +695,7 @@ class _MainLayoutState extends State<MainLayout> {
       case 'dashboard':
         _dashboardKey.currentState?.loadDashboard(silent: silent);
       case 'pos':
-        _salesKey.currentState?.loadShift();
+        _salesKey.currentState?.refresh();
       case 'register':
         _registerKey.currentState?.loadData(silent: silent);
       case 'finance':
@@ -705,6 +705,22 @@ class _MainLayoutState extends State<MainLayout> {
       case 'reports':
         _reportsKey.currentState?.loadReports();
     }
+  }
+
+  /// Android's system back used to close the app from any tab. Treat it as
+  /// "return to the first tab" instead, and only let the system exit from
+  /// there. Wrapped around the tab content so a pushed route or an open sheet
+  /// keeps its own, normal back behaviour.
+  Widget _backGuard(Widget child) {
+    return PopScope(
+      canPop: _selectedIndex == 0,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        setState(() => _selectedIndex = 0);
+        _loadScreen(0, silent: true);
+      },
+      child: child,
+    );
   }
 
   @override
@@ -870,7 +886,9 @@ class _MainLayoutState extends State<MainLayout> {
               title: Text(title),
             ),
             drawer: _buildDrawer(context, drawerItems),
-            body: IndexedStack(index: _selectedIndex, children: screens),
+            body: _backGuard(
+              IndexedStack(index: _selectedIndex, children: screens),
+            ),
             bottomNavigationBar: _mobilePillNav(pillItems),
           );
         }
@@ -949,16 +967,9 @@ class _MainLayoutState extends State<MainLayout> {
                                 color: AppDesign.blue,
                               ),
                               child: Center(
-                                child: Text(
-                                  widget.currentUser.username.isEmpty
-                                      ? '?'
-                                      : widget.currentUser.username[0]
-                                            .toUpperCase(),
-                                  style: const TextStyle(
-                                    color: AppDesign.onBlue,
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 13,
-                                  ),
+                                child: IdentityAvatar(
+                                  identity: widget.currentUser.username,
+                                  fontSize: 13,
                                 ),
                               ),
                             ),
@@ -998,7 +1009,9 @@ class _MainLayoutState extends State<MainLayout> {
                 ),
               ),
               Expanded(
-                child: IndexedStack(index: _selectedIndex, children: screens),
+                child: _backGuard(
+                  IndexedStack(index: _selectedIndex, children: screens),
+                ),
               ),
             ],
           ),
@@ -1134,12 +1147,10 @@ class _MainLayoutState extends State<MainLayout> {
                   CircleAvatar(
                     radius: 18,
                     backgroundColor: AppDesign.blue,
-                    child: Text(
-                      widget.currentUser.username.isEmpty
-                          ? '?'
-                          : widget.currentUser.username[0].toUpperCase(),
-                      style: TextStyle(
-                        color: AppDesign.onBlue,
+                    child: Center(
+                      child: IdentityAvatar(
+                        identity: widget.currentUser.username,
+                        fontSize: 13,
                       ),
                     ),
                   ),

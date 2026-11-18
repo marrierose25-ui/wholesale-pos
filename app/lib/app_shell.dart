@@ -361,7 +361,7 @@ class _MainScaffoldState extends State<MainScaffold>
   /// currentState) is simply skipped.
   void _refreshDataScreens() {
     _dashboardKey.currentState?.loadDashboard(silent: true);
-    _salesKey.currentState?.loadShift();
+    _salesKey.currentState?.refresh();
     _registerKey.currentState?.loadData(silent: true);
     _financeKey.currentState?.load(silent: true);
     _warehouseKey.currentState?.refresh(silent: true);
@@ -376,7 +376,7 @@ class _MainScaffoldState extends State<MainScaffold>
       case 'dashboard':
         _dashboardKey.currentState?.loadDashboard(silent: silent);
       case 'pos':
-        _salesKey.currentState?.loadShift();
+        _salesKey.currentState?.refresh();
       case 'register':
         _registerKey.currentState?.loadData(silent: silent);
       case 'finance':
@@ -393,6 +393,21 @@ class _MainScaffoldState extends State<MainScaffold>
   void _selectTab(int index) {
     setState(() => _selectedIndex = index);
     _loadScreen(index, silent: true);
+  }
+
+  /// Android's system back used to close the app from any tab. Treat it as
+  /// "return to the first tab" instead, and only let the system exit from
+  /// there. Wrapped around the tab content so a pushed route or an open sheet
+  /// keeps its own, normal back behaviour.
+  Widget _backGuard(Widget child) {
+    return PopScope(
+      canPop: _selectedIndex == 0,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _selectTab(0);
+      },
+      child: child,
+    );
   }
 
   @override
@@ -546,7 +561,7 @@ class _MainScaffoldState extends State<MainScaffold>
               title: Text(title),
             ),
             drawer: _buildDrawer(context, drawerItems),
-            body: _tabSwitcher(screens),
+            body: _backGuard(_tabSwitcher(screens)),
             bottomNavigationBar: _mobilePillNav(pillItems),
           );
         }
@@ -630,7 +645,7 @@ class _MainScaffoldState extends State<MainScaffold>
                                 color: AppDesign.blue,
                               ),
                               child: Center(
-                                child: _AvatarContent(
+                                child: IdentityAvatar(
                                   identity: widget.currentUser.username,
                                   fontSize: 13,
                                 ),
@@ -672,7 +687,7 @@ class _MainScaffoldState extends State<MainScaffold>
                   ],
                 ),
               ),
-              Expanded(child: _tabSwitcher(screens)),
+              Expanded(child: _backGuard(_tabSwitcher(screens))),
             ],
           ),
         );
@@ -823,7 +838,7 @@ class _MainScaffoldState extends State<MainScaffold>
                       color: AppDesign.blue,
                     ),
                     child: Center(
-                      child: _AvatarContent(
+                      child: IdentityAvatar(
                         identity: widget.currentUser.username,
                         fontSize: 14,
                       ),
@@ -885,46 +900,6 @@ class _MainScaffoldState extends State<MainScaffold>
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-/// The letter shown inside an account avatar.
-///
-/// Till identities are phone numbers, so the first character is usually a
-/// digit -- "0" reads as a broken counter, not a person. Digits and the
-/// punctuation of a formatted phone number fall back to a person glyph; any
-/// real letter (Amharic included) is a meaningful initial.
-class _AvatarContent extends StatelessWidget {
-  final String identity;
-  final double fontSize;
-
-  const _AvatarContent({required this.identity, required this.fontSize});
-
-  @override
-  Widget build(BuildContext context) {
-    final trimmed = identity.trim();
-    // A phone login starts with a digit (or +, -, "(" from a formatted
-    // number); none of those make a meaningful initial in any script.
-    final first = trimmed.isEmpty ? '' : trimmed[0];
-    final initial = RegExp(r'[0-9+\-()\s]').hasMatch(first)
-        ? null
-        : first.toUpperCase();
-
-    if (initial == null) {
-      return Icon(
-        CupertinoIcons.person_fill,
-        size: fontSize + 4,
-        color: AppDesign.onBlue,
-      );
-    }
-    return Text(
-      initial,
-      style: TextStyle(
-        color: AppDesign.onBlue,
-        fontWeight: FontWeight.w700,
-        fontSize: fontSize,
       ),
     );
   }

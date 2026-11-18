@@ -247,28 +247,38 @@ class DashboardScreenState extends State<DashboardScreen> {
                   ),
                 ),
               ),
-              if (_prevRevenue > 0) TrendChip(percent: pct),
             ],
           ),
           const SizedBox(height: 16),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerLeft,
-            child: Text(
-              MoneyUtils.formatBr(revenue),
-              style: TextStyle(
-                color: AppDesign.textHi,
-                fontSize: 42,
-                fontWeight: FontWeight.w700,
-                letterSpacing: -1,
-                fontFeatures: const [FontFeature.tabularFigures()],
+          // The figure and its trend share one baseline, so a wide card reads
+          // as a single hero line instead of a number stranded on the left.
+          // The selected period is already named by the chip above the card,
+          // so it is not repeated underneath.
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    MoneyUtils.formatBr(revenue),
+                    style: TextStyle(
+                      color: AppDesign.textHi,
+                      fontSize: 52,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -1.4,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                ),
               ),
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            _period.label,
-            style: TextStyle(color: AppDesign.textLo, fontSize: 12),
+              if (_prevRevenue > 0)
+                Padding(
+                  padding: const EdgeInsets.only(left: 12, bottom: 10),
+                  child: TrendChip(percent: pct),
+                ),
+            ],
           ),
         ],
       ),
