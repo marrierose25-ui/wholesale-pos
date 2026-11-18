@@ -255,6 +255,7 @@ class FinanceOverviewScreenState extends State<FinanceOverviewScreen> {
               ),
       ),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'fab-add-finance-person',
         onPressed: _showAddPersonDialog,
         icon: const Icon(CupertinoIcons.person_badge_plus),
         label: const Text('Add Person'),

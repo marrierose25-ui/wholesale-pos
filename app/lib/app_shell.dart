@@ -630,16 +630,9 @@ class _MainScaffoldState extends State<MainScaffold>
                                 color: AppDesign.blue,
                               ),
                               child: Center(
-                                child: Text(
-                                  widget.currentUser.username.isEmpty
-                                      ? '?'
-                                      : widget.currentUser.username[0]
-                                            .toUpperCase(),
-                                  style: const TextStyle(
-                                    color: AppDesign.onBlue,
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 13,
-                                  ),
+                                child: _AvatarContent(
+                                  identity: widget.currentUser.username,
+                                  fontSize: 13,
                                 ),
                               ),
                             ),
@@ -830,15 +823,9 @@ class _MainScaffoldState extends State<MainScaffold>
                       color: AppDesign.blue,
                     ),
                     child: Center(
-                      child: Text(
-                        widget.currentUser.username.isEmpty
-                            ? '?'
-                            : widget.currentUser.username[0].toUpperCase(),
-                        style: const TextStyle(
-                          color: AppDesign.onBlue,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 14,
-                        ),
+                      child: _AvatarContent(
+                        identity: widget.currentUser.username,
+                        fontSize: 14,
                       ),
                     ),
                   ),
@@ -898,6 +885,46 @@ class _MainScaffoldState extends State<MainScaffold>
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// The letter shown inside an account avatar.
+///
+/// Till identities are phone numbers, so the first character is usually a
+/// digit -- "0" reads as a broken counter, not a person. Digits and the
+/// punctuation of a formatted phone number fall back to a person glyph; any
+/// real letter (Amharic included) is a meaningful initial.
+class _AvatarContent extends StatelessWidget {
+  final String identity;
+  final double fontSize;
+
+  const _AvatarContent({required this.identity, required this.fontSize});
+
+  @override
+  Widget build(BuildContext context) {
+    final trimmed = identity.trim();
+    // A phone login starts with a digit (or +, -, "(" from a formatted
+    // number); none of those make a meaningful initial in any script.
+    final first = trimmed.isEmpty ? '' : trimmed[0];
+    final initial = RegExp(r'[0-9+\-()\s]').hasMatch(first)
+        ? null
+        : first.toUpperCase();
+
+    if (initial == null) {
+      return Icon(
+        CupertinoIcons.person_fill,
+        size: fontSize + 4,
+        color: AppDesign.onBlue,
+      );
+    }
+    return Text(
+      initial,
+      style: TextStyle(
+        color: AppDesign.onBlue,
+        fontWeight: FontWeight.w700,
+        fontSize: fontSize,
       ),
     );
   }

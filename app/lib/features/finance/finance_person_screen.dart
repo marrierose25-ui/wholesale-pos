@@ -277,6 +277,7 @@ class _FinancePersonScreenState extends State<FinancePersonScreen> {
         ),
       ),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'fab-add-finance-entry',
         onPressed: () => _showAddEntryDialog(),
         icon: const Icon(CupertinoIcons.plus),
         label: const Text('Add Entry'),

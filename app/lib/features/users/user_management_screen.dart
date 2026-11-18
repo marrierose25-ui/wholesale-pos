@@ -331,6 +331,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         ),
       ),
       floatingActionButton: FloatingActionButton.extended(
+        // Explicit tag: the shell keeps every tab mounted in one IndexedStack,
+        // so all FABs share a route subtree and the default tag collides.
+        heroTag: 'fab-add-user',
         onPressed: _showAddUserDialog,
         icon: const Icon(CupertinoIcons.person_badge_plus),
         label: const Text('Add User'),
