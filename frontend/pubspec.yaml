@@ -88,6 +88,8 @@ dependencies:
   # The TTFs are bundled under assets/fonts and declared below, so no runtime
   # fetch or google_fonts dependency is involved.
 dev_dependencies:
+  integration_test:
+    sdk: flutter
   flutter_test:
     sdk: flutter
 
@@ -114,6 +116,7 @@ flutter:
 
   assets:
     - assets/sounds/warehouse_alert.wav
+    - integration_test/fixtures/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

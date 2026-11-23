@@ -46,3 +46,55 @@ jobs:
       # never distributed.
       - name: Build web (PWA entry point)
         run: flutter build web --release -t lib/main_web.dart
+
+  # Stage 0: native SQLite verification. FFI tests cannot prove the sqflite
+  # plugin path on Android/iOS; these jobs run the same migration/downgrade
+  # suite on real emulator/simulator SQLite. Synthetic fixture only.
+  android-database:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Resolve dependencies
+        run: flutter pub get
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Android database integration tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          working-directory: ./frontend
+          script: flutter test integration_test -d emulator-5554
+
+  ios-database:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: ./frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Resolve dependencies
+        run: flutter pub get
+      - name: iOS database integration tests
+        run: |
+          flutter build ios --simulator --no-codesign
+          flutter test integration_test -d "iPhone 15"
