@@ -1,0 +1,23 @@
+{
+  "schema_version": 17,
+  "source_commit": "ecda9ef",
+  "source_path": "app/lib/core/database/local_database.dart",
+  "provenance": "Verbatim `_onCreate` of schema v17.",
+  "tables": [
+    "audit_logs",
+    "cash_movement_photos",
+    "cash_movements",
+    "counters",
+    "devices",
+    "finance_categories",
+    "finance_entries",
+    "products",
+    "sale_items",
+    "sales",
+    "settings",
+    "shifts",
+    "sync_outbox",
+    "users",
+    "void_requests"
+  ]
+}

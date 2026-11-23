@@ -32,7 +32,14 @@ void main() {
     sqfliteFfiInit();
   });
 
-  final allVersions = <int>[2, 3, 4, 5, 12, 19, 20, 21, 22];
+  // Every schema version that was actually stamped by a shipped build has a
+  // fixture. v1 predates the first commit and v5/v7/v11/v18 were never
+  // released as a schemaVersion — those upgrade boundaries are exercised by
+  // the neighbouring fixtures instead (see fixtures README and the migration
+  // log).
+  final allVersions = <int>[
+    2, 3, 4, 5, 6, 8, 9, 10, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22,
+  ];
   final upgradeableVersions = allVersions;
 
   for (final version in allVersions) {
@@ -179,7 +186,7 @@ Future<void> _expectPreMigrationData(int version, String path) async {
     final items = await db.query('sale_items');
     expect(items, hasLength(2));
 
-    if (version < 12) {
+    if (version < 8) {
       expect(
         (await db.rawQuery('PRAGMA table_info(sale_items)'))
             .map((row) => row['name']),
@@ -281,7 +288,7 @@ Future<void> _expectHistoricalDataPreserved(int version, Database db) async {
   expect(item1['quantity_text'], '2');
   expect(item1['billing_quantity_milliunits'], 2000);
   expect(item1['line_total_minor_units'], 24000);
-  if (version < 12) {
+  if (version < 8) {
     expect(item1['notes'], isNull);
   } else {
     expect(
@@ -311,7 +318,7 @@ Future<void> _expectHistoricalDataPreserved(int version, Database db) async {
       version >= 5 ? 'U-owner' : isNull,
       reason: 'v$version user_id',
     );
-    if (version >= 19) {
+    if (version >= 17) {
       expect(movement2['source_finance_entry_id'], 'FE-2');
     } else {
       expect(movement2['source_finance_entry_id'], isNull);
@@ -327,7 +334,7 @@ Future<void> _expectHistoricalDataPreserved(int version, Database db) async {
 
   // Proof photos: schema 16 moves base64 TEXT into the BLOB table.
   final photos = await db.query('cash_movement_photos');
-  if (version >= 19) {
+  if (version >= 16) {
     expect(photos, hasLength(1));
     expect(photos.single['movement_id'], 'CM-2');
     expect(photos.single['jpeg_bytes'], isA<List<int>>());
@@ -340,7 +347,7 @@ Future<void> _expectHistoricalDataPreserved(int version, Database db) async {
   final categories = await db.query('finance_categories', orderBy: 'id');
   final entries = await db.query('finance_entries', orderBy: 'id');
   final voidRequests = await db.query('void_requests', orderBy: 'id');
-  if (version < 12) {
+  if (version < 8) {
     expect(categories, isEmpty);
     expect(entries, isEmpty);
     expect(voidRequests, isEmpty);
@@ -348,12 +355,17 @@ Future<void> _expectHistoricalDataPreserved(int version, Database db) async {
     expect(categories, hasLength(2));
     expect(
       categories.firstWhere((row) => row['id'] == 'FC-2')['deleted_at'],
-      '2024-02-01T00:00:00.000Z',
+      version >= 10 ? '2024-02-01T00:00:00.000Z' : isNull,
+      reason: 'v$version category tombstone',
     );
     expect(entries, hasLength(2));
     final completed = entries.firstWhere((row) => row['id'] == 'FE-2');
     expect(completed['status'], 'COMPLETED');
-    expect(completed['payment_method'], 'CASH');
+    expect(
+      completed['payment_method'],
+      version >= 10 ? 'CASH' : isNull,
+      reason: 'v$version payment_method',
+    );
     expect(voidRequests, hasLength(1));
     expect(voidRequests.single['status'], 'APPROVED');
   }
@@ -364,7 +376,7 @@ Future<void> _expectHistoricalDataPreserved(int version, Database db) async {
     for (final row in await db.query('settings'))
       row['key'] as String: row['value'],
   };
-  if (version < 12) {
+  if (version < 6) {
     expect(settings, isEmpty);
   } else {
     expect(settings['theme_mode'], 'dark');
@@ -373,7 +385,7 @@ Future<void> _expectHistoricalDataPreserved(int version, Database db) async {
     expect(settings['legacy_probe'], 'preserved-through-migration');
   }
   final outbox = await db.query('sync_outbox', orderBy: 'id');
-  if (version < 12) {
+  if (version < 9) {
     expect(outbox, isEmpty);
   } else {
     expect(outbox, hasLength(2));
@@ -381,7 +393,7 @@ Future<void> _expectHistoricalDataPreserved(int version, Database db) async {
     expect(outbox.last['synced_at'], isNull);
   }
   final counters = await db.query('counters');
-  if (version < 12) {
+  if (version < 6) {
     expect(counters, isEmpty);
   } else {
     expect(counters.single['name'], 'receipt_number');

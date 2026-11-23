@@ -166,7 +166,7 @@ created the table) was repaired by gating each index on verified table
 existence inside `_createIndexesAndTriggers`; deferred indexes are created by
 the later step that creates their table, all inside the same atomic
 transaction. `frontend/test/core/database/historical_fixture_migration_test.dart`
-exercises genuine v2, v3, v4, v5, v12, v19, v20, v21 and v22 fixture files.
+exercises every shipped schema version — v2 through v22 minus the never-released v7, v11 and v18 (v1 predates the first commit; v5 is a documented reconstruction) — via genuine and reconstructed fixture files.
 
 **Downgrade protection:** if the on-disk `user_version` is newer than this
 build's `schemaVersion`, the open is refused with

@@ -13,6 +13,15 @@ preserved pre-v6 upgrade limitation.
 | `v3/` | `wholesale_pos.db` | Verbatim v3 schema with representative history. |
 | `v4/` | `wholesale_pos.db` | Verbatim v4. |
 | `v5/` | `wholesale_pos.db` | Reconstructed v5 (v4 `_onCreate` + the v5 upgrade DDL from ea2dc36; see `fixture.json`). |
+| `v6/` | `wholesale_pos.db` | Verbatim v6. |
+| `v8/` | `wholesale_pos.db` | Verbatim v8. |
+| `v9/` | `wholesale_pos.db` | Verbatim v9. |
+| `v10/` | `wholesale_pos.db` | Verbatim v10. |
+| `v13/` | `wholesale_pos.db` | Verbatim v13. |
+| `v14/` | `wholesale_pos.db` | Verbatim v14. |
+| `v15/` | `wholesale_pos.db` | Verbatim v15. |
+| `v16/` | `wholesale_pos.db` | Verbatim v16. |
+| `v17/` | `wholesale_pos.db` | Verbatim v17. |
 | `v12/` | `wholesale_pos.db` | Verbatim v12. |
 | `v19/` | `wholesale_pos.db` | Verbatim v19. |
 | `v20/` | `wholesale_pos.db` | Verbatim v20. |
@@ -57,7 +66,15 @@ commit; the DDL source is the historical commit named in `fixture.json`.
    index only when its table exists, and later upgrade steps create the
    deferred ones inside the same atomic transaction. `v2`, `v3`, `v4` and the
    reconstructed `v5` all reach the current `schemaVersion`.
-4. Upgradeable versions for the current build: `2, 3, 4, 5, 12, 19, 20, 21, 22`.
+4. Upgradeable versions for the current build: `2, 3, 4, 5, 6, 8, 9, 10,
+   12, 13, 14, 15, 16, 17, 19, 20, 21, 22` — every schema version a shipped
+   build ever stamped.
+5. Never-shipped versions have no fixture and need none: **v1** predates the
+   first commit (its shape is unknowable), and **v5, v7, v11, v18** were never
+   released as a `schemaVersion` — the migration steps that carry those
+   numbers run inside the neighbouring fixtures' upgrade chains (e.g. the v6
+   fixture passes through `<7`, the v10 fixture through `<11`, the v17
+   fixture through `<18`).
 
 ## Golden snapshots
 
@@ -67,8 +84,8 @@ never from a hand-edited file.
 
 - `fresh_v23.json` — fresh install shape (18 tables).
 - `v<version>_pre.json` — each fixture's pre-migration shape (now includes `v5_pre`).
-- `v{2,3,4,5,12,19,20,21,22}_post.json` — post-migration shape.
-- `fresh_vs_upgraded_v{2,3,4,5,12,19,20,21,22}.json` — frozen difference lists
+- `v{2,3,4,5,6,8,9,10,12,13,14,15,16,17,19,20,21,22}_post.json` — post-migration shape.
+- `fresh_vs_upgraded_v{2,3,4,5,6,8,9,10,12,13,14,15,16,17,19,20,21,22}.json` — frozen difference lists
   (physical column order and `sqlite_master.sql` text are recorded, not fixed).
 
 Regenerate deliberately:

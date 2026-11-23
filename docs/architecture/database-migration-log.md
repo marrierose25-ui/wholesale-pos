@@ -269,7 +269,11 @@ behaviour.
   `IF NOT EXISTS`, matching the rest of the chain, so a mis-stamped database
   cannot fail recreation.
 
-Current coverage: `historical_fixture_migration_test.dart` exercises v2, v3,
-v4, v5, v12, v19, v20, v21 and v22 fixtures through the real
-`LocalDatabase.openAt`; `downgrade_protection_test.dart` covers the
-newer-version refusal; goldens were regenerated for schema v23.
+Current coverage: `historical_fixture_migration_test.dart` exercises every
+schema version a shipped build ever stamped — v2, v3, v4, v5 (reconstructed),
+v6, v8, v9, v10, v12, v13, v14, v15, v16, v17, v19, v20, v21 and v22 —
+through the real `LocalDatabase.openAt`. v1 predates the first commit and
+v5/v7/v11/v18 were never released as a `schemaVersion`; their migration
+steps are covered inside the neighbouring fixtures' upgrade chains.
+`downgrade_protection_test.dart` covers the newer-version refusal; goldens
+were regenerated for schema v23.

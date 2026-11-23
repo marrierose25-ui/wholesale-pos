@@ -19,7 +19,16 @@ v5   reconstructed: the v4 `_onCreate` plus the v5 upgrade DDL recorded in
      ea2dc36's `_onUpgrade` (`oldVersion < 5` block). No commit ever stamped
      `schemaVersion = 5`, so — like v2 — this is an evidence-based
      reconstruction, not a verbatim file.
+v6   ea2dc36 (`schemaVersion = 6`) `_onCreate`
+v8   3697555 (`schemaVersion = 8`) `_onCreate`
+v9   0f149ae (`schemaVersion = 9`) `_onCreate`
+v10  1fbfdea (`schemaVersion = 10`) `_onCreate`
 v12  485c96e (`schemaVersion = 12`) `_onCreate`
+v13  7be6f5e (`schemaVersion = 13`) `_onCreate`
+v14  e384e32 (`schemaVersion = 14`) `_onCreate`
+v15  516f1be (`schemaVersion = 15`) `_onCreate`
+v16  1915388 (`schemaVersion = 16`) `_onCreate`
+v17  ecda9ef (`schemaVersion = 17`) `_onCreate`
 v19  cc45662 (`schemaVersion = 19`) `_onCreate`
 v20  0444604 (`schemaVersion = 20`) `_onCreate`
 v21  e82123a (`schemaVersion = 21`) `_onCreate`
@@ -68,7 +77,16 @@ FIXTURE_SOURCES = {
         "index, prevent_second_open_shift triggers, sales_shift_id "
         "index). No commit ever set schemaVersion = 5.",
     ),
+    6: ("ea2dc36", "Verbatim `_onCreate` of schema v6."),
+    8: ("3697555", "Verbatim `_onCreate` of schema v8."),
+    9: ("0f149ae", "Verbatim `_onCreate` of schema v9."),
+    10: ("1fbfdea", "Verbatim `_onCreate` of schema v10."),
     12: ("485c96e", "Verbatim `_onCreate` of schema v12."),
+    13: ("7be6f5e", "Verbatim `_onCreate` of schema v13."),
+    14: ("e384e32", "Verbatim `_onCreate` of schema v14."),
+    15: ("516f1be", "Verbatim `_onCreate` of schema v15."),
+    16: ("1915388", "Verbatim `_onCreate` of schema v16."),
+    17: ("ecda9ef", "Verbatim `_onCreate` of schema v17."),
     19: ("cc45662", "Verbatim `_onCreate` of schema v19."),
     20: ("0444604", "Verbatim `_onCreate` of schema v20."),
     21: ("e82123a", "Verbatim `_onCreate` of schema v21."),
