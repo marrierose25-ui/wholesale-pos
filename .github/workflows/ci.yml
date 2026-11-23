@@ -82,7 +82,7 @@ jobs:
           script: flutter test integration_test -d emulator-5554
 
   ios-database:
-    runs-on: macos-14
+    runs-on: macos-15
     defaults:
       run:
         working-directory: ./frontend
@@ -99,7 +99,26 @@ jobs:
       # inside the simulator — the same code path CI uses on Linux/Windows.
       - name: POSIX interrupted-migration test (host)
         run: flutter test test/core/database/interrupted_migration_test.dart --reporter expanded
+      # Simulator images change between runner releases, so the device is
+      # discovered at runtime instead of hardcoded. macOS 15 ships iPhone 16
+      # simulators; fail loudly (printing the available list above) if no
+      # iPhone 16 device exists rather than silently skipping the test.
       - name: iOS database integration tests
         run: |
+          xcodebuild -version
+          xcrun simctl list devices available
+          UDID=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          for runtime, devs in devices.items():
+              for d in devs:
+                  if d.get("isAvailable") and d.get("name", "").startswith("iPhone 16"):
+                      print(d["udid"])
+                      sys.exit(0)
+          sys.exit("No available iPhone 16 simulator found")
+          ')
+          echo "Using simulator UDID: $UDID"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
           flutter build ios --simulator --no-codesign
-          flutter test integration_test -d "iPhone 15"
+          flutter test integration_test -d "$UDID"
