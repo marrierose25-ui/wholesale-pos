@@ -1,0 +1,16 @@
+name: pos_contracts
+description: Platform-independent backend contracts and interfaces for Wholesale POS.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: ^3.13.5
+
+dependencies:
+  pos_core:
+    path: ../pos_core
+  meta: ^1.15.0
+
+dev_dependencies:
+  test: ^1.25.0
+  lints: ^5.0.0

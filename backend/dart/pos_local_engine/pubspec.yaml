@@ -1,0 +1,31 @@
+name: pos_local_engine
+description: Native SQLite persistence engine for Wholesale POS.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: ^3.13.5
+
+dependencies:
+  pos_core:
+    path: ../pos_core
+  pos_contracts:
+    path: ../pos_contracts
+  sqflite: ^2.4.1
+  sqflite_common_ffi: ^2.3.3
+  path: ^1.9.0
+  path_provider: ^2.1.4
+  crypto: ^3.0.5
+  cryptography: ^2.8.1
+  uuid: ^4.5.1
+  device_info_plus: ^13.3.0
+  http: ^1.6.0
+
+dev_dependencies:
+  test: ^1.25.0
+  path_provider_platform_interface: ^2.1.3
+  lints: ^5.0.0
+
+dependency_overrides:
+  # Keep consistent with application overrides
+  path_provider_platform_interface: ^2.1.3

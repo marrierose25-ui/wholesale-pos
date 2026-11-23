@@ -1,0 +1,19 @@
+name: pos_cloud_engine
+description: Cloud communication, sync transport, and cloud repository implementations for Wholesale POS.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: ^3.13.5
+
+dependencies:
+  pos_core:
+    path: ../pos_core
+  pos_contracts:
+    path: ../pos_contracts
+  http: ^1.6.0
+  uuid: ^4.5.1
+
+dev_dependencies:
+  test: ^1.25.0
+  lints: ^5.0.0

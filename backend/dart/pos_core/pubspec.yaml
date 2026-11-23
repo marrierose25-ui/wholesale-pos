@@ -1,0 +1,12 @@
+name: pos_core
+description: >-
+  Pure-Dart domain entities for Wholesale POS. No Flutter, SQLite, Supabase,
+  or presentation dependencies — safe to consume from any layer.
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: ^3.13.5
+
+dev_dependencies:
+  test: ^1.25.0
