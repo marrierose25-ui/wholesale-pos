@@ -176,7 +176,25 @@ the file, its schema and its rows are left untouched. A `.bak` safety copy is
 still taken first. The app never auto-downgrades or repairs an unsupported
 database; install the newer build (or restore the previous installation) and
 open it again. Covered by
-`frontend/test/core/database/downgrade_protection_test.dart`.
+`frontend/test/core/database/downgrade_protection_test.dart` and the
+`UnsupportedDatabaseVersionView` recovery screen
+(`frontend/lib/features/startup/unsupported_database_view.dart`), which shows
+the detected/supported schema versions, safety-copy status and recovery
+steps — widget-tested in
+`frontend/test/features/startup/unsupported_database_view_test.dart`.
+
+**Interrupted migrations:** sqflite runs `onUpgrade` inside one transaction,
+so a process killed mid-migration rolls back to the complete previous
+schema. Verified by killing a real worker process at three checkpoints
+(`interrupted_migration_test.dart` + `tool/db_migration_kill_worker.dart`);
+the pure-Dart `package:pos_local_engine/database.dart` entry point exists so
+the worker can run under the plain Dart VM.
+
+**Native platforms:** `frontend/integration_test/database_migration_test.dart`
+runs the same upgrade/downgrade checks through the real sqflite plugin.
+CI jobs `android-database` (emulator) and `ios-database` (macOS simulator)
+were added to `.github/workflows/ci.yml`; their first execution results are
+recorded in `docs/architecture/verification-history.md`.
 
 ## Backups
 

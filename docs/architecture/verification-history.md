@@ -475,3 +475,21 @@ databases that never ran the `<20` branch.
   schema characterization, pre-migration backup, backup/export/restore
   characterization, sale repository, shift/register and picklist repository
   tests.
+
+### Stage 0 closure addendum (2026-11-23, commits c92b1fc..a5b0aa6)
+
+- `test: cover historical SQLite migrations` — genuine/reconstructed fixtures
+  for every shipped schema version: v2, v3, v4, v5(recon), v6, v8, v9, v10,
+  v12, v13, v14, v15, v16, v17, v19, v20, v21, v22 → v23. v1 predates git;
+  v5/v7/v11/v18 never shipped as schemaVersion.
+- `test: verify interrupted SQLite migration recovery` — real OS process
+  kill at `start`/`mid`/`late` checkpoints inside the upgrade transaction;
+  DB verified still at complete v12, `.bak` byte-identical, next open
+  completes to v23. 3/3 passed.
+- `feat: improve unsupported database recovery guidance` — dedicated
+  `UnsupportedDatabaseVersionView` (versions, backup status, recovery
+  steps); 2 widget tests passed.
+- `test: verify native SQLite migration platforms` —
+  `integration_test/database_migration_test.dart` + CI jobs
+  `android-database`/`ios-database` added. **Not yet executed**: no Android
+  emulator or iOS toolchain on the dev machine; first CI run pending.
