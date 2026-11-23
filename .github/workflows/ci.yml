@@ -7,7 +7,7 @@ name: CI
 # gate: analyze, test, then build the artefact we actually ship.
 on:
   push:
-    branches: [main]
+    branches: [main, 'stage0/**']
   pull_request:
   workflow_dispatch:
 
@@ -94,6 +94,11 @@ jobs:
           cache: true
       - name: Resolve dependencies
         run: flutter pub get
+      # Host-level POSIX check: the interruption test spawns a real `dart run`
+      # worker and kills it mid-migration. It runs on the macOS host VM, not
+      # inside the simulator — the same code path CI uses on Linux/Windows.
+      - name: POSIX interrupted-migration test (host)
+        run: flutter test test/core/database/interrupted_migration_test.dart --reporter expanded
       - name: iOS database integration tests
         run: |
           flutter build ios --simulator --no-codesign
