@@ -83,6 +83,11 @@ jobs:
 
   ios-database:
     runs-on: macos-15
+    # Bounded so a hung `flutter test` (flutter/flutter#181771: the iOS log
+    # reader can miss the VM service URL and wait forever) fails in minutes,
+    # not at the 6-hour default. Fix merged upstream in flutter/flutter#193142
+    # but is NOT in stable 3.50.1 yet.
+    timeout-minutes: 100
     defaults:
       run:
         working-directory: ./frontend
@@ -94,16 +99,17 @@ jobs:
           cache: true
       - name: Resolve dependencies
         run: flutter pub get
-      # Host-level POSIX check: the interruption test spawns a real `dart run`
-      # worker and kills it mid-migration. It runs on the macOS host VM, not
-      # inside the simulator — the same code path CI uses on Linux/Windows.
-      - name: POSIX interrupted-migration test (host)
-        run: flutter test test/core/database/interrupted_migration_test.dart --reporter expanded
+
       # device_info_plus calls NSProcessInfo.isiOSAppOnVision, which only
       # exists in the iOS 26.1 SDK (Xcode 26.1+). The macos-15 image defaults
       # to Xcode 16.4, so select the newest installed Xcode 26.x instead of
       # pinning a version that disappears on the next image update.
-      - name: Select Xcode 26.x
+      # Simulator images change between runner releases, so the device is
+      # discovered at runtime: fail loudly (the available list is printed
+      # above) rather than silently skipping the test.
+      - name: Select Xcode and discover simulator
+        id: sim
+        timeout-minutes: 10
         run: |
           APP=$(ls -d /Applications/Xcode_26.*.app 2>/dev/null | sed 's|.*/Xcode_||; s|\.app$||' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
           if [ -z "$APP" ]; then
@@ -114,13 +120,6 @@ jobs:
           echo "Selecting /Applications/Xcode_${APP}.app"
           sudo xcode-select -s "/Applications/Xcode_${APP}.app"
           sudo xcodebuild -runFirstLaunch
-          xcodebuild -version
-      # Simulator images change between runner releases, so the device is
-      # discovered at runtime instead of hardcoded. macOS 15 ships iPhone 16
-      # simulators; fail loudly (printing the available list above) if no
-      # iPhone 16 device exists rather than silently skipping the test.
-      - name: iOS database integration tests
-        run: |
           xcodebuild -version
           xcrun simctl list devices available
           UDID=$(xcrun simctl list devices available -j | python3 -c '
@@ -134,7 +133,59 @@ jobs:
           sys.exit("No available iPhone 16 simulator found")
           ')
           echo "Using simulator UDID: $UDID"
-          xcrun simctl boot "$UDID"
-          xcrun simctl bootstatus "$UDID" -b
-          flutter build ios --simulator --no-codesign
-          flutter test integration_test -d "$UDID"
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+
+      - name: Boot simulator
+        timeout-minutes: 15
+        run: |
+          xcrun simctl boot "${{ steps.sim.outputs.udid }}"
+          xcrun simctl bootstatus "${{ steps.sim.outputs.udid }}" -b
+
+      # Host-level POSIX check: the interruption test spawns a real `dart run`
+      # worker and kills it mid-migration. It runs on the macOS host VM, not
+      # inside the simulator — the same code path CI uses on Linux/Windows.
+      - name: POSIX interrupted-migration test (host)
+        timeout-minutes: 15
+        run: flutter test test/core/database/interrupted_migration_test.dart --reporter expanded
+
+      # bash runs steps with -eo pipefail, so tee cannot mask a build/test
+      # failure; verbose output is preserved for the diagnostics artifact.
+      - name: iOS simulator build
+        timeout-minutes: 40
+        run: flutter build ios --simulator --no-codesign --verbose 2>&1 | tee ios-build.log
+
+      - name: iOS integration tests
+        timeout-minutes: 40
+        run: flutter test integration_test -d "${{ steps.sim.outputs.udid }}" --reporter expanded --verbose 2>&1 | tee ios-integration.log
+
+      # Runs even when an earlier step fails or times out: captures simulator
+      # state and the last 30 minutes of unified-log entries for the test
+      # process so a hang is diagnosable after the fact.
+      - name: Collect iOS diagnostics
+        if: always()
+        timeout-minutes: 10
+        run: |
+          UDID="${{ steps.sim.outputs.udid }}"
+          {
+            echo "=== xcodebuild ==="; xcodebuild -version
+            echo "=== booted devices ==="; xcrun simctl list devices booted
+            if [ -n "$UDID" ]; then
+              echo "=== device state ==="; xcrun simctl list devices | grep "$UDID" || true
+              echo "=== unified log (Runner/Flutter, last 30m) ==="
+              xcrun simctl spawn "$UDID" log show --last 30m --style compact \
+                --predicate 'process == "Runner" OR processImagePath CONTAINS "wholesalePosApp"' 2>/dev/null \
+                | tail -300 || true
+            fi
+          } | tee ios-sim-diagnostics.log
+
+      - name: Upload iOS diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-database-diagnostics
+          path: |
+            frontend/ios-build.log
+            frontend/ios-integration.log
+            frontend/ios-sim-diagnostics.log
+          if-no-files-found: ignore
+          retention-days: 14
