@@ -99,6 +99,22 @@ jobs:
       # inside the simulator — the same code path CI uses on Linux/Windows.
       - name: POSIX interrupted-migration test (host)
         run: flutter test test/core/database/interrupted_migration_test.dart --reporter expanded
+      # device_info_plus calls NSProcessInfo.isiOSAppOnVision, which only
+      # exists in the iOS 26.1 SDK (Xcode 26.1+). The macos-15 image defaults
+      # to Xcode 16.4, so select the newest installed Xcode 26.x instead of
+      # pinning a version that disappears on the next image update.
+      - name: Select Xcode 26.x
+        run: |
+          APP=$(ls -d /Applications/Xcode_26.*.app 2>/dev/null | sed 's|.*/Xcode_||; s|\.app$||' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+          if [ -z "$APP" ]; then
+            echo "No Xcode 26.x found; installed Xcodes:"
+            ls -d /Applications/Xcode*.app
+            exit 1
+          fi
+          echo "Selecting /Applications/Xcode_${APP}.app"
+          sudo xcode-select -s "/Applications/Xcode_${APP}.app"
+          sudo xcodebuild -runFirstLaunch
+          xcodebuild -version
       # Simulator images change between runner releases, so the device is
       # discovered at runtime instead of hardcoded. macOS 15 ships iPhone 16
       # simulators; fail loudly (printing the available list above) if no
