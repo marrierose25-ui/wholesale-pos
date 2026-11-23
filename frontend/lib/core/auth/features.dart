@@ -1,4 +1,4 @@
-import 'package:flutter/cupertino.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 
 /// A single tickable feature-tab permission. Both application shells build
 /// their navigation from [kFeatures] filtered by `User.can(key)`, so this

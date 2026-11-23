@@ -1,7 +1,7 @@
 import 'dart:ui' show ImageFilter;
 
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/physics.dart';
 import 'package:pos_contracts/pos_contracts.dart';
 
