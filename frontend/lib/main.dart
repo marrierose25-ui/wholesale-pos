@@ -55,7 +55,7 @@ Future<void> main() async {
 }
 
 Future<void> _startup() async {
-  final db = await LocalDatabase.open();
+  final db = await openApplicationDatabase();
   final productRepository = SqfliteProductRepository(db);
   final saleRepository = SqfliteSaleRepository(db);
   final userRepository = SqfliteUserRepository(db);

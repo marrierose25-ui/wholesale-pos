@@ -3,8 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
-import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_common/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart' as ffi;
 import 'package:uuid/uuid.dart';
 
@@ -54,7 +53,9 @@ class LocalDatabase {
 
   LocalDatabase._();
 
-  static void _configureFactory() {
+  /// Selects the SQLite factory for the current platform. Called by
+  /// [openAt]/[openInMemory] and by the Flutter-side `openApplicationDatabase`.
+  static void configureFactoryForPlatform() {
     // On desktop (and in `flutter test`, which runs on the host VM) use the
     // pure-Dart FFI engine. On Android/iOS the native sqflite plugin is already
     // the default factory, so nothing is overridden there.
@@ -64,21 +65,15 @@ class LocalDatabase {
     }
   }
 
-  static Future<Database> open() async {
-    _configureFactory();
-    final dir = await getApplicationSupportDirectory();
-    return _openAt(p.join(dir.path, databaseName));
-  }
-
   /// Opens a database at an explicit path. Used by tests that need to exercise
   /// migrations against a real file.
   static Future<Database> openAt(String path) async {
-    _configureFactory();
+    configureFactoryForPlatform();
     return _openAt(path);
   }
 
   static Future<Database> openInMemory() async {
-    _configureFactory();
+    configureFactoryForPlatform();
     return databaseFactory.openDatabase(
       inMemoryDatabasePath,
       options: OpenDatabaseOptions(
@@ -277,11 +272,20 @@ class LocalDatabase {
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  /// Test-only hook invoked inside the upgrade transaction at named
+  /// checkpoints (`start`, `mid`, `late`). It is always null in production;
+  /// tests use it to pause a migration deterministically so a worker process
+  /// can be killed mid-transaction and SQLite's crash recovery verified.
+  /// Not a production control — never set it outside tests.
+  static Future<void> Function(String checkpoint)? migrationTestPauseHook;
+
   static Future<void> _onUpgrade(
     Database db,
     int oldVersion,
     int newVersion,
   ) async {
+    final pause = migrationTestPauseHook;
+    if (pause != null) await pause('start');
     if (oldVersion < 2) {
       await db.execute('''
         CREATE TABLE shifts (
@@ -455,6 +459,7 @@ class LocalDatabase {
       }
       await _createIndexesAndTriggers(db);
     }
+    if (pause != null) await pause('mid');
     if (oldVersion < 11) {
       // Per-account feature permissions replace the fixed Owner/Cashier nav
       // split. Additive column, guarded so a re-run is a no-op, then backfill
@@ -685,6 +690,7 @@ class LocalDatabase {
         'ON picklist_items(picklist_id)',
       );
     }
+    if (pause != null) await pause('late');
   }
 
   /// Proof photos are BLOBs in their own table (schema 16), one per movement.
