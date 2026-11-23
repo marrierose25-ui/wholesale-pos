@@ -29,6 +29,7 @@ import 'features/finance/finance_overview_screen.dart';
 import 'features/licensing/activation_screen.dart';
 import 'features/register/register_screen.dart';
 import 'features/reports/reports_screen.dart';
+import 'features/startup/unsupported_database_view.dart';
 import 'features/sales/sales_screen.dart';
 import 'features/settings/settings_screen.dart';
 import 'features/users/user_management_screen.dart';
@@ -1268,6 +1269,14 @@ class _StartupErrorAppState extends State<_StartupErrorApp> {
 
   @override
   Widget build(BuildContext context) {
+    // A database written by a newer build gets a dedicated recovery screen:
+    // the generic error text cannot tell the operator that the file is
+    // intact and that the only fix is installing the newer app.
+    if (widget.error is UnsupportedDatabaseVersionException) {
+      return UnsupportedDatabaseVersionView(
+        error: widget.error as UnsupportedDatabaseVersionException,
+      );
+    }
     final logPath = AppLogger.logFilePath;
     return MaterialApp(
       debugShowCheckedModeBanner: false,
