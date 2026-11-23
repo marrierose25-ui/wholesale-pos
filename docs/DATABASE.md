@@ -2,7 +2,7 @@
 > Supabase migrations under `backend/supabase/migrations/`, and active cloud
 > sync. Verify claims against code before trusting them.
 
-# Database Schema (SQLite, schema version 22)
+# Database Schema (SQLite, schema version 23)
 
 This document describes the local SQLite database used by the native app. The
 Flutter application lives in `frontend/`; the database engine and all schema
@@ -131,10 +131,11 @@ Finance entries are completely separate from sales: completing one never affects
 - `finance_entries_category_id`
 - `void_requests_sale_id`, `void_requests_status`
 - `sync_outbox_pending` (on `sync_outbox.synced_at`)
+- `picklist_items_picklist_id` (on `picklist_items.picklist_id`)
 
 ## Migrations
 
-`LocalDatabase.schemaVersion` (`backend/dart/pos_local_engine/lib/src/database/local_database.dart`) is the single source of truth (currently `22`). Both `onCreate` and `onUpgrade` build the same final shape:
+`LocalDatabase.schemaVersion` (`backend/dart/pos_local_engine/lib/src/database/local_database.dart`) is the single source of truth (currently `23`). Both `onCreate` and `onUpgrade` build the same final shape:
 
 - v2: shifts
 - v3: `sales.payment_method`
@@ -157,16 +158,29 @@ Finance entries are completely separate from sales: completing one never affects
 - v20: `picklists` + `picklist_items` tables (warehouse picklists) with `picklist_items_picklist_id` index
 - v21: picklist line pricing (unit, unit price, line total) and reusable `picklist_customers` directory
 - v22: soft-delete tombstones (`deleted_at`) on `picklists` and `picklist_items` so deletes propagate through sync
+- v23: creates `picklist_items_picklist_id` with `CREATE INDEX IF NOT EXISTS`, converging the index onto databases created at v20 or later (fresh installs and v20/v21/v22 upgrades never ran the `<20` branch that introduces it)
 
-Note: databases created at schema v2–v5 cannot upgrade to v22 — the `<6` step
-creates indexes on `finance_entries` before the `<7` step creates that table.
-The failure is atomic and safe (the original file and its `.bak` copy are
-preserved); it is a documented limitation characterized by
-`frontend/test/core/database/historical_fixture_migration_test.dart`.
+Note: every historical version from v2 upward upgrades to the current schema.
+The pre-v6 ordering defect (indexes on `finance_entries` before the `<7` step
+created the table) was repaired by gating each index on verified table
+existence inside `_createIndexesAndTriggers`; deferred indexes are created by
+the later step that creates their table, all inside the same atomic
+transaction. `frontend/test/core/database/historical_fixture_migration_test.dart`
+exercises genuine v2, v3, v4, v5, v12, v19, v20, v21 and v22 fixture files.
+
+**Downgrade protection:** if the on-disk `user_version` is newer than this
+build's `schemaVersion`, the open is refused with
+`UnsupportedDatabaseVersionException` via sqflite's `onDowngrade` hook —
+before `user_version` is rewritten and inside the version transaction, so
+the file, its schema and its rows are left untouched. A `.bak` safety copy is
+still taken first. The app never auto-downgrades or repairs an unsupported
+database; install the newer build (or restore the previous installation) and
+open it again. Covered by
+`frontend/test/core/database/downgrade_protection_test.dart`.
 
 ## Backups
 
-`DataExporter` is owner-only and writes a JSON document at the current schema version containing every table, including `void_requests` and password hashes. `DataImporter` is owner-only, validates required fields and owner retention, writes a recovery snapshot first, replaces all rows in one transaction, and runs `PRAGMA foreign_key_check` before commit. Backups at schema versions 6 through 22 are accepted; v6 rows are normalized to the flexible-quantity shape (integer quantities become `quantity_text`/`billing_quantity_milliunits`), and `finance_categories`/`finance_entries`/`void_requests` are optional in older backups and simply restore empty. Versions older than 6 are rejected rather than guessed at. After a restore the app re-registers the current device row so new sales keep valid foreign keys.
+`DataExporter` is owner-only and writes a JSON document at the current schema version containing every table, including `void_requests` and password hashes. `DataImporter` is owner-only, validates required fields and owner retention, writes a recovery snapshot first, replaces all rows in one transaction, and runs `PRAGMA foreign_key_check` before commit. Backups at schema versions 6 through 23 are accepted; v6 rows are normalized to the flexible-quantity shape (integer quantities become `quantity_text`/`billing_quantity_milliunits`), and `finance_categories`/`finance_entries`/`void_requests` are optional in older backups and simply restore empty. Versions older than 6 are rejected rather than guessed at. After a restore the app re-registers the current device row so new sales keep valid foreign keys.
 
 **Restore limitation (by design):** export strips licensing and device-identity secrets — `license_code`, `activation_code`, install/hardware UUIDs, and session material are never written to the backup. A restored installation must re-activate the device and users must log in again; this is intentional (Rule S3 in `docs/architecture/architecture-rules.md`) so a backup file cannot be used to clone a license onto another machine.
 

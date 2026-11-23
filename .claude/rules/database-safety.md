@@ -7,7 +7,7 @@ Authoritative source: `docs/DATABASE.md`,
 
 ## Rules
 
-- `LocalDatabase.schemaVersion = 22` is the ONLY schema version definition.
+- `LocalDatabase.schemaVersion = 23` is the ONLY schema version definition.
 - Schema changes happen exclusively through `_onUpgrade` migrations in
   `local_database.dart` — additive, guarded (`PRAGMA table_info` checks), and
   atomic (the whole upgrade runs in one transaction and rolls back cleanly).
@@ -23,12 +23,9 @@ Authoritative source: `docs/DATABASE.md`,
 
 ## Known limitations (documented, do not silently "fix")
 
-- Databases at schema v2–v5 cannot upgrade to v22: the `<6` step builds indexes
-  on `finance_entries` before the `<7` step creates it. Migration fails
-  atomically and safely (original + `.bak` preserved). Characterized by
-  `historical_fixture_migration_test.dart` (`blockedVersions = [2,3,4]`).
-- The `picklist_items_picklist_id` index is only created by the `<20`
-  migration, so v20+ installs lack it (finding F-2; performance only).
+- A database whose `user_version` is NEWER than `schemaVersion` is refused on
+  open (`UnsupportedDatabaseVersionException` via `onDowngrade`) — never
+  stamped down, never migrated. The `.bak` copy is still taken first.
 - JSON restore intentionally strips licensing/activation secrets
   (`license_code`, `activation_code`, device UUIDs) — the device must
   re-activate. This is Rule S3, by design; it must stay documented for users.

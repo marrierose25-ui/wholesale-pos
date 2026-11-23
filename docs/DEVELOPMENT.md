@@ -137,7 +137,7 @@ graphify . --no-viz
 - **No new shims after 6.7** (M-24 gate from risk register)
 - **Web graph must be free of sqflite/dart:io/path_provider/LocalDatabase** (F-1 gate)
 - **Single source of truth for server schema:** `backend/supabase/migrations/` (10 timestamped files)
-- **One `schemaVersion = 22` definition only** — in `backend/dart/pos_local_engine/lib/src/database/local_database.dart`
+- **One `schemaVersion = 23` definition only** — in `backend/dart/pos_local_engine/lib/src/database/local_database.dart`
 - **No core → features model imports** (layering violation gate)
 - **Transaction inventory must remain 38** (M-07 gate)
 - **pos_cloud_engine has no Flutter/sqflite/io imports** — verified by architecture test
@@ -160,7 +160,7 @@ graphify . --no-viz
 | Web build fails | Verify `lib/main_web.dart` entry point; check for `dart:io`/`sqflite` in web graph |
 | Windows build fails | Ensure build tools; check `tools/build_release.ps1` output |
 | Edge function TS errors | Run `deno check` on each entry point under `backend/supabase/functions/` |
-| Schema version confusion | Actual: `LocalDatabase.schemaVersion = 22` in `backend/dart/pos_local_engine`; docs updated to match |
+| Schema version confusion | Actual: `LocalDatabase.schemaVersion = 23` in `backend/dart/pos_local_engine`; docs updated to match |
 
 ---
 **End of Guide**

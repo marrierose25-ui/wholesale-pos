@@ -1,5 +1,5 @@
 {
-  "user_version": 22,
+  "user_version": 23,
   "tables": {
     "audit_logs": {
       "sql": "CREATE TABLE audit_logs (id TEXT PRIMARY KEY, user_id TEXT, action TEXT NOT NULL, details TEXT, created_at TEXT NOT NULL)",
@@ -584,7 +584,17 @@
           "match": "NONE"
         }
       ],
-      "indexes": [],
+      "indexes": [
+        {
+          "name": "picklist_items_picklist_id",
+          "unique": false,
+          "partial": false,
+          "columns": [
+            "picklist_id"
+          ],
+          "sql": "CREATE INDEX picklist_items_picklist_id ON picklist_items(picklist_id)"
+        }
+      ],
       "unique_constraints": []
     },
     "picklists": {

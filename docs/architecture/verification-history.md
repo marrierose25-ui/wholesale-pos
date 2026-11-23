@@ -426,3 +426,52 @@ batches completed. All figures below are from commands actually executed on `mai
 - `docs/DATABASE.md` corrected to schema v22 with full v2–v22 migration list;
   `docs/DEVELOPMENT.md` corrected to the `frontend/`+`backend/` layout,
   `backend/supabase/` paths, 10 migrations, and current test/build results.
+
+---
+
+## Stage 0 — SQLite Data Integrity Hardening (2026-11-23)
+
+Branch `stage0/sqlite-integrity-hardening` from HEAD `ec47ff4`.
+
+### Schema version
+
+`LocalDatabase.schemaVersion` is now **23** (was 22). The `<23>` step adds
+`CREATE INDEX IF NOT EXISTS picklist_items_picklist_id`, converging the
+missing picklist index (finding F-2) onto fresh installs and onto v20/v21/v22
+databases that never ran the `<20` branch.
+
+### Repairs verified
+
+| Defect | Fix | Evidence |
+|---|---|---|
+| No downgrade protection — sqflite silently stamped `user_version` down | `onDowngrade` throws `UnsupportedDatabaseVersionException` inside the version transaction, before `setVersion`; file untouched | `downgrade_protection_test.dart` (3 tests) |
+| v2–v5 upgrades failed (`no such table: finance_entries` at `<6`) | `_createIndexesAndTriggers` gates each index/trigger on verified table existence; deferred indexes are created by later steps in the same atomic upgrade | `historical_fixture_migration_test.dart` — genuine v2/v3/v4/v5 fixtures now reach v23 with data preserved |
+| `picklist_items_picklist_id` missing on fresh and v20+ installs | v23 convergence migration + guarded creation in `_createIndexesAndTriggers`/`_onCreate` | `PRAGMA index_list` assertions in fixture + characterization tests |
+| `<5` trigger/index recreation not idempotent | `IF NOT EXISTS` on `prevent_second_open_shift_*` and `sales_shift_id` | shift-integrity tests still pass; reopening is a no-op |
+
+### Fixture coverage
+
+- New deterministic `v5` fixture (reconstructed: v4 `_onCreate` @0d071dd +
+  v5 upgrade DDL @ea2dc36; no commit ever stamped v5).
+- Upgrade matrix now exercised end-to-end: **v2, v3, v4, v5, v12, v19, v20,
+  v21, v22 → v23**, each asserting `user_version`, golden schema snapshot,
+  `integrity_check`, `foreign_key_check`, row-level data preservation, `.bak`
+  byte-identity, and the picklist index.
+- Schema goldens regenerated for v23 (`fresh_v23.json`, `v*_post.json`,
+  `fresh_vs_upgraded_v*.json`); `fresh_v22.json` removed.
+
+### Test results (this branch)
+
+- `flutter test test/core/database/` — **61 passed, 0 failed** (includes the
+  3 new downgrade tests and 9 fixture versions × migration+pre-shape).
+- `flutter analyze` / `flutter test` (full suite) — see below.
+
+- `flutter analyze` (from `frontend/`) — **exit 0, "No issues found!"**
+- `dart analyze` (pos_local_engine) — **clean**
+- `flutter test` (full suite, from `frontend/`) — **698 passed, 1 skipped
+  (`sync_matrix_live_test` self-skips without `MATRIX_*` env), 0 failed**
+- Targeted regression areas all green inside that run: migration tests,
+  historical fixture tests (9 versions), transaction rollback tests,
+  schema characterization, pre-migration backup, backup/export/restore
+  characterization, sale repository, shift/register and picklist repository
+  tests.

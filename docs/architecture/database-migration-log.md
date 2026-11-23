@@ -239,3 +239,37 @@ Stage 6.0 did **not** verify, and this log does not claim:
 - performance or duration of the pre-v6 failure on a full-size shop database.
 
 Those remain risk-register items.
+
+---
+
+## 9. Stage 0 repair addendum (2026-11-23)
+
+The limitations recorded in §3 and §4 above were **repaired** by the Stage 0
+SQLite integrity-hardening stage; they are kept here as history, not current
+behaviour.
+
+- **§3 pre-v6 blockage — fixed.** `_createIndexesAndTriggers` now gates every
+  index/trigger on verified table existence (`sqlite_master`), so the `<6`
+  through `<10` calls create only what exists and later steps in the same
+  atomic upgrade create the deferred indexes. Genuine v2, v3, v4 and a newly
+  reconstructed v5 fixture all migrate to the current schema with data
+  preserved.
+- **§4 F-2 missing index — fixed.** `schemaVersion` is now `23`; the `<23>`
+  step runs `CREATE INDEX IF NOT EXISTS picklist_items_picklist_id`, and
+  `_createIndexesAndTriggers`/`_onCreate` create it on fresh installs. Every
+  supported path converges on the index.
+- **Downgrade protection — added.** `onDowngrade` throws
+  `UnsupportedDatabaseVersionException` before sqflite can stamp a newer
+  file with the lower `user_version`; the file is left untouched.
+- **v5 fixture — added.** Reconstructed from the v4 `_onCreate` (0d071dd)
+  plus the v5 upgrade DDL in ea2dc36's `_onUpgrade`; no commit ever stamped
+  `schemaVersion = 5`.
+- **Trigger/index idempotency — hardened.** The `<5` step's
+  `prevent_second_open_shift_*` triggers and `sales_shift_id` index now use
+  `IF NOT EXISTS`, matching the rest of the chain, so a mis-stamped database
+  cannot fail recreation.
+
+Current coverage: `historical_fixture_migration_test.dart` exercises v2, v3,
+v4, v5, v12, v19, v20, v21 and v22 fixtures through the real
+`LocalDatabase.openAt`; `downgrade_protection_test.dart` covers the
+newer-version refusal; goldens were regenerated for schema v23.

@@ -1,0 +1,16 @@
+{
+  "schema_version": 5,
+  "source_commit": "0d071dd",
+  "source_path": "app/lib/core/database/local_database.dart",
+  "provenance": "Reconstructed: v4 `_onCreate` (0d071dd) plus the v5 upgrade DDL from ea2dc36's `_onUpgrade` `oldVersion < 5` block (void attribution columns, cash_movements.user_id, one_open_shift index, prevent_second_open_shift triggers, sales_shift_id index). No commit ever set schemaVersion = 5.",
+  "tables": [
+    "audit_logs",
+    "cash_movements",
+    "devices",
+    "products",
+    "sale_items",
+    "sales",
+    "shifts",
+    "users"
+  ]
+}

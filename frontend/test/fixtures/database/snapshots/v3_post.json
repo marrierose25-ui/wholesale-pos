@@ -1,5 +1,5 @@
 {
-  "user_version": 22,
+  "user_version": 23,
   "tables": {
     "audit_logs": {
       "sql": "CREATE TABLE audit_logs (id TEXT PRIMARY KEY, user_id TEXT, action TEXT NOT NULL, details TEXT, created_at TEXT NOT NULL)",
@@ -499,7 +499,7 @@
       "unique_constraints": []
     },
     "picklist_items": {
-      "sql": "CREATE TABLE picklist_items (id TEXT PRIMARY KEY, picklist_id TEXT NOT NULL, product_name TEXT NOT NULL, requested_qty INTEGER NOT NULL, taken_qty INTEGER NOT NULL DEFAULT 0, unit TEXT, unit_price_minor_units INTEGER NOT NULL DEFAULT 0, line_total_minor_units INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, deleted_at TEXT, FOREIGN KEY(picklist_id) REFERENCES picklists(id) ON DELETE CASCADE)",
+      "sql": "CREATE TABLE picklist_items (id TEXT PRIMARY KEY, picklist_id TEXT NOT NULL, product_name TEXT NOT NULL, requested_qty INTEGER NOT NULL, taken_qty INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, unit TEXT, unit_price_minor_units INTEGER NOT NULL DEFAULT 0, line_total_minor_units INTEGER NOT NULL DEFAULT 0, deleted_at TEXT, FOREIGN KEY(picklist_id) REFERENCES picklists(id) ON DELETE CASCADE)",
       "columns": [
         {
           "name": "id",
@@ -537,6 +537,13 @@
           "primary_key": 0
         },
         {
+          "name": "updated_at",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
           "name": "unit",
           "type": "TEXT",
           "not_null": 0,
@@ -555,13 +562,6 @@
           "type": "INTEGER",
           "not_null": 1,
           "default": "0",
-          "primary_key": 0
-        },
-        {
-          "name": "updated_at",
-          "type": "TEXT",
-          "not_null": 1,
-          "default": null,
           "primary_key": 0
         },
         {
@@ -584,7 +584,17 @@
           "match": "NONE"
         }
       ],
-      "indexes": [],
+      "indexes": [
+        {
+          "name": "picklist_items_picklist_id",
+          "unique": false,
+          "partial": false,
+          "columns": [
+            "picklist_id"
+          ],
+          "sql": "CREATE INDEX picklist_items_picklist_id ON picklist_items(picklist_id)"
+        }
+      ],
       "unique_constraints": []
     },
     "picklists": {
@@ -819,7 +829,7 @@
       "unique_constraints": []
     },
     "sales": {
-      "sql": "CREATE TABLE sales (id TEXT PRIMARY KEY, receipt_number TEXT UNIQUE NOT NULL, cashier_id TEXT NOT NULL, device_id TEXT NOT NULL, shift_id TEXT NOT NULL, customer_name TEXT, payment_method TEXT NOT NULL DEFAULT 'CASH', subtotal_minor_units INTEGER NOT NULL, discount_minor_units INTEGER NOT NULL, total_minor_units INTEGER NOT NULL, amount_paid_minor_units INTEGER NOT NULL, change_minor_units INTEGER NOT NULL, status TEXT NOT NULL, void_reason TEXT, voided_at TEXT, voided_by TEXT, voided_shift_id TEXT, created_at TEXT NOT NULL, synced_at TEXT, FOREIGN KEY(cashier_id) REFERENCES users(id), FOREIGN KEY(device_id) REFERENCES devices(id), FOREIGN KEY(shift_id) REFERENCES shifts(id))",
+      "sql": "CREATE TABLE sales (id TEXT PRIMARY KEY, receipt_number TEXT UNIQUE NOT NULL, cashier_id TEXT NOT NULL, device_id TEXT NOT NULL, customer_name TEXT, payment_method TEXT NOT NULL DEFAULT 'CASH', subtotal_minor_units INTEGER NOT NULL, discount_minor_units INTEGER NOT NULL, total_minor_units INTEGER NOT NULL, amount_paid_minor_units INTEGER NOT NULL, change_minor_units INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, synced_at TEXT, shift_id TEXT, void_reason TEXT, voided_at TEXT, voided_by TEXT, voided_shift_id TEXT, FOREIGN KEY(cashier_id) REFERENCES users(id), FOREIGN KEY(device_id) REFERENCES devices(id))",
       "columns": [
         {
           "name": "id",
@@ -844,13 +854,6 @@
         },
         {
           "name": "device_id",
-          "type": "TEXT",
-          "not_null": 1,
-          "default": null,
-          "primary_key": 0
-        },
-        {
-          "name": "shift_id",
           "type": "TEXT",
           "not_null": 1,
           "default": null,
@@ -913,6 +916,27 @@
           "primary_key": 0
         },
         {
+          "name": "created_at",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "synced_at",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "shift_id",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
           "name": "void_reason",
           "type": "TEXT",
           "not_null": 0,
@@ -939,35 +963,11 @@
           "not_null": 0,
           "default": null,
           "primary_key": 0
-        },
-        {
-          "name": "created_at",
-          "type": "TEXT",
-          "not_null": 1,
-          "default": null,
-          "primary_key": 0
-        },
-        {
-          "name": "synced_at",
-          "type": "TEXT",
-          "not_null": 0,
-          "default": null,
-          "primary_key": 0
         }
       ],
       "foreign_keys": [
         {
           "id": 0,
-          "seq": 0,
-          "table": "shifts",
-          "from": "shift_id",
-          "to": "id",
-          "on_update": "NO ACTION",
-          "on_delete": "NO ACTION",
-          "match": "NONE"
-        },
-        {
-          "id": 1,
           "seq": 0,
           "table": "devices",
           "from": "device_id",
@@ -977,7 +977,7 @@
           "match": "NONE"
         },
         {
-          "id": 2,
+          "id": 1,
           "seq": 0,
           "table": "users",
           "from": "cashier_id",
@@ -1177,7 +1177,7 @@
       "unique_constraints": []
     },
     "users": {
-      "sql": "CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, salt TEXT NOT NULL, cloud_pw_hash TEXT, cloud_pw_salt TEXT, role TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 1, permissions TEXT NOT NULL DEFAULT '[]', is_demo INTEGER NOT NULL DEFAULT 0, deleted_at TEXT, created_at TEXT NOT NULL, updated_at TEXT)",
+      "sql": "CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, salt TEXT NOT NULL DEFAULT '', permissions TEXT NOT NULL DEFAULT '[]', is_demo INTEGER NOT NULL DEFAULT 0, deleted_at TEXT, cloud_pw_hash TEXT, cloud_pw_salt TEXT, updated_at TEXT)",
       "columns": [
         {
           "name": "id",
@@ -1201,27 +1201,6 @@
           "primary_key": 0
         },
         {
-          "name": "salt",
-          "type": "TEXT",
-          "not_null": 1,
-          "default": null,
-          "primary_key": 0
-        },
-        {
-          "name": "cloud_pw_hash",
-          "type": "TEXT",
-          "not_null": 0,
-          "default": null,
-          "primary_key": 0
-        },
-        {
-          "name": "cloud_pw_salt",
-          "type": "TEXT",
-          "not_null": 0,
-          "default": null,
-          "primary_key": 0
-        },
-        {
           "name": "role",
           "type": "TEXT",
           "not_null": 1,
@@ -1233,6 +1212,20 @@
           "type": "INTEGER",
           "not_null": 1,
           "default": "1",
+          "primary_key": 0
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "salt",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": "''",
           "primary_key": 0
         },
         {
@@ -1257,9 +1250,16 @@
           "primary_key": 0
         },
         {
-          "name": "created_at",
+          "name": "cloud_pw_hash",
           "type": "TEXT",
-          "not_null": 1,
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "cloud_pw_salt",
+          "type": "TEXT",
+          "not_null": 0,
           "default": null,
           "primary_key": 0
         },
