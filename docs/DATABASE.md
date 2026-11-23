@@ -1,10 +1,13 @@
-﻿> ⚠️ This document is stale. The system has 3 Edge Functions, 16+ SQL
-> migrations, and active cloud sync. Verify claims against code before
-> trusting them. Last full audit: 2026-10-31.
+﻿> ⚠️ Partially stale. The system has 3 Edge Functions, 10 timestamped
+> Supabase migrations under `backend/supabase/migrations/`, and active cloud
+> sync. Verify claims against code before trusting them.
 
-# Database Schema (SQLite, schema version 9)
+# Database Schema (SQLite, schema version 22)
 
-This document describes the local SQLite database used by the desktop app. There is no backend in this repository.
+This document describes the local SQLite database used by the native app. The
+Flutter application lives in `frontend/`; the database engine and all schema
+definitions live in `backend/dart/pos_local_engine/lib/src/database/local_database.dart`.
+The cloud/Supabase side is documented under `backend/supabase/`.
 
 ## Conventions
 
@@ -131,7 +134,7 @@ Finance entries are completely separate from sales: completing one never affects
 
 ## Migrations
 
-`LocalDatabase.schemaVersion` is the single source of truth (currently `14`). Both `onCreate` and `onUpgrade` build the same final shape:
+`LocalDatabase.schemaVersion` (`backend/dart/pos_local_engine/lib/src/database/local_database.dart`) is the single source of truth (currently `22`). Both `onCreate` and `onUpgrade` build the same final shape:
 
 - v2: shifts
 - v3: `sales.payment_method`
@@ -146,10 +149,26 @@ Finance entries are completely separate from sales: completing one never affects
 - v12: optional proof photo on `cash_movements`
 - v13: `users.is_demo` (the permanent training account)
 - v14: `users.deleted_at` (deleted accounts that still own history keep their row, hidden)
+- v15: separate cloud-issued password hash columns so a browser-issued password never overwrites a device-set one
+- v16: proof photos move from `cash_movements` into a BLOB table (`cash_movement_photos`); the old column is kept nullable for older builds
+- v17: `cash_movements.finance_entry_id` so a cloud and a local collection of the same finance entry deposit once, not twice
+- v18: shift drawer ownership guard — a drawer belongs to an account (`_createShiftCashierGuards`)
+- v19: `users.updated_at` conflict stamp so cloud sync cannot overwrite a newer edit with an older one
+- v20: `picklists` + `picklist_items` tables (warehouse picklists) with `picklist_items_picklist_id` index
+- v21: picklist line pricing (unit, unit price, line total) and reusable `picklist_customers` directory
+- v22: soft-delete tombstones (`deleted_at`) on `picklists` and `picklist_items` so deletes propagate through sync
+
+Note: databases created at schema v2–v5 cannot upgrade to v22 — the `<6` step
+creates indexes on `finance_entries` before the `<7` step creates that table.
+The failure is atomic and safe (the original file and its `.bak` copy are
+preserved); it is a documented limitation characterized by
+`frontend/test/core/database/historical_fixture_migration_test.dart`.
 
 ## Backups
 
-`DataExporter` is owner-only and writes a JSON document at the current schema version containing every table, including `void_requests` and password hashes. `DataImporter` is owner-only, validates required fields and owner retention, writes a recovery snapshot first, replaces all rows in one transaction, and runs `PRAGMA foreign_key_check` before commit. Backups at schema versions 6 through 8 are accepted; v6 rows are normalized to the flexible-quantity shape (integer quantities become `quantity_text`/`billing_quantity_milliunits`), and `finance_categories`/`finance_entries`/`void_requests` are optional in older backups and simply restore empty. Versions older than 6 are rejected rather than guessed at. After a restore the app re-registers the current device row so new sales keep valid foreign keys.
+`DataExporter` is owner-only and writes a JSON document at the current schema version containing every table, including `void_requests` and password hashes. `DataImporter` is owner-only, validates required fields and owner retention, writes a recovery snapshot first, replaces all rows in one transaction, and runs `PRAGMA foreign_key_check` before commit. Backups at schema versions 6 through 22 are accepted; v6 rows are normalized to the flexible-quantity shape (integer quantities become `quantity_text`/`billing_quantity_milliunits`), and `finance_categories`/`finance_entries`/`void_requests` are optional in older backups and simply restore empty. Versions older than 6 are rejected rather than guessed at. After a restore the app re-registers the current device row so new sales keep valid foreign keys.
+
+**Restore limitation (by design):** export strips licensing and device-identity secrets — `license_code`, `activation_code`, install/hardware UUIDs, and session material are never written to the backup. A restored installation must re-activate the device and users must log in again; this is intentional (Rule S3 in `docs/architecture/architecture-rules.md`) so a backup file cannot be used to clone a license onto another machine.
 
 ## Register cash math
 

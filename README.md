@@ -30,7 +30,7 @@ from one codebase:
 ## Run
 
 ```powershell
-cd app
+cd frontend
 flutter pub get
 flutter run -d windows --dart-define=WHOLESALE_POS_DEV_UNLICENSED=true
 ```
@@ -57,7 +57,7 @@ key, the licensing function URL, and the `pos-api` URL — miss one and activati
 cloud sign-in silently breaks.
 
 ```powershell
-cd app
+cd frontend
 powershell -File tools\build_release.ps1 windows   # build\windows\x64\runner\Release
 powershell -File tools\build_release.ps1 apk       # build\app\outputs\flutter-apk\app-release.apk
 powershell -File tools\build_release.ps1 web       # build\web  (PWA from lib/main_web.dart)
@@ -74,7 +74,7 @@ your own `license.key` next to the binary so it runs on this PC — never ship t
 ## Web / PWA
 
 ```powershell
-cd app
+cd frontend
 powershell -File tools\deploy_web.ps1     # build, deploy to Vercel, re-pin the stable domain
 ```
 
@@ -95,7 +95,7 @@ powershell -File tools\verify_pos_api.ps1 -ActivationCode <code>
 ## Test and analyze
 
 ```powershell
-cd app
+cd frontend
 flutter analyze
 flutter test
 dart format --output=none --set-exit-if-changed lib test tools
@@ -111,9 +111,9 @@ dart format --output=none --set-exit-if-changed lib test tools
 
 ## Structure
 
-- `app/` — Flutter application (`lib/main.dart` native, `lib/main_web.dart` PWA)
-- `app/tools/` — build/deploy scripts, license tooling, live verifiers (`verify_pos_api.ps1`, `verify_phone_login.ps1`, `verify_delete_user.ps1`), and the concurrency harness (`stress_burst.mjs`)
-- `supabase/functions/` — `pos-api` (shop actions) and `licensing` Edge Functions
+- `frontend/` — Flutter application (`lib/main.dart` native, `lib/main_web.dart` PWA)
+- `frontend/tools/` — build/deploy scripts, license tooling, live verifiers (`verify_pos_api.ps1`, `verify_phone_login.ps1`, `verify_delete_user.ps1`), and the concurrency harness (`stress_burst.mjs`)
+- `backend/supabase/functions/` — `pos-api` (shop actions) and `licensing` Edge Functions
 - `docs/` — database schema, licensing, cloud sync, and progress documentation
 
 The UI uses desktop-sized layouts with responsive stacking below roughly 900 px. The

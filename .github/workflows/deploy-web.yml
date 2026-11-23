@@ -37,7 +37,7 @@ jobs:
       PAGES_PROJECT: aymen-pos
     defaults:
       run:
-        working-directory: ./app
+        working-directory: ./frontend
     steps:
       - uses: actions/checkout@v4
 
@@ -56,7 +56,7 @@ jobs:
       # The single source of truth for the shipped web bundle: it stamps the
       # licensing/pos-api/sync dart-defines AND runs the post-build cleanliness
       # check, so a build with a missing backend URL or a leaked license can
-      # never reach Cloudflare. Also copies app/web/_headers into build/web.
+      # never reach Cloudflare. Also copies frontend/web/_headers into build/web.
       - name: Build web (PWA) with release defines
         shell: pwsh
         run: ./tools/build_release.ps1 web

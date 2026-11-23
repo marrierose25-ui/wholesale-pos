@@ -67,7 +67,7 @@ powershell -File tools\build_release.ps1 apk      # Android
 powershell -File tools\build_release.ps1 windows  # Windows desktop
 ```
 
-The script (`app/tools/build_release.ps1`) contains the shop's real public key and function URL. Building with bare `flutter build` instead of the script produces an app that cannot activate — prefer the script for every distributable.
+The script (`frontend/tools/build_release.ps1`) contains the shop's real public key and function URL. Building with bare `flutter build` instead of the script produces an app that cannot activate — prefer the script for every distributable.
 
 Deliberately, the Supabase secret key is not baked into distributable builds (it would be extractable and bypass row-level security); mobile ships with sync inert by default — a phone build refuses the baked-in key unless you add the private-use opt-in `--dart-define=WHOLESALE_POS_UNSAFE_EMBED_SYNC_SECRET=true` for the shop's own devices only. See `docs/CLOUD_SYNC.md` §8a for the full trade-off and the eventual anon-key + RLS replacement.
 
@@ -93,7 +93,7 @@ The steps below were executed once and are complete; they are kept as a referenc
    ```powershell
    $env:SUPABASE_URL    = "https://<your-ref>.supabase.co"
    $env:SUPABASE_SECRET = "sb_secret_..."   # service_role key
-   cd app
+   cd frontend
    dart run tools/create_customer.dart `
      --name "Mercato Textiles" `
      --seats 3 `
@@ -136,7 +136,7 @@ Enforced invariants (all verified live):
 - **Activation is atomic.** `try_reserve_seat` locks the license row (`SELECT … FOR UPDATE`) around the revoked/expired check + seat count + insert, so concurrent activations cannot over-admit past `seat_limit`.
 - **The sync gateway authenticates cryptographically.** Ed25519 signature, embedded expiry, license-row revocation, and an active registered seat are all checked per request; `customer_id` is taken only from the verified payload (a client cannot write into another tenant's partition); PostgREST parameterisation neutralises injection in pushed values.
 
-Two live-exploitable defects found in that audit — cross-tenant voucher/seat theft and publicly-executable `SECURITY DEFINER` RPCs — were fixed as above and re-verified (the attack now fails; legitimate in-tenant redemption still works). See `docs/PROGRESS.md` Phase 19. The repro/verification harness is kept in `app/tools/sec_*.ps1`; those scripts embed the deploy token, which must be rotated.
+Two live-exploitable defects found in that audit — cross-tenant voucher/seat theft and publicly-executable `SECURITY DEFINER` RPCs — were fixed as above and re-verified (the attack now fails; legitimate in-tenant redemption still works). See `docs/PROGRESS.md` Phase 19. The repro/verification harness is kept in `frontend/tools/sec_*.ps1`; those scripts embed the deploy token, which must be rotated.
 
 ## Development without a key
 

@@ -19,14 +19,14 @@ jobs:
         with:
           channel: 'stable'
           
-      # Notice the working-directory: ./app
+      # Notice the working-directory: ./frontend
       - name: Build
-        working-directory: ./app
+        working-directory: ./frontend
         run: flutter pub get
         
-      # Notice the working-directory: ./app
+      # Notice the working-directory: ./frontend
       - name: Test
-        working-directory: ./app
+        working-directory: ./frontend
         run: flutter test --coverage
         
       - name: SonarQube Scan

@@ -36,7 +36,7 @@ SaleRepository.saveSale()  ──►  BEGIN TRANSACTION
                               COMMIT
 ```
 
-Files added (`app/lib/core/sync/`):
+Files added (`frontend/lib/core/sync/`):
 
 | File | Responsibility |
 |------|----------------|
@@ -92,7 +92,7 @@ must never cross a network boundary or two devices would race the same numbers.
 
 ## 4. Persistent sign-in (opt-in, default OFF)
 
-Added `app/lib/core/auth/session_store.dart`: a `SessionStore` abstraction with
+Added `frontend/lib/core/auth/session_store.dart`: a `SessionStore` abstraction with
 a settings-table implementation, an opaque random token bound to
 `userId + issuedAt + expiresAt`, a 12-hour lifetime, and `UserRepository.getById`
 that refuses to rehydrate a deactivated account.
@@ -167,7 +167,7 @@ would create risk, not value:
 
 ## 8. Supabase backend — now implemented (and how it is secured)
 
-`app/lib/core/sync/supabase_sync_backend.dart` implements `SyncBackend` over the
+`frontend/lib/core/sync/supabase_sync_backend.dart` implements `SyncBackend` over the
 Supabase PostgREST API. This turns the previously-inert seam into a working push
 path. Points an auditor should note:
 

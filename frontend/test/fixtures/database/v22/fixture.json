@@ -1,0 +1,26 @@
+{
+  "schema_version": 22,
+  "source_commit": "a16d7dd",
+  "source_path": "app/lib/core/database/local_database.dart",
+  "provenance": "Verbatim `_onCreate` of schema v22.",
+  "tables": [
+    "audit_logs",
+    "cash_movement_photos",
+    "cash_movements",
+    "counters",
+    "devices",
+    "finance_categories",
+    "finance_entries",
+    "picklist_customers",
+    "picklist_items",
+    "picklists",
+    "products",
+    "sale_items",
+    "sales",
+    "settings",
+    "shifts",
+    "sync_outbox",
+    "users",
+    "void_requests"
+  ]
+}

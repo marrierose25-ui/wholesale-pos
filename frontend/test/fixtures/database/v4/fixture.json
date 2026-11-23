@@ -1,0 +1,16 @@
+{
+  "schema_version": 4,
+  "source_commit": "0d071dd",
+  "source_path": "app/lib/core/database/local_database.dart",
+  "provenance": "Verbatim `_onCreate` of schema v4.",
+  "tables": [
+    "audit_logs",
+    "cash_movements",
+    "devices",
+    "products",
+    "sale_items",
+    "sales",
+    "shifts",
+    "users"
+  ]
+}

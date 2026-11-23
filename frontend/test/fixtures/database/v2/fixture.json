@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "source_commit": "f644ceb",
+  "source_path": "app/lib/core/database/local_database.dart",
+  "provenance": "Reconstructed from the v3 initial commit `_onCreate` with `sales.payment_method` removed. The v3 `_onUpgrade` block for `oldVersion < 3` adds exactly that column, and it is the only difference between v2 and v3.",
+  "tables": [
+    "audit_logs",
+    "devices",
+    "products",
+    "sale_items",
+    "sales",
+    "shifts",
+    "users"
+  ]
+}
