@@ -12,7 +12,7 @@ import 'package:sqflite/sqflite.dart';
 /// (not sqflite_common_ffi) on Android/iOS — factory selection, migration
 /// transaction, downgrade refusal and index convergence on device SQLite.
 ///
-/// Run: flutter test integration_test -d <android|ios device>
+/// Run: flutter test integration_test -d DEVICE
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
