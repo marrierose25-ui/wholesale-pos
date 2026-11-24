@@ -191,9 +191,9 @@ class _ActivationScreenState extends State<ActivationScreen> {
         ),
       const SizedBox(height: 16),
       Text(
-        'One code covers the seats you bought (a shop PC plus phones). If you '
-        'change device, deactivate an old one under Settings \u2192 Devices \u2014 no need '
-        'to contact your provider.',
+        'One code covers your whole business — activate as many devices as '
+        'you need. If you change device, deactivate the old one under '
+        'Settings → Devices — no need to contact your provider.',
         textAlign: TextAlign.center,
         style: TextStyle(fontSize: 12, color: AppDesign.textLo),
       ),

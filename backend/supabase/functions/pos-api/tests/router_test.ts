@@ -503,6 +503,8 @@ const EXPECTED_AUTHENTICATED_ACTIONS = [
   "revenue_trend",
   "report_summary",
   "list_audit",
+  "list_devices",
+  "deactivate_device",
 ];
 
 Deno.test("every monolith action is registered in the dispatch table", () => {

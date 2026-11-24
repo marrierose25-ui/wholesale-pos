@@ -4,7 +4,9 @@ Licenses use `base64url(canonical-json).base64url(Ed25519-signature)`. Canonical
 
 Version 2 payloads (issued by the licensing Edge Function since Phase 17) additionally require `customer_id`, `activation_code`, and `device_fingerprint`. A v2 license is always bound to a specific device: on Windows the fingerprint is `sha256("win|" + motherboard UUID)`, on Android/iOS it is `sha256("and|<install_uuid>")` where the install_uuid is generated on first launch and stored in the app's SQLite `settings` table. `hardware_id` is not used in v2. The validator accepts both versions so existing `license.key` files keep working on shop PCs unchanged.
 
-The commercial workflow that surrounds v2 — issuing a code to a new buyer, adding seats after they pay you, handling a lost phone — is described under "Selling the app (v2 licensing)" further down this file.
+The commercial workflow that surrounds v2 — issuing a code to a new buyer, managing their devices, handling a lost phone — is described under "Selling the app (v2 licensing)" further down this file.
+
+**Policy: ONE activation code = ONE business with UNLIMITED devices.** There is no seat cap and no seat vouchers. The activation code is a sensitive enrollment credential; a device fingerprint identifies a registered device but is NOT proof of owner identity — device management requires an authenticated OWNER session on `pos-api`.
 
 The app never embeds the private key. The public verification key is supplied at build time:
 
@@ -97,33 +99,30 @@ The steps below were executed once and are complete; they are kept as a referenc
    cd frontend
    dart run tools/create_customer.dart `
      --name "Mercato Textiles" `
-     --seats 3 `
      --expires never
    ```
 
    The tool prints one `ACTIVATION_CODE=XXXX-XXXX-XXXX-XXXX-XX` line. Send that to the buyer.
 3. The buyer opens the app on their first device, pastes the code into the activation screen, the app auto-generates their device fingerprint, calls the licensing function, and gets back a signed per-device license which is stored locally. They can now sell offline indefinitely.
-4. Buyer installs on a second device → pastes the same code → gets another seat. Third device → same. Fourth device (if seat_limit=3) → the app shows "Seat limit reached" and points at Settings → Devices.
+4. Buyer installs on additional devices → pastes the same code → each one registers and gets its own signed license. **Devices are unlimited** — there is no seat count to hit and nothing further to buy.
 
-### Adding seats after payment
+### Seat vouchers — DEPRECATED
 
-1. Buyer contacts you; you take payment out of band.
-2. `dart run tools/create_seat_voucher.dart --activation-code "XXXX-…-XX" --seats 2` → prints a `VOUCHER_CODE=V-XXXXXXXX` string. Send it to the buyer.
-3. Buyer pastes it into Settings → My devices → "Add more seats". The Edge Function bumps their `seat_limit` atomically via the `apply_seat_voucher` RPC; nothing on your end changes and the voucher cannot be reused (a second redemption returns "already redeemed").
+Seat vouchers are retired. The `seat_vouchers` table and `apply_seat_voucher` RPC remain for historical/audit purposes only; `create_seat_voucher.dart` refuses to run, the Devices screen no longer shows a voucher field, and the licensing Edge Function answers `redeem_voucher` with a deliberate `410` deprecation response. Old voucher rows are never silently redeemed.
 
 ### Handling a lost or replaced device
 
-The buyer does this themselves in **Settings → My devices** (visible to the OWNER account only — cashiers cannot touch seats) — no email to you:
+The buyer does this themselves in **Settings → My devices** — the OWNER signs in with their cloud (pos-api) owner credentials (the same phone + password as the web app). A bare activation code or device fingerprint can no longer list or deactivate devices:
 
-- The screen lists every active seat with a masked fingerprint and the device name; the caller's own row is marked "This device".
-- Tap **Deactivate** on the lost phone (a confirmation dialog explains the seat becomes free immediately) → seat is freed.
-- On the replacement phone, open the app → paste the same activation code on the activation screen → it takes the freed seat.
+- The screen lists every active device with a masked fingerprint and the device name; the caller's own row is marked "This device". Full fingerprints are never returned.
+- Tap **Deactivate** on the lost phone (a confirmation dialog explains access ends at next sync) → registration is revoked server-side.
+- On the replacement device, open the app → paste the same activation code on the activation screen → it registers as a new device. Unlimited devices means no seat needs freeing first.
 
 If the buyer lost their ONLY device and cannot reach Settings, use the Supabase dashboard (Table Editor → `device_registrations` filtered by `activation_code`), delete the stale row, then tell them to re-activate. This is the only support case that needs you.
 
 ### What protects you against a buyer sharing the code
 
-A stolen code, without a matching device fingerprint, can only consume the ORIGINAL buyer's seats. It cannot create a fresh workspace for the thief, because every sync table is (or will be) partitioned by `customer_id` from the signed license. Two of the buyer's seats going to a friend means the friend sees the buyer's data (which the buyer will notice fast, and can stop from Settings → My devices by deactivating the thief's seat). Selling beyond the seat count means the friend simply cannot activate. Either way, they have to come to you for a bigger code.
+A stolen code, without a matching device fingerprint, can only register devices onto the ORIGINAL buyer's account — it cannot create a fresh workspace for the thief, because every sync table is (or will be) partitioned by `customer_id` from the signed license. Unlimited devices mean the thief could activate many devices, but they would all see the buyer's data (which the buyer will notice fast, and can stop from Settings → My devices by deactivating them as owner). Revoking the license blocks future activation and sync per the enforcement model; already-issued offline signed licenses still run until their own expiry.
 
 The one thing software cannot stop: a buyer physically handing an already-unlocked activated phone to a friend. If that becomes a real problem, the mitigation is a per-shop PIN lock (Phase 17c).
 
@@ -134,9 +133,11 @@ A full penetration test was run against the live licensing/sync backend (osv.dev
 Enforced invariants (all verified live):
 
 - **RLS default-deny everywhere.** No policies exist on any public table and `anon`/`authenticated` have `rolbypassrls = false`, so those roles read 0 rows from every licensing/mirror table. The licensing tables and the `license_seat_usage` view additionally `REVOKE ALL` from `anon`/`authenticated` as defense-in-depth.
-- **Licensing RPCs are service_role-only.** `apply_seat_voucher` and `try_reserve_seat` are `SECURITY DEFINER` (they run as `postgres` and skip RLS), so `EXECUTE` is revoked from `public, anon, authenticated` and granted only to `service_role`. They are never reachable via `/rest/v1/rpc/…` with an anon key — only the Edge Function calls them.
-- **Seat redemption is tenant-bound.** `apply_seat_voucher(p_voucher_code, p_activation_code)` only redeems a voucher whose parent `activation_code` equals the caller's; a foreign or guessed code returns the generic "not found", so one shop can neither burn another's voucher nor learn which voucher codes exist.
-- **Activation is atomic.** `try_reserve_seat` locks the license row (`SELECT … FOR UPDATE`) around the revoked/expired check + seat count + insert, so concurrent activations cannot over-admit past `seat_limit`.
+- **Licensing RPCs are service_role-only.** `apply_seat_voucher` (legacy), `try_reserve_seat` (legacy), `register_device`, `rate_limit_hit`, and `rate_limit_reset` are `SECURITY DEFINER` (they run as `postgres` and skip RLS), so `EXECUTE` is revoked from `public, anon, authenticated` and granted only to `service_role`. They are never reachable via `/rest/v1/rpc/…` with an anon key — only the Edge Functions call them.
+- **Seat redemption is tenant-bound (legacy).** `apply_seat_voucher(p_voucher_code, p_activation_code)` only redeems a voucher whose parent `activation_code` equals the caller's; the action is deprecated and unreachable from the Edge Function.
+- **Activation is atomic.** `register_device` locks the license row (`SELECT … FOR UPDATE`) around the revoked/expired checks, the idempotent fingerprint refresh/reactivation, and the insert — there is no seat count anymore, and no non-transactional fallback path. A revocation racing an activation cannot mint a license for a revoked code.
+- **Device management is owner-authenticated.** `list_devices`/`deactivate_device` on `pos-api` require a verified OWNER JWT (token-version checked); responses carry registration ids + masked fingerprints only, tenant scope comes from the JWT's `customer_id`, and self-deactivation is refused server-side.
+- **Public endpoints are durably rate-limited.** Activation, owner login, owner bootstrap, and activation-code probes go through `rate_limit_hit`/`rate_limit_reset` — Postgres-backed fixed-window counters keyed by HMAC digests (no raw codes, usernames, or IPs stored), returning HTTP 429 with `retry_after_seconds`.
 - **The sync gateway authenticates cryptographically.** Ed25519 signature, embedded expiry, license-row revocation, and an active registered seat are all checked per request; `customer_id` is taken only from the verified payload (a client cannot write into another tenant's partition); PostgREST parameterisation neutralises injection in pushed values.
 
 Two live-exploitable defects found in that audit — cross-tenant voucher/seat theft and publicly-executable `SECURITY DEFINER` RPCs — were fixed as above and re-verified (the attack now fails; legitimate in-tenant redemption still works). See `docs/PROGRESS.md` Phase 19. The repro/verification harness is kept in `frontend/tools/sec_*.ps1`; those scripts embed the deploy token, which must be rotated.

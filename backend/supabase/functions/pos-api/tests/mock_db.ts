@@ -318,7 +318,45 @@ class MockQuery implements PromiseLike<QueryResult> {
   }
 }
 
+// Module-level bucket store for the rate-limit RPC mocks. It deliberately
+// lives OUTSIDE MockDb so limiter state survives a "new function instance"
+// (a fresh MockDb) exactly like the real rate_limit_buckets table does —
+// that is what the durability tests assert. Call resetMockRateLimits()
+// between tests.
+const mockRateLimitBuckets = new Map<
+  string,
+  { windowStart: number; count: number }
+>();
+export function resetMockRateLimits() {
+  mockRateLimitBuckets.clear();
+}
+
 const DEFAULT_RPC: Record<string, RpcHandler> = {
+  rate_limit_hit: (p) => {
+    const now = Date.now();
+    const key = String(p.p_key ?? "");
+    const limit = Number(p.p_limit ?? 0);
+    const windowMs = Number(p.p_window_seconds ?? 60) * 1000;
+    const charge = p.p_charge !== false;
+    let b = mockRateLimitBuckets.get(key);
+    if (!b || now - b.windowStart >= windowMs) {
+      b = { windowStart: now, count: 0 };
+    }
+    if (charge) b.count += 1;
+    mockRateLimitBuckets.set(key, b);
+    return {
+      allowed: b.count <= limit,
+      count: b.count,
+      retry_after_seconds: Math.max(
+        0,
+        Math.ceil((b.windowStart + windowMs - now) / 1000),
+      ),
+    };
+  },
+  rate_limit_reset: (p) => {
+    mockRateLimitBuckets.delete(String(p.p_key ?? ""));
+    return null;
+  },
   pos_next_receipt: () => "0001",
   pos_expected_cash: () => 0,
   pos_shift_counters: () => ({}),

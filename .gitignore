@@ -83,3 +83,4 @@ backend/**/build/
 
 # Graphify knowledge-graph output — regenerable via `graphify update .`.
 graphify-out/
+backend/supabase/schemas/

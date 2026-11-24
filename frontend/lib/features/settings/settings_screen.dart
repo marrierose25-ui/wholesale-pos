@@ -1,8 +1,8 @@
 import 'package:file_selector/file_selector.dart';
 import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:pos_cloud_engine/pos_cloud_engine.dart' show CloudApiClient;
 import 'package:pos_contracts/pos_contracts.dart' hide AppBackend;
-import 'package:pos_local_engine/pos_local_engine.dart' show ActivationClient;
 
 import '../../core/backend/app_backend.dart';
 import '../../core/backend/native_backend.dart';
@@ -97,8 +97,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _authorizePendingOwnerActions() async {
-    if (_isReconcilingOwnerActions ||
-        widget.backend is! NativeBackend) {
+    if (_isReconcilingOwnerActions || widget.backend is! NativeBackend) {
       return; // single-flight: no parallel flows
     }
     final backend = widget.backend as NativeBackend;
@@ -173,9 +172,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       );
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Authorization failed: $e')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Authorization failed: $e')));
       }
     } finally {
       passwordController.dispose();
@@ -298,7 +296,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         builder: (_) => DevicesScreen(
           activationCodeProvider: localData.activationCode,
           fingerprintProvider: localData.deviceFingerprint,
-          client: ActivationClient(),
+          api: CloudApiClient(),
         ),
       ),
     );
@@ -544,8 +542,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             leading: const Icon(CupertinoIcons.desktopcomputer),
                             title: const Text('My devices'),
                             subtitle: const Text(
-                              'See which phones and PCs are using your activation '
-                              'code, deactivate a lost one, or redeem a seat voucher.',
+                              'See which devices use your activation code '
+                              'and deactivate a lost one. Unlimited devices '
+                              'per code — owner sign-in required.',
                             ),
                             trailing: const Icon(CupertinoIcons.chevron_right),
                             onTap: _isSyncing ? null : _openDevicesScreen,
@@ -621,7 +620,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               _pendingStoreCorrupt
                                   ? CupertinoIcons.exclamationmark_triangle
                                   : CupertinoIcons.checkmark_seal,
-                              color: _pendingStoreCorrupt ||
+                              color:
+                                  _pendingStoreCorrupt ||
                                       _pendingOwnerActions != 0
                                   ? AppDesign.warning
                                   : AppDesign.accent,
@@ -648,10 +648,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                     ),
                                   )
                                 : (_pendingOwnerActions != 0 ||
-                                          _pendingStoreCorrupt)
-                                  ? const Icon(CupertinoIcons.chevron_right)
-                                  : null,
-                            onTap: (_pendingOwnerActions != 0 ||
+                                      _pendingStoreCorrupt)
+                                ? const Icon(CupertinoIcons.chevron_right)
+                                : null,
+                            onTap:
+                                (_pendingOwnerActions != 0 ||
                                         _pendingStoreCorrupt) &&
                                     !_isReconcilingOwnerActions
                                 ? _authorizePendingOwnerActions

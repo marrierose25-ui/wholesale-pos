@@ -48,6 +48,7 @@ import { CORS_HEADERS, json, str } from "./shared/helpers.ts";
 import type { Ctx } from "./shared/types.ts";
 import * as catalog from "./modules/catalog/index.ts";
 import * as finance from "./modules/finance/index.ts";
+import * as licensing from "./modules/licensing/index.ts";
 import * as register from "./modules/register/index.ts";
 import * as reporting from "./modules/reporting/index.ts";
 import * as sales from "./modules/sales/index.ts";
@@ -138,6 +139,10 @@ export const ACTIONS: Record<string, Handler> = {
   update_picklist_item: warehouse.updatePicklistItem,
   delete_picklist_item: warehouse.deletePicklistItem,
   delete_picklist: warehouse.deletePicklist,
+
+  // Device management (owner-only; see OWNER_ONLY in authorization.ts)
+  list_devices: licensing.listDevices,
+  deactivate_device: licensing.deactivateDevice,
 
   // Counters, reporting, audit
   dashboard_summary: reporting.dashboardSummary,

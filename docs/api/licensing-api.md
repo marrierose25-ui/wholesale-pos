@@ -1,87 +1,67 @@
 # Licensing API
 
-The POS licensing subsystem binds a software license to a specific device using Ed25519 digital signatures. Verification is performed at app startup and periodically thereafter.
+The POS licensing subsystem binds software licenses to devices using Ed25519
+signatures. **Policy: one activation code = one business with UNLIMITED
+devices.** There are no seats and no seat vouchers.
+
+## Surfaces
+
+| Surface | Auth | Actions |
+| --- | --- | --- |
+| `licensing` Edge Function | activation code + device fingerprint (enrollment credential — NOT owner identity) | `activate_device` only |
+| `pos-api` Edge Function | verified OWNER JWT (token-version checked) | `list_devices`, `deactivate_device` |
+
+The licensing function's `list_devices`, `deactivate_device`, and
+`redeem_voucher` actions are **deprecated and return HTTP 410**. Device
+management moved behind owner authentication because a bare activation code
+plus a fingerprint is not proof of ownership.
 
 ## Activation Flow
 
 ```text
-Device ──(1)──▶ License Server
+Device ──(1)──▶ licensing Edge Function (activate_device)
     │               │
-    │◀──(2)── Activation code (email/SMS)
-    │
-    │◀──(3)── License payload (signed)
-    │
+    │               ├─ rate_limit_hit (durable, HMAC-keyed)
+    │               ├─ register_device RPC (license row lock:
+    │               │   revoked/expired checks, idempotent fingerprint,
+    │               │   reactivation, insert — atomic, unlimited)
+    │               └─ Ed25519-signed license payload
+    │◀──(2)── license_code (base64url(payload).base64url(sig))
     ▼
-Store locally → unlock full app
+Store locally → verify offline on every launch
 ```
 
-### Step 1 — Collect Device Fingerprint
+### License payload (version 2)
 
-The app computes a fingerprint from:
+`format`, `version: 2`, `product`, `entitlements`, `activation_code`,
+`customer_id`, `device_fingerprint`, `issued_at`, `expires_at` — canonical
+JSON (recursively sorted keys, no whitespace), signed Ed25519. `expires_at`
+is capped at the license row's expiry when one exists, else a rolling
+year.
 
-- Platform identifier (`windows`, `android`, `web`)
-- Hardware ID (CPU serial / MAC address, abstracted via `device_info_plus`)
-- A random installation UUID persisted to secure storage
+## Device management (pos-api, OWNER only)
 
-### Step 2 — Redeem Activation Code
+- `list_devices` → `{ ok, devices: [{id, device_name, fingerprint_masked,
+  activation_code_masked, first_seen, last_heartbeat, is_self}],
+  active_devices }`. Full fingerprints are never returned; deactivation is
+  keyed by the registration `id`.
+- `deactivate_device` → `{ registration_id, device_fingerprint? }`. The
+  server refuses self-deactivation (409) and returns 404 for ids outside
+  the caller's tenant. Every deactivation is written to `license_audit`
+  and `pos_audit_logs`.
 
-The user enters a short activation code (e.g., `WP-XXXX-XXXX-XXXX`). The code is sent to the license server (hosted at the Supabase project). The server:
+## Rate limiting
 
-1. Looks up the code in the `licenses` table.
-2. Verifies it hasn't been redeemed.
-3. Signs a payload binding the code to the device fingerprint.
-4. Returns the signed license blob.
+Public endpoints (`activate_device`, `login`, `setup_owner`, `has_users`)
+are throttled by `rate_limit_hit`/`rate_limit_reset` — Postgres-backed
+fixed-window counters keyed by HMAC-SHA256 digests (no raw activation codes,
+usernames, or IPs stored). Refusals return HTTP 429 with
+`retry_after_seconds`.
 
-### Step 3 — Verify & Store
+## Legacy notes
 
-The app verifies the Ed25519 signature against a build-time embedded public key. If valid, the license is stored in encrypted settings (key `license_data`). Subsequent launches skip remote verification unless the license is near expiry.
-
-## License Payload Shape
-
-```typescript
-interface LicensePayload {
-  version: 'v1' | 'v2';
-  customerId: string;       // tenant UUID
-  deviceId: string;         // fingerprint hash
-  issuedAt: number;         // epoch ms
-  expiresAt: number;        // epoch ms
-  seats: number;            // concurrent device limit
-  features: string[];       // feature flags (e.g., 'warehouse')
-  signature: string;        // Ed25519 hex
-}
-```
-
-## Expiration Handling
-
-| Time remaining | Behavior |
-| --------------- | ---------- |
-| > 30 days | Normal operation |
-| 7–30 days | Warning banner; no functional restriction |
-| 0–7 days | Warning banner + restricted write operations |
-| Expired | Hard block on all write operations; read-only access permitted |
-
-Grace periods are configurable at the license-server level. Client-side enforcement is absolute — tampering with local storage cannot extend expiry.
-
-## Seat Management
-
-A license permits up to `seats` concurrently activated devices. When activating a new device beyond the seat count:
-
-1. The oldest inactive device is released automatically.
-2. If all seats are active, the user must deactivate a device manually via **Settings → Devices**.
-
-## Transfer Between Devices
-
-Owners may transfer a license to a different machine:
-
-1. Open **Settings → License → Transfer**.
-2. The app sends a deactivation request to the license server for the current device fingerprint.
-3. The server invalidates the old binding and issues a new code.
-4. Enter the new code on the target device.
-
-Transfers require Owner authentication and emit an audit log entry (`LICENSE_TRANSFER`).
-
-## Security Properties
-
-- **Key rotation:** Public keys are baked into the binary at build time. Rotations require a new app release.
-- **No server secrets in the binary:** Only the public verification key is embedded. The private signing key lives exclusively on the license server.
-- **Replay protection:** Each activation code is single-use. Redeemed codes cannot reactivate.
+- `licenses.seat_limit` and the `seat_vouchers`/`apply_seat_voucher`
+  machinery are retained for historical records only; nothing enforces or
+  redeems them.
+- Offline signed licenses keep their own expiry semantics; revocation
+  blocks future activation/sync per the sync gateway's enforcement.

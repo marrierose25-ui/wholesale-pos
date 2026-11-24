@@ -8,12 +8,13 @@
 //   $env:SUPABASE_SECRET = "sb_secret_..."           # service-role key
 //   dart run tools/create_customer.dart `
 //     --name "Mercato Textiles" `
-//     --seats 3 `
 //     --expires 2027-10-24 `
 //     --contact "textiles@example.com"
 //
-// Prints the activation code to paste into the buyer's app. Nothing is
-// written to disk. Use --expires never (default) for a perpetual license.
+// One activation code = one business with UNLIMITED devices; there is no
+// seat count to choose. Prints the activation code to paste into the
+// buyer's app. Nothing is written to disk. Use --expires never (default)
+// for a perpetual license.
 //
 // See docs/SELLING_THE_APP.md for the commercial workflow around this tool.
 import 'dart:async';
@@ -31,7 +32,7 @@ Future<void> main(List<String> args) async {
   if (name == null || name.isEmpty) {
     stderr.writeln(
       'Usage: dart run tools/create_customer.dart '
-      '--name "Customer Shop Name" [--seats N] [--expires YYYY-MM-DD|never] '
+      '--name "Customer Shop Name" [--expires YYYY-MM-DD|never] '
       '[--contact "..."] [--notes "..."] [--timeout 60]',
     );
     exitCode = 2;
@@ -63,12 +64,9 @@ Future<void> main(List<String> args) async {
     return;
   }
 
-  final seats = int.tryParse(flags['seats'] ?? '3') ?? 3;
-  if (seats < 1) {
-    stderr.writeln('--seats must be >= 1.');
-    exitCode = 2;
-    return;
-  }
+  // Device policy is unlimited: no seat count is collected or stored. The
+  // legacy licenses.seat_limit column keeps its default and is ignored by
+  // the register_device RPC.
   final expiresArg = flags['expires'] ?? 'never';
   String? expiresIso;
   if (expiresArg != 'never') {
@@ -181,7 +179,6 @@ Future<void> main(List<String> args) async {
         body: jsonEncode({
           'activation_code': activationCode,
           'customer_id': customerId,
-          'seat_limit': seats,
           'expires_at': expiresIso,
         }),
       ),
@@ -218,7 +215,7 @@ Future<void> main(List<String> args) async {
 
     stdout.writeln('CUSTOMER_ID=$customerId');
     stdout.writeln('ACTIVATION_CODE=$activationCode');
-    stdout.writeln('SEAT_LIMIT=$seats');
+    stdout.writeln('DEVICES=unlimited');
     stdout.writeln('EXPIRES=$expiresArg');
     stdout.writeln(
       'Give the buyer this code and tell them to paste it '
@@ -281,8 +278,11 @@ Future<Map<String, dynamic>?> _findRow(
   return (rows.first as Map).cast<String, dynamic>();
 }
 
-/// XXXX-XXXX-XXXX-XXXX-XX (22 chars, 128-bit keyspace over a 32-char
-/// human-friendly alphabet). Random.secure so codes cannot be predicted.
+/// XXXX-XXXX-XXXX-XXXX-XX (18 chars, ~90-bit keyspace over a 32-char
+/// human-friendly alphabet: 18 * log2(32) = 90 bits). Random.secure so
+/// codes cannot be predicted. The format is kept for compatibility with
+/// already-issued codes; it is a high-entropy enrollment credential, not a
+/// password — treat it accordingly.
 String _generateActivationCode() {
   final rng = Random.secure();
   String block(int n) =>

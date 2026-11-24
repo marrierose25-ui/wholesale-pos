@@ -35,6 +35,10 @@ const OWNER_ONLY = new Set([
   "set_user_permissions",
   "set_user_phone",
   "delete_user",
+  // Device / license administration: an owner session is required — a bare
+  // activation code or device fingerprint is NOT proof of ownership.
+  "list_devices",
+  "deactivate_device",
 ]);
 
 // Feature-gated actions: allowed when the actor is an OWNER or holds ANY of the

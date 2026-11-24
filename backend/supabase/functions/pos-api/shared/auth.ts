@@ -33,6 +33,8 @@ const OWNER_ONLY = new Set([
   "set_user_permissions",
   "set_user_phone",
   "delete_user",
+  "list_devices",
+  "deactivate_device",
 ]);
 
 const ACTION_FEATURES: Record<string, string[]> = {
@@ -85,35 +87,97 @@ const ACTION_FEATURES: Record<string, string[]> = {
   list_cash_movements: ["register_history"],
 };
 
-// --- Best-effort login throttle (audit #14) --------------------------------
+// --- Durable login throttle (audit #14, Request 2) -------------------------
+// The old limiter was an in-memory Map: every cold start (and every extra
+// function instance) reset it, so it never actually bounded a distributed
+// attacker. Limits now live in `rate_limit_buckets` behind the atomic
+// `rate_limit_hit` / `rate_limit_reset` RPCs — they survive restarts,
+// concurrent hits cannot bypass them, and bucket keys are HMAC-SHA256
+// digests so no raw username, activation code, or IP is stored.
 const LOGIN_MAX_ATTEMPTS = 10;
-const LOGIN_WINDOW_MS = 60_000;
-const LOGIN_LOCKOUT_MS = 300_000;
-type LoginBucket = { fails: number; first: number; lockedUntil: number };
-const loginAttempts = new Map<string, LoginBucket>();
-function loginThrottleKey(customerId: string, username: string): string {
-  return `${customerId}|${username.toLowerCase()}`;
+const LOGIN_WINDOW_SECONDS = 60;
+// Public-endpoint probing bound: every unauthenticated action is also
+// throttled per activation code BEFORE the license lookup, so enumerating
+// valid codes is bounded even when the code itself is wrong.
+const PROBE_LIMIT = 60;
+const PROBE_WINDOW_SECONDS = 60;
+const SETUP_LIMIT = 5;
+const SETUP_WINDOW_SECONDS = 300;
+
+async function rateLimitKey(scope: string, subject: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(JWT_SECRET),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(`${scope}|${subject}`),
+  );
+  return Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
-function loginBlocked(key: string): number {
-  const b = loginAttempts.get(key);
-  if (!b) return 0;
-  const now = Date.now();
-  if (b.lockedUntil > now) return b.lockedUntil - now;
-  if (now - b.first > LOGIN_WINDOW_MS) loginAttempts.delete(key);
-  return 0;
+
+async function rateLimitAllow(
+  db: any,
+  scope: string,
+  subject: string,
+  limit: number,
+  windowSeconds: number,
+  charge: boolean,
+): Promise<{ allowed: boolean; retryAfter: number }> {
+  const { data, error } = await db.rpc("rate_limit_hit", {
+    p_key: await rateLimitKey(scope, subject),
+    p_limit: limit,
+    p_window_seconds: windowSeconds,
+    p_charge: charge,
+  });
+  if (error) throw new Error(error.message);
+  const r = (data ?? {}) as Record<string, unknown>;
+  return {
+    allowed: r.allowed !== false,
+    retryAfter: Number(r.retry_after_seconds ?? windowSeconds),
+  };
 }
-function loginRecordFail(key: string) {
-  const now = Date.now();
-  const b = loginAttempts.get(key);
-  if (!b || now - b.first > LOGIN_WINDOW_MS) {
-    loginAttempts.set(key, { fails: 1, first: now, lockedUntil: 0 });
-    return;
-  }
-  b.fails += 1;
-  if (b.fails >= LOGIN_MAX_ATTEMPTS) b.lockedUntil = now + LOGIN_LOCKOUT_MS;
+
+async function rateLimitClear(db: any, scope: string, subject: string) {
+  try {
+    await db.rpc("rate_limit_reset", {
+      p_key: await rateLimitKey(scope, subject),
+    });
+  } catch { /* a stale bucket is harmless */ }
 }
-function loginClear(key: string) {
-  loginAttempts.delete(key);
+
+function tooManyAttempts(retryAfter: number): Response {
+  return json({
+    ok: false,
+    error: `Too many attempts. Retry in ${retryAfter}s.`,
+    retry_after_seconds: retryAfter,
+  }, 429);
+}
+
+// Probe bound applied BEFORE the license lookup on every unauthenticated
+// action: bounds activation-code enumeration regardless of whether the code
+// resolves. Every call is charged — these endpoints are rare in legitimate
+// use, so the per-code ceiling is the enumeration bound.
+async function probeAllowed(
+  db: any,
+  scope: string,
+  activationCode: string,
+): Promise<Response | null> {
+  const chk = await rateLimitAllow(
+    db,
+    scope,
+    activationCode,
+    PROBE_LIMIT,
+    PROBE_WINDOW_SECONDS,
+    true,
+  );
+  return chk.allowed ? null : tooManyAttempts(chk.retryAfter);
 }
 
 // --- Phone-number identity ---------------------------------------------------
@@ -423,6 +487,8 @@ async function ensureDemoUser(
 // --- Has users check (unauthenticated) ---------------------------------------
 async function hasUsers(db: any, body: any): Promise<Response> {
   const code = str(body.activation_code);
+  const blocked = await probeAllowed(db, "posapi:hasusers", code);
+  if (blocked) return blocked;
   const lic = await licenseForActivationCode(db, code);
   if (!lic.ok) return json({ ok: false, error: lic.error }, 403);
   const customerId = lic.customerId;
@@ -440,18 +506,22 @@ async function login(db: any, body: any): Promise<Response> {
   if (!code || !username || !password) {
     return json({ ok: false, error: "Missing fields" }, 400);
   }
+  const blocked = await probeAllowed(db, "posapi:login", code);
+  if (blocked) return blocked;
   const lic = await licenseForActivationCode(db, code);
   if (!lic.ok) return json({ ok: false, error: lic.error }, 403);
   const customerId = lic.customerId;
 
-  const tkey = loginThrottleKey(customerId, username);
-  const retryAfter = loginBlocked(tkey);
-  if (retryAfter > 0) {
-    return json({
-      ok: false,
-      error: `Too many attempts. Retry in ${Math.ceil(retryAfter / 1000)}s.`,
-    }, 429);
-  }
+  const tkey = `${customerId}|${username.toLowerCase()}`;
+  const pre = await rateLimitAllow(
+    db,
+    "posapi:loginfail",
+    tkey,
+    LOGIN_MAX_ATTEMPTS,
+    LOGIN_WINDOW_SECONDS,
+    false,
+  );
+  if (!pre.allowed) return tooManyAttempts(pre.retryAfter);
 
   const needle = username.toLowerCase().replace(/[%_]/g, "");
   const { data: user } = await db.from("pos_users")
@@ -463,16 +533,30 @@ async function login(db: any, body: any): Promise<Response> {
       "AAAAAAAAAAAAAAAAAAAAAA==",
       "210000$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
     );
-    loginRecordFail(tkey);
+    await rateLimitAllow(
+      db,
+      "posapi:loginfail",
+      tkey,
+      LOGIN_MAX_ATTEMPTS,
+      LOGIN_WINDOW_SECONDS,
+      true,
+    );
     return json({ ok: false, error: "Invalid credentials." }, 401);
   }
 
   const ok = await verifyPassword(password, user.pw_salt, user.pw_hash);
   if (!ok) {
-    loginRecordFail(tkey);
+    await rateLimitAllow(
+      db,
+      "posapi:loginfail",
+      tkey,
+      LOGIN_MAX_ATTEMPTS,
+      LOGIN_WINDOW_SECONDS,
+      true,
+    );
     return json({ ok: false, error: "Invalid credentials." }, 401);
   }
-  loginClear(tkey);
+  await rateLimitClear(db, "posapi:loginfail", tkey);
 
   let demoPassword: string | null = null;
   try {
@@ -510,6 +594,8 @@ async function setupOwner(db: any, body: any): Promise<Response> {
   }
   const username = normalizePhone(rawName);
   if (!username) return json({ ok: false, error: PHONE_INVALID }, 400);
+  const blocked = await probeAllowed(db, "posapi:setup", code);
+  if (blocked) return blocked;
   const lic = await licenseForActivationCode(db, code);
   if (!lic.ok) return json({ ok: false, error: lic.error }, 403);
   const customerId = lic.customerId;
@@ -521,6 +607,17 @@ async function setupOwner(db: any, body: any): Promise<Response> {
       error: `Password must be at least ${minLen} characters.`,
     }, 400);
   }
+  // Owner bootstrap is the highest-value public action: a tight per-code
+  // ceiling on top of the generic probe bound.
+  const setupChk = await rateLimitAllow(
+    db,
+    "posapi:setupowner",
+    code,
+    SETUP_LIMIT,
+    SETUP_WINDOW_SECONDS,
+    true,
+  );
+  if (!setupChk.allowed) return tooManyAttempts(setupChk.retryAfter);
   const { salt, hash } = await hashPassword(password);
   const id = crypto.randomUUID();
   const rpc = await db.rpc("pos_setup_owner", {
@@ -618,17 +715,16 @@ export {
   licenseForActivationCode,
   loadActiveUser,
   login,
-  loginBlocked,
-  loginClear,
   loginIdentifier,
-  loginRecordFail,
-  loginThrottleKey,
   markDemoVersion,
   normalizePhone,
   OWNER,
   OWNER_ONLY,
   PBKDF2_ITERATIONS,
   randomDemoPassword,
+  rateLimitAllow,
+  rateLimitClear,
+  rateLimitKey,
   SESSION_TTL_SECONDS,
   setupOwner,
   signJwt,

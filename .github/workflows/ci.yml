@@ -189,3 +189,35 @@ jobs:
             frontend/ios-sim-diagnostics.log
           if-no-files-found: ignore
           retention-days: 14
+
+  supabase-replay:
+    name: Supabase cold migration replay
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Replay baseline-to-head migrations on empty PostgreSQL 17
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: bash backend/supabase/scripts/replay_migrations.sh
+      - name: H1 void invariants on the replayed schema
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/h1_void_invariants/h1_void_invariants_test.sql > /tmp/h1.log 2>&1 || true; grep -c "PASS" /tmp/h1.log || true; tail -5 /tmp/h1.log

@@ -48,16 +48,16 @@ void main() {
       expect(r.expiresAt, DateTime.utc(2031));
     });
 
-    test('activateDevice surfaces the seat-limit refusal', () async {
+    test('activateDevice surfaces a server refusal', () async {
       final mock = MockClient(
         (_) async => http.Response(
           jsonEncode({
             'ok': false,
-            'error': 'Seat limit reached.',
+            'error': 'License revoked.',
             'seat_limit': 3,
             'seats_used': 3,
           }),
-          409,
+          403,
         ),
       );
       final r = await ActivationClient(url: url, client: mock).activateDevice(
@@ -66,85 +66,38 @@ void main() {
         deviceName: 'Pixel',
       );
       expect(r.ok, isFalse);
-      expect(r.error, 'Seat limit reached.');
+      expect(r.error, 'License revoked.');
       expect(r.seatLimit, 3);
       expect(r.seatsUsed, 3);
     });
 
-    test('listDevices parses the returned array', () async {
+    test('activateDevice surfaces the rate-limit refusal', () async {
       final mock = MockClient(
         (_) async => http.Response(
           jsonEncode({
-            'ok': true,
-            'seat_limit': 3,
-            'seats_used': 2,
-            'devices': [
-              {
-                'fingerprint_masked': 'aaaa-bbbb',
-                'device_name': 'PC',
-                'is_self': false,
-              },
-              {
-                'fingerprint_masked': 'cccc-dddd',
-                'device_name': 'Pixel',
-                'is_self': true,
-                'device_fingerprint': 'full-fp-for-self',
-              },
-            ],
+            'ok': false,
+            'error': 'Too many attempts. Retry in 600s.',
+            'retry_after_seconds': 600,
           }),
-          200,
+          429,
         ),
       );
-      final r = await ActivationClient(
-        url: url,
-        client: mock,
-      ).listDevices(activationCode: 'MERCA-ABCD', deviceFingerprint: 'fp-xyz');
-      expect(r.error, isNull, reason: 'client should parse ok:true');
-      expect(r.ok, isTrue);
-      expect(r.devices, hasLength(2));
-      expect(r.seatLimit, 3);
-    });
-
-    test('deactivateDevice posts target + requesting fingerprints', () async {
-      late Map<String, dynamic> captured;
-      final mock = MockClient((req) async {
-        captured = jsonDecode(req.body) as Map<String, dynamic>;
-        return http.Response(jsonEncode({'ok': true}), 200);
-      });
-      final r = await ActivationClient(url: url, client: mock).deactivateDevice(
-        activationCode: 'MERCA-ABCD',
-        requestingFingerprint: 'self-fp',
-        targetFingerprint: 'other-fp',
-      );
-      expect(r.ok, isTrue);
-      expect(captured['action'], 'deactivate_device');
-      expect(captured['requesting_fingerprint'], 'self-fp');
-      expect(captured['target_fingerprint'], 'other-fp');
-    });
-
-    test('redeemVoucher parses seats_added and new_seat_limit', () async {
-      final mock = MockClient(
-        (_) async => http.Response(
-          jsonEncode({'ok': true, 'seats_added': 2, 'new_seat_limit': 5}),
-          200,
-        ),
-      );
-      final r = await ActivationClient(url: url, client: mock).redeemVoucher(
+      final r = await ActivationClient(url: url, client: mock).activateDevice(
         activationCode: 'MERCA-ABCD',
         deviceFingerprint: 'fp-xyz',
-        voucherCode: 'V-ABCDEFGH',
+        deviceName: 'Pixel',
       );
-      expect(r.ok, isTrue);
-      expect(r.seatsAdded, 2);
-      expect(r.newSeatLimit, 5);
+      expect(r.ok, isFalse);
+      expect(r.error, contains('Too many attempts'));
     });
 
     test('a network throw is wrapped, never rethrown', () async {
       final mock = MockClient((_) async => throw Exception('socket closed'));
-      final r = await ActivationClient(
-        url: url,
-        client: mock,
-      ).listDevices(activationCode: 'MERCA-ABCD', deviceFingerprint: 'fp-xyz');
+      final r = await ActivationClient(url: url, client: mock).activateDevice(
+        activationCode: 'MERCA-ABCD',
+        deviceFingerprint: 'fp-xyz',
+        deviceName: 'Pixel',
+      );
       expect(r.ok, isFalse);
       expect(r.error, 'Could not reach the licensing server.');
     });
