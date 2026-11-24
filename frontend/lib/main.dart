@@ -460,12 +460,28 @@ class _AuthWrapperState extends State<AuthWrapper> {
   User? _currentUser;
   bool _restoring = true;
   bool _ownerAuthPromptShown = false;
+  DateTime _lastOwnerPromptAt = DateTime.fromMillisecondsSinceEpoch(0);
+  Timer? _ownerActionTimer;
   late final SessionStore _sessions = SettingsSessionStore(widget.db);
 
   @override
   void initState() {
     super.initState();
     _restoreSession();
+    // Stage 4.1.3: pending owner transitions are recoverable — re-check on a
+    // slow cadence so a void recorded offline is offered for authorization
+    // again once the sync loop has delivered its prerequisite to the cloud,
+    // not only once per session. Owner-role gated: a cashier login never
+    // sees the prompt (authorization itself is still enforced server-side).
+    _ownerActionTimer = Timer.periodic(const Duration(minutes: 2), (_) {
+      _maybePromptOwnerAuthorization();
+    });
+  }
+
+  @override
+  void dispose() {
+    _ownerActionTimer?.cancel();
+    super.dispose();
   }
 
   /// On launch, resume the previous sign-in unless the user explicitly opted
@@ -513,7 +529,16 @@ class _AuthWrapperState extends State<AuthWrapper> {
   /// owner to re-authenticate once per session; every pending record survives
   /// restarts until the server confirms it.
   Future<void> _maybePromptOwnerAuthorization() async {
-    if (_ownerAuthPromptShown || _currentUser == null) return;
+    // Only an owner can release these; a cashier session must never see the
+    // prompt (the server would refuse anyway, but don't even offer it).
+    if (_currentUser?.role != 'OWNER') return;
+    if (_ownerAuthPromptShown) return;
+    // Re-prompt at most every 10 minutes while work stays pending, so the
+    // dialog is persistent without nagging every sync cycle.
+    if (DateTime.now().difference(_lastOwnerPromptAt) <
+        const Duration(minutes: 10)) {
+      return;
+    }
     final apiUrl = const String.fromEnvironment('WHOLESALE_POS_API_URL');
     if (apiUrl.isEmpty) return;
     final activationCode =
@@ -531,7 +556,13 @@ class _AuthWrapperState extends State<AuthWrapper> {
     if (!await reconciler.hasPending()) return;
     if (!mounted) return;
     _ownerAuthPromptShown = true;
+    _lastOwnerPromptAt = DateTime.now();
     await _showOwnerAuthorizationDialog(reconciler);
+    // If work remains (deferral, failure, or still-waiting targets), allow a
+    // later retry once the cooldown elapses — nothing is ever discarded.
+    if (mounted && await reconciler.pendingCount() != 0) {
+      _ownerAuthPromptShown = false;
+    }
   }
 
   Future<void> _showOwnerAuthorizationDialog(

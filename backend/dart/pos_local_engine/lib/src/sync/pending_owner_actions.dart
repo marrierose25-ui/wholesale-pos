@@ -77,6 +77,18 @@ class PendingOwnerAction {
 /// caller's transaction so the intent commits atomically with the local
 /// void it describes; a crash can therefore never produce a voided sale
 /// with no pending record (or a pending record for a rolled-back void).
+/// Thrown when the persisted pending-action record cannot be decoded or
+/// validated (Stage 4.1.3). The raw `settings` value is NEVER overwritten or
+/// deleted on this path — [PendingOwnerActions.corruptRaw] exposes it for
+/// recovery — because silently treating corruption as an empty queue would
+/// lose owner-authorized voids that still owe the cloud a transition.
+class PendingOwnerActionsCorrupt implements Exception {
+  final String reason;
+  const PendingOwnerActionsCorrupt(this.reason);
+  @override
+  String toString() => 'PendingOwnerActionsCorrupt: $reason';
+}
+
 class PendingOwnerActions {
   PendingOwnerActions._();
 
@@ -85,6 +97,34 @@ class PendingOwnerActions {
   static const String voidSale = 'void_sale';
   static const String approveVoid = 'approve_void';
   static const String rejectVoid = 'reject_void';
+
+  /// The undecodable raw record, or null when the store is healthy/empty.
+  /// Read-only: callers must not write it back.
+  static Future<String?> corruptRaw(DatabaseExecutor db) async {
+    final rows = await db.query(
+      'settings',
+      columns: const ['value'],
+      where: 'key = ?',
+      whereArgs: const [settingKey],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    final raw = rows.first['value'];
+    if (raw is! String || raw.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return raw;
+      for (final item in decoded) {
+        if (item is! Map<String, dynamic> ||
+            PendingOwnerAction.fromJson(item) == null) {
+          return raw;
+        }
+      }
+      return null;
+    } on FormatException {
+      return raw;
+    }
+  }
 
   static Future<List<PendingOwnerAction>> load(DatabaseExecutor db) async {
     final rows = await db.query(
@@ -97,19 +137,32 @@ class PendingOwnerActions {
     if (rows.isEmpty) return const [];
     final raw = rows.first['value'];
     if (raw is! String || raw.isEmpty) return const [];
+    // A corrupt record is a recoverable ERROR, not an empty queue: throwing
+    // here means record()/removeConfirmed() — which both call load() first —
+    // abort before _write() can destroy the raw value.
+    final List<dynamic> decoded;
     try {
-      final decoded = jsonDecode(raw);
-      if (decoded is! List) return const [];
-      return [
-        for (final item in decoded)
-          if (item is Map<String, dynamic>)
-            ?PendingOwnerAction.fromJson(item),
-      ];
+      final d = jsonDecode(raw);
+      if (d is! List) {
+        throw const PendingOwnerActionsCorrupt('top-level value is not a list');
+      }
+      decoded = d;
     } on FormatException {
-      // A corrupt list must not wedge syncing or hide real pending work:
-      // treat it as empty rather than throwing inside a transaction.
-      return const [];
+      throw const PendingOwnerActionsCorrupt('invalid JSON');
     }
+    final actions = <PendingOwnerAction>[];
+    for (final item in decoded) {
+      final action = item is Map<String, dynamic>
+          ? PendingOwnerAction.fromJson(item)
+          : null;
+      if (action == null) {
+        throw const PendingOwnerActionsCorrupt(
+          'an entry failed validation',
+        );
+      }
+      actions.add(action);
+    }
+    return actions;
   }
 
   /// Appends [action] inside the caller's transaction. Re-recording the

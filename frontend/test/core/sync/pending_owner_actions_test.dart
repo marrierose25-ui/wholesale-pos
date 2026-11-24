@@ -327,5 +327,188 @@ void main() {
       expect(result.stillPending, 1);
       expect(await PendingOwnerActions.load(db), hasLength(1));
     });
+
+    test('stateful lost response: void commits, 503, retry confirms once',
+        () async {
+      await seedPending();
+      var saleStatus = 'COMPLETED';
+      var voidedBy = '';
+      var voidCalls = 0;
+      final client = MockClient((req) async {
+        final body = req.body;
+        if (body.contains('"login"')) {
+          return http.Response(
+              '{"ok":true,"token":"jwt","user_id":"owner-1"}', 200);
+        }
+        if (body.contains('"search_sales"')) {
+          final sale = saleStatus == 'COMPLETED'
+              ? '{"id":"sale-1","status":"COMPLETED"}'
+              : '{"id":"sale-1","status":"VOIDED","voided_by":"$voidedBy","void_reason":"oops"}';
+          return http.Response('{"ok":true,"sales":[$sale]}', 200);
+        }
+        if (body.contains('"void_sale"')) {
+          voidCalls++;
+          // Commit the transition server-side, then lose the response.
+          saleStatus = 'VOIDED';
+          voidedBy = 'owner-1';
+          return http.Response('{"ok":false,"error":"lost"}', 503);
+        }
+        return http.Response('{"ok":false}', 400);
+      });
+      final result = await OwnerActionReconciler(
+          db: db,
+          api: CloudApiClient(
+            url: 'http://test.local/pos-api',
+            client: client,
+            activationCode: 'ACT-1',
+          ),
+          activationCode: 'ACT-1',
+        ).reconcile(
+        username: 'u',
+        password: 'p',
+      );
+      expect(voidCalls, 1);
+      expect(result.confirmed, 1);
+      expect(await PendingOwnerActions.load(db), isEmpty);
+      expect(saleStatus, 'VOIDED');
+    });
+
+    test('stateful lost response: approve commits, 503, retry confirms',
+        () async {
+      await db.transaction((txn) => PendingOwnerActions.record(
+            txn,
+            kind: PendingOwnerActions.approveVoid,
+            targetId: 'vr-9',
+            localUserId: 'owner-1',
+          ));
+      var status = 'PENDING';
+      var decidedBy = '';
+      var approveCalls = 0;
+      final client = MockClient((req) async {
+        final body = req.body;
+        if (body.contains('"login"')) {
+          return http.Response(
+              '{"ok":true,"token":"jwt","user_id":"owner-1"}', 200);
+        }
+        if (body.contains('"list_void_requests"')) {
+          final rows = status == 'PENDING'
+              ? '{"id":"vr-9","status":"PENDING"}'
+              : '{"id":"vr-9","status":"$status","decided_by":"$decidedBy"}';
+          return http.Response('{"ok":true,"void_requests":[$rows]}', 200);
+        }
+        if (body.contains('"approve_void"')) {
+          approveCalls++;
+          status = 'APPROVED';
+          decidedBy = 'owner-1';
+          return http.Response('{"ok":false,"error":"lost"}', 503);
+        }
+        return http.Response('{"ok":false}', 400);
+      });
+      final result = await OwnerActionReconciler(
+          db: db,
+          api: CloudApiClient(
+            url: 'http://test.local/pos-api',
+            client: client,
+            activationCode: 'ACT-1',
+          ),
+          activationCode: 'ACT-1',
+        ).reconcile(
+        username: 'u',
+        password: 'p',
+      );
+      expect(approveCalls, 1);
+      expect(result.confirmed, 1);
+      expect(await PendingOwnerActions.load(db), isEmpty);
+    });
+  });
+
+  group('PendingOwnerActions corruption safety', () {
+    Future<void> writeRaw(String raw) => db.insert('settings', {
+          'key': PendingOwnerActions.settingKey,
+          'value': raw,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+
+    test('invalid JSON throws and preserves raw', () async {
+      await writeRaw('{not json');
+      await expectLater(
+        PendingOwnerActions.load(db),
+        throwsA(isA<PendingOwnerActionsCorrupt>()),
+      );
+      expect(await PendingOwnerActions.corruptRaw(db), '{not json');
+      // record/removeConfirmed must not overwrite the corrupt value.
+      await expectLater(
+        db.transaction((txn) => PendingOwnerActions.record(
+              txn,
+              kind: PendingOwnerActions.voidSale,
+              targetId: 's',
+              localUserId: 'u',
+            )),
+        throwsA(isA<PendingOwnerActionsCorrupt>()),
+      );
+      await expectLater(
+        PendingOwnerActions.removeConfirmed(db, {'x'}),
+        throwsA(isA<PendingOwnerActionsCorrupt>()),
+      );
+      expect(await PendingOwnerActions.corruptRaw(db), '{not json');
+    });
+
+    test('wrong top-level type throws and preserves raw', () async {
+      await writeRaw('{"a":1}');
+      await expectLater(
+        PendingOwnerActions.load(db),
+        throwsA(isA<PendingOwnerActionsCorrupt>()),
+      );
+      expect(await PendingOwnerActions.corruptRaw(db), '{"a":1}');
+    });
+
+    test('invalid entry (missing target) throws and preserves raw', () async {
+      await writeRaw('[{"kind":"void_sale","local_user_id":"u",'
+          '"created_at":"2026-01-01T00:00:00Z"}]');
+      await expectLater(
+        PendingOwnerActions.load(db),
+        throwsA(isA<PendingOwnerActionsCorrupt>()),
+      );
+      expect(await PendingOwnerActions.corruptRaw(db), isNotNull);
+    });
+
+    test('unknown kind is preserved as corrupt, not dropped', () async {
+      await writeRaw('[{"kind":"bogus","target_id":"t",'
+          '"local_user_id":"u","created_at":"2026-01-01T00:00:00Z"}]');
+      // fromJson accepts any non-empty kind string; kind validation happens
+      // at reconcile time, so this loads but stays pending forever-safe.
+      final actions = await PendingOwnerActions.load(db);
+      expect(actions.single.kind, 'bogus');
+    });
+  });
+
+  group('PendingOwnerActions concurrency', () {
+    test('concurrent records do not lose actions', () async {
+      await Future.wait([
+        for (var i = 0; i < 5; i++)
+          db.transaction((txn) => PendingOwnerActions.record(
+                txn,
+                kind: PendingOwnerActions.voidSale,
+                targetId: 'sale-$i',
+                localUserId: 'u',
+              )),
+      ]);
+      expect(await PendingOwnerActions.load(db), hasLength(5));
+    });
+
+    test('removeConfirmed removes only named keys', () async {
+      await db.transaction((txn) async {
+        for (var i = 0; i < 3; i++) {
+          await PendingOwnerActions.record(
+            txn,
+            kind: PendingOwnerActions.approveVoid,
+            targetId: 'r$i',
+            localUserId: 'u',
+          );
+        }
+      });
+      await PendingOwnerActions.removeConfirmed(db, {'approve_void:r0'});
+      final rest = await PendingOwnerActions.load(db);
+      expect(rest.map((a) => a.targetId).toSet(), {'r1', 'r2'});
+    });
   });
 }

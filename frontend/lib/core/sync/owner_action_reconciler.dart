@@ -79,14 +79,26 @@ class OwnerActionReconciler {
   });
 
   /// True when there is queued owner work AND this build can reach pos-api.
+  /// A corrupt pending store counts as pending so the owner is prompted and
+  /// the raw record is preserved for recovery rather than silently dropped.
   Future<bool> hasPending() async {
     if (!api.isConfigured || activationCode.isEmpty) return false;
-    return (await PendingOwnerActions.load(db)).isNotEmpty;
+    try {
+      return (await PendingOwnerActions.load(db)).isNotEmpty;
+    } on PendingOwnerActionsCorrupt {
+      return true;
+    }
   }
 
-  /// Number of unresolved pending actions (for UI indicators).
-  Future<int> pendingCount() async =>
-      (await PendingOwnerActions.load(db)).length;
+  /// Number of unresolved pending actions (for UI indicators). Returns -1
+  /// when the store is corrupt so the UI can show a recovery state.
+  Future<int> pendingCount() async {
+    try {
+      return (await PendingOwnerActions.load(db)).length;
+    } on PendingOwnerActionsCorrupt {
+      return -1;
+    }
+  }
 
   /// Attempts every pending action in order. Stops at the first hard
   /// failure (bad credentials, owner-required refusal, network) so a refused
@@ -96,7 +108,17 @@ class OwnerActionReconciler {
     required String username,
     required String password,
   }) async {
-    final pending = await PendingOwnerActions.load(db);
+    final List<PendingOwnerAction> pending;
+    try {
+      pending = await PendingOwnerActions.load(db);
+    } on PendingOwnerActionsCorrupt catch (e) {
+      return OwnerActionReconcileResult(
+        confirmed: 0,
+        stillPending: -1,
+        error: 'Pending owner-action record is corrupt: ${e.reason}. '
+            'Raw data preserved for recovery.',
+      );
+    }
     if (pending.isEmpty) {
       return const OwnerActionReconcileResult(confirmed: 0, stillPending: 0);
     }
@@ -221,62 +243,66 @@ class OwnerActionReconciler {
     final entityType = action.kind == PendingOwnerActions.voidSale
         ? SyncEntities.sale
         : SyncEntities.voidRequest;
-    final queued = await db.query(
-      'sync_outbox',
-      columns: const ['id'],
-      where: 'entity_type = ? AND entity_id = ? AND synced_at IS NULL',
-      whereArgs: [entityType, action.targetId],
-      limit: 1,
-    );
-    if (queued.isNotEmpty) return;
+    // Check-and-insert in one transaction so two concurrent reconciles
+    // cannot both observe "missing" and double-enqueue (Stage 4.1.3).
+    await db.transaction((txn) async {
+      final queued = await txn.query(
+        'sync_outbox',
+        columns: const ['id'],
+        where: 'entity_type = ? AND entity_id = ? AND synced_at IS NULL',
+        whereArgs: [entityType, action.targetId],
+        limit: 1,
+      );
+      if (queued.isNotEmpty) return;
 
-    if (action.kind == PendingOwnerActions.voidSale) {
-      final saleRows = await db.query(
-        'sales',
-        where: 'id = ?',
-        whereArgs: [action.targetId],
-        limit: 1,
-      );
-      if (saleRows.isEmpty) return; // nothing to sync; stays pending
-      final items = await db.query(
-        'sale_items',
-        where: 'sale_id = ?',
-        whereArgs: [action.targetId],
-      );
-      await db.insert('sync_outbox', {
-        'id': const Uuid().v4(),
-        'entity_type': entityType,
-        'entity_id': action.targetId,
-        'operation': 'upsert',
-        'payload': jsonEncode({
-          'sale': SyncOutbox.timestampsToUtc(saleRows.first),
-          'items': [
-            for (final i in items) SyncOutbox.timestampsToUtc(i),
-          ],
-        }),
-        'created_at': DateTime.now().toIso8601String(),
-        'synced_at': null,
-      });
-    } else {
-      final rows = await db.query(
-        'void_requests',
-        where: 'id = ?',
-        whereArgs: [action.targetId],
-        limit: 1,
-      );
-      if (rows.isEmpty) return;
-      await db.insert('sync_outbox', {
-        'id': const Uuid().v4(),
-        'entity_type': entityType,
-        'entity_id': action.targetId,
-        'operation': 'upsert',
-        'payload': jsonEncode({
-          'void_request': SyncOutbox.timestampsToUtc(rows.first),
-        }),
-        'created_at': DateTime.now().toIso8601String(),
-        'synced_at': null,
-      });
-    }
+      if (action.kind == PendingOwnerActions.voidSale) {
+        final saleRows = await txn.query(
+          'sales',
+          where: 'id = ?',
+          whereArgs: [action.targetId],
+          limit: 1,
+        );
+        if (saleRows.isEmpty) return; // nothing to sync; stays pending
+        final items = await txn.query(
+          'sale_items',
+          where: 'sale_id = ?',
+          whereArgs: [action.targetId],
+        );
+        await txn.insert('sync_outbox', {
+          'id': const Uuid().v4(),
+          'entity_type': entityType,
+          'entity_id': action.targetId,
+          'operation': 'upsert',
+          'payload': jsonEncode({
+            'sale': SyncOutbox.timestampsToUtc(saleRows.first),
+            'items': [
+              for (final i in items) SyncOutbox.timestampsToUtc(i),
+            ],
+          }),
+          'created_at': DateTime.now().toIso8601String(),
+          'synced_at': null,
+        });
+      } else {
+        final rows = await txn.query(
+          'void_requests',
+          where: 'id = ?',
+          whereArgs: [action.targetId],
+          limit: 1,
+        );
+        if (rows.isEmpty) return;
+        await txn.insert('sync_outbox', {
+          'id': const Uuid().v4(),
+          'entity_type': entityType,
+          'entity_id': action.targetId,
+          'operation': 'upsert',
+          'payload': jsonEncode({
+            'void_request': SyncOutbox.timestampsToUtc(rows.first),
+          }),
+          'created_at': DateTime.now().toIso8601String(),
+          'synced_at': null,
+        });
+      }
+    });
   }
 
   /// Exact-id void-request lookup. `status` may be null to probe every
