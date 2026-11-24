@@ -110,6 +110,12 @@ flutter build apk --release       # run from frontend/
 deno check backend/supabase/functions/pos-api/index.ts
 deno check backend/supabase/functions/sync/index.ts
 deno check backend/supabase/functions/licensing/index.ts
+
+# 7. Edge function format check
+deno fmt --check backend/supabase/functions/pos-api
+
+# 8. pos-api behaviour tests (in-memory mock DB, no credentials needed)
+deno test --allow-env --allow-read backend/supabase/functions/pos-api/tests/
 ```
 
 All checks must pass before considering a task complete. Any failure blocks progression.

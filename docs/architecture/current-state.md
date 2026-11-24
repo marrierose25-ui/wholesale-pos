@@ -22,7 +22,7 @@ not just existing documentation.
 
 | Function | File | Size | Role |
 |---|---|---|---|
-| `pos-api` | `functions/pos-api/index.ts` + `modules/*` + `shared/*` | ~434 lines (router), 28 module/shared files | Modularized Edge Function — router dispatches to domain modules (auth, catalog, sales, register, finance, warehouse, reporting, users) via shared helpers. Same deploy boundary. |
+| `pos-api` | `functions/pos-api/index.ts` (~210-line router) + `modules/*` (7 domains) + `shared/*` (auth, authorization, helpers, env) + `tests/*` | Modular Edge Function — `index.ts` is the production entry point: CORS/JSON guards → JWT verify → `checkAuthorization` (actor load, token_version, OWNER_ONLY, ACTION_FEATURES) → `ACTIONS` dispatch table → domain module handlers. Action contract unchanged. `Deno.serve` is guarded by `import.meta.main` so tests can import `handleRequest` with an injected DB. |
 | `sync` | `functions/sync/index.ts` | 576 lines | License-gated push/pull gateway; stages into `sync_mirror`, `pos_sync_apply` RPC replays to canonical tables |
 | `licensing` | `functions/licensing/index.ts` | 358 lines | Device activation/seats, vouchers, Ed25519 license issuance helpers |
 
@@ -147,8 +147,10 @@ Feature additions must be wired twice; drift is already possible.
   sync markers, audit — at least four responsibilities.
 - `sale_repository.dart` (1047 lines): writes + outbox + void workflow +
   reporting/analytics queries.
-- `pos-api/index.ts` (2399 lines): ~60 actions across 8 business domains in
-  one dispatch file (already sectioned by comment banners, not modules).
+- `pos-api/index.ts` (~210 lines): thin router only — transport guards, JWT
+  verification, authorization gates, and the `ACTIONS` dispatch table. All
+  ~60 action implementations live in `modules/*` (auth, catalog, sales,
+  register, finance, warehouse, reporting, users) over `shared/*` helpers.
 - `sync_pull_applier.dart` (1531 lines): per-entity appliers for all 12
   entity types in one class.
 
@@ -238,7 +240,7 @@ All baseline failures: **none**. Everything green that can run locally.
 3. `lib/core/backend/cloud_backend.dart` — remove `features/web` imports (inject widgets instead).
 4. `lib/main.dart` + `lib/app_shell.dart` — converge on one shell/navigation implementation.
 5. `lib/features/settings/settings_screen.dart` — remove raw `Database` dependency behind the backend seam.
-6. `supabase/functions/pos-api/index.ts` — split into internal feature modules without changing the action contract.
+6. ~~`supabase/functions/pos-api/index.ts` — split into internal feature modules without changing the action contract.~~ Done (Stage 2): `index.ts` is the modular router; implementations live in `modules/*` + `shared/*`; behaviour locked by `pos-api/tests/`.
 7. `supabase/functions/sync/index.ts`, `licensing/index.ts` — same internal organization treatment.
 8. `lib/core/database/local_database.dart` — separate schema/migrations from runtime helpers.
 9. `lib/core/sync/sync_pull_applier.dart` — per-entity applier modules.

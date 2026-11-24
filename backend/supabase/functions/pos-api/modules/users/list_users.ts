@@ -1,6 +1,5 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import type { Ctx } from "../../shared/types.ts";
-import { json, pageLimit, str, strip } from "../../shared/helpers.ts";
+import { json, pageLimit, strip } from "../../shared/helpers.ts";
 
 export async function listUsers(db: any, ctx: Ctx, _body: any) {
   const limit = pageLimit(_body, 1000);

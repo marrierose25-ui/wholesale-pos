@@ -1,6 +1,7 @@
 import type { Ctx } from "../../shared/types.ts";
 import { OWNER } from "../../shared/auth.ts";
 import {
+  computeExpectedCash,
   demoUserIds,
   deSnake,
   excludeDemoRows,
@@ -216,17 +217,4 @@ export async function listCashMovements(db: any, ctx: Ctx, body: any) {
     })),
     truncated: rows.length >= limit,
   });
-}
-
-async function computeExpectedCash(
-  db: any,
-  customerId: string,
-  shift: any,
-): Promise<number> {
-  const { data, error } = await db.rpc("pos_expected_cash", {
-    p_customer: customerId,
-    p_shift_id: shift.id,
-  });
-  if (error) throw new Error(error.message);
-  return Promise.resolve(Number(data ?? 0));
 }

@@ -588,12 +588,19 @@ export async function deletePicklistItem(
       ctx.customerId,
       ctx.userId,
       "PICKLIST_DELETED",
-      `Picklist ${picklistId} item ${itemId} deleted (status DELETED).`,
+      `Picklist ${picklistId} deleted with its last item ${itemId}.`,
     );
     return json({ ok: true, status: "DELETED" });
   }
 
-  const status = derivePicklistStatus(remaining);
+  const status = derivePicklistStatus(remaining ?? []);
+  const upHeader = await db.from("picklists").update({
+    status,
+    updated_at: now,
+  })
+    .eq("customer_id", ctx.customerId).eq("id", picklistId);
+  if (upHeader.error) throw new Error(upHeader.error.message);
+
   await audit(
     db,
     ctx.customerId,

@@ -1,5 +1,5 @@
 import type { Ctx } from "../../shared/types.ts";
-import { json, str, strip } from "../../shared/helpers.ts";
+import { json, strip } from "../../shared/helpers.ts";
 
 export async function financeCategories(db: any, ctx: Ctx) {
   const { data, error } = await db.from("pos_finance_categories").select("*")

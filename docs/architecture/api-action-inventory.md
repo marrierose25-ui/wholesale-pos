@@ -2,6 +2,8 @@
 
 **Generated:** 2026-11-21
 **Source:** `supabase/functions/pos-api/` (post-modularization)
+**Updated (Stage 2, 2026-11-24):** the modular router is now the live
+production entry point; see "Production request path" below.
 
 ---
 
@@ -19,6 +21,48 @@
 | Reporting | 4 | modules/reporting |
 | Users | 7 | modules/users |
 | **Total** | **60** | |
+
+## Production request path (Stage 2)
+
+`index.ts` is a ~210-line router — no action logic remains in it:
+
+```
+POST /functions/v1/pos-api
+  -> index.ts handleRequest(): OPTIONS/405/JSON guards
+  -> PUBLIC_ACTIONS: login | setup_owner | has_users   (shared/auth.ts)
+  -> verifyJwt (HMAC-SHA256, POS_API_JWT_SECRET)
+  -> checkAuthorization (shared/authorization.ts):
+       loadActiveUser -> token_version revocation -> OWNER_ONLY -> ACTION_FEATURES
+  -> ctx { customerId, userId, role, canSeePicklistMoney, deviceId }
+  -> ACTIONS dispatch table -> modules/<domain> handler -> PostgREST/RPC
+```
+
+Module ownership: `modules/auth` (session actions), `modules/catalog`
+(products), `modules/sales` (sales + voids), `modules/register` (shifts +
+cash), `modules/users` (staff admin), `modules/finance` (money tracking),
+`modules/warehouse` (picklists + customers), `modules/reporting`
+(dashboard/reports/audit). Shared machinery (JWT, PBKDF2, license gate,
+login throttle, phone normalization, demo-user seeding, CORS/JSON helpers,
+pagination, RPC error mapping, hydration helpers) lives in `shared/`.
+
+`Deno.serve` is guarded by `import.meta.main`; tests import `handleRequest`
+and inject a mock DB. No monolithic implementation is retained — the old
+inline handler was removed when the router went live.
+
+### Test coverage
+
+`pos-api/tests/` — 33 Deno tests against an in-memory PostgREST mock
+(`mock_db.ts`), no credentials or network required:
+
+- `router_test.ts` — transport guards, auth/JWT/session revocation,
+  OWNER_ONLY + feature gates, tenant isolation, response shapes,
+  pagination, audit writes, full action-registration parity.
+- `picklist_test.ts` — `deletePicklistItem` parent status/`updated_at`
+  regression, last-line header tombstone, COMPLETED freeze, 404s.
+- `architecture_test.ts` — guards against the entry point regressing to an
+  inline monolithic handler.
+
+Run: `deno test --allow-env --allow-read backend/supabase/functions/pos-api/tests/`
 
 ---
 

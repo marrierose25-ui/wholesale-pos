@@ -14,8 +14,6 @@ import {
   usernamesById,
 } from "../../shared/helpers.ts";
 
-const SHOP_TIME_ZONE = "Africa/Addis_Ababa";
-
 export { shopDay } from "../../shared/helpers.ts";
 
 export async function insertSale(db: any, ctx: Ctx, body: any) {

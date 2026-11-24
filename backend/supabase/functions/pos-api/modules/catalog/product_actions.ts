@@ -1,5 +1,5 @@
 import type { Ctx } from "../../shared/types.ts";
-import { json, str, tenantRow } from "../../shared/helpers.ts";
+import { json, tenantRow } from "../../shared/helpers.ts";
 
 export async function saveProduct(db: any, ctx: Ctx, body: any) {
   const p = body.product ?? {};

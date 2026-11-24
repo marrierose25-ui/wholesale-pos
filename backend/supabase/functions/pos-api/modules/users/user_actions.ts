@@ -1,5 +1,5 @@
 import type { Ctx } from "../../shared/types.ts";
-import { audit, json, str } from "../../shared/helpers.ts";
+import { audit, json, str, userStamp } from "../../shared/helpers.ts";
 import {
   CASHIER,
   FEATURE_KEYS,
@@ -10,11 +10,7 @@ import {
 } from "../../shared/auth.ts";
 
 // userStamp is used across user mutations — mirroring the sync gateway paging requirement
-export function userStamp(
-  patch: Record<string, unknown>,
-): Record<string, unknown> {
-  return { ...patch, received_at: new Date().toISOString() };
-}
+export { userStamp };
 
 export async function createUser(db: any, ctx: Ctx, body: any) {
   const rawName = str(body.username);

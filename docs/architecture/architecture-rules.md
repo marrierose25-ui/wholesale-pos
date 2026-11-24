@@ -194,7 +194,7 @@ Per STRICT SOURCE PROTECTION, the following must remain unchanged:
 |---|---|---|
 | **SQL migrations** | `supabase/migrations/` (9 files) | Never modify, never delete; part of Supabase migration history |
 | **Database schema** | `frontend/lib/core/database/local_database.dart` | Actual schema v22; only documentation may change |
-| **TypeScript handlers** | `supabase/functions/pos-api/` | All Stage 8 changes already made; no further edits |
+| **TypeScript handlers** | `supabase/functions/pos-api/` | Modular router + `modules/*`/`shared/*` is the production path (Stage 2); action names, params, response shapes, and error semantics must not change |
 | **API contracts** | pos-api action signatures | Verified unchanged by Stage 8 |
 | **Sync implementation** | sync backends, pull applier | Verified unchanged by Stage 7 |
 | **Licensing implementation** | Ed25519 license validator, device activation | Verified unchanged by Stage 7 |
