@@ -24,6 +24,7 @@ export 'src/backend/sqlite_local_data_ops.dart';
 export 'src/sync/sqflite_sync_outbox_repository.dart';
 export 'src/sync/sync_outbox.dart';
 export 'src/sync/sync_pull_applier.dart';
+export 'src/sync/pending_owner_actions.dart';
 export 'src/licensing/activation_client.dart';
 export 'src/licensing/device_activation.dart';
 export 'src/licensing/device_fingerprint.dart';

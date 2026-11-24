@@ -1,6 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
+import '../sync/pending_owner_actions.dart';
 import '../sync/sync_outbox.dart';
 import 'feature_gate.dart';
 import 'package:pos_contracts/pos_contracts.dart';
@@ -264,6 +265,16 @@ class SqfliteSaleRepository implements SaleRepository {
             'Reason: ${reason.trim()}',
         'created_at': DateTime.now().toIso8601String(),
       });
+      // The void is authoritative locally but the cloud must re-verify the
+      // owner through pos-api (Stage 4.1): record the pending transition in
+      // the same transaction so it survives restarts until authorized.
+      await PendingOwnerActions.record(
+        txn,
+        kind: PendingOwnerActions.voidSale,
+        targetId: saleId,
+        localUserId: userId,
+        reason: reason.trim(),
+      );
       await _enqueueSale(txn, saleId);
     });
   }
@@ -578,6 +589,12 @@ class SqfliteSaleRepository implements SaleRepository {
       });
       await _enqueueSale(txn, saleId);
       await _enqueueVoidRequest(txn, requestId);
+      await PendingOwnerActions.record(
+        txn,
+        kind: PendingOwnerActions.approveVoid,
+        targetId: requestId,
+        localUserId: ownerId,
+      );
     });
   }
 
@@ -626,6 +643,12 @@ class SqfliteSaleRepository implements SaleRepository {
             'Reason given: ${requests.first['reason']}',
         'created_at': DateTime.now().toIso8601String(),
       });
+      await PendingOwnerActions.record(
+        txn,
+        kind: PendingOwnerActions.rejectVoid,
+        targetId: requestId,
+        localUserId: ownerId,
+      );
       await _enqueueVoidRequest(txn, requestId);
     });
   }

@@ -12,10 +12,12 @@ import 'package:pos_local_engine/pos_local_engine.dart';
 import 'core/auth/features.dart';
 
 import 'package:pos_contracts/pos_contracts.dart' hide AppBackend;
-import 'package:pos_cloud_engine/pos_cloud_engine.dart' show SyncGatewayBackend;
+import 'package:pos_cloud_engine/pos_cloud_engine.dart'
+    show CloudApiClient, SyncGatewayBackend;
 
 import 'core/backend/native_backend.dart';
 
+import 'core/sync/owner_action_reconciler.dart';
 import 'core/sync/sync_runtime.dart';
 import 'core/sync/sync_service.dart';
 import 'core/sync/sync_status.dart';
@@ -457,6 +459,7 @@ class AuthWrapper extends StatefulWidget {
 class _AuthWrapperState extends State<AuthWrapper> {
   User? _currentUser;
   bool _restoring = true;
+  bool _ownerAuthPromptShown = false;
   late final SessionStore _sessions = SettingsSessionStore(widget.db);
 
   @override
@@ -502,10 +505,103 @@ class _AuthWrapperState extends State<AuthWrapper> {
       _currentUser = restored;
       _restoring = false;
     });
+    _maybePromptOwnerAuthorization();
+  }
+
+  /// Stage 4.1: voids/decisions recorded while offline await authoritative
+  /// owner authorization through pos-api. When the till can reach it, ask the
+  /// owner to re-authenticate once per session; every pending record survives
+  /// restarts until the server confirms it.
+  Future<void> _maybePromptOwnerAuthorization() async {
+    if (_ownerAuthPromptShown || _currentUser == null) return;
+    final apiUrl = const String.fromEnvironment('WHOLESALE_POS_API_URL');
+    if (apiUrl.isEmpty) return;
+    final activationCode =
+        await LocalDatabase.getSetting(
+          widget.db,
+          DeviceActivation.activationCodeKey,
+        ) ??
+        '';
+    if (activationCode.isEmpty) return;
+    final reconciler = OwnerActionReconciler(
+      db: widget.db,
+      api: CloudApiClient(url: apiUrl, activationCode: activationCode),
+      activationCode: activationCode,
+    );
+    if (!await reconciler.hasPending()) return;
+    if (!mounted) return;
+    _ownerAuthPromptShown = true;
+    await _showOwnerAuthorizationDialog(reconciler);
+  }
+
+  Future<void> _showOwnerAuthorizationDialog(
+    OwnerActionReconciler reconciler,
+  ) async {
+    final usernameController = TextEditingController();
+    final passwordController = TextEditingController();
+    final authorized = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Authorize pending voids'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Voids recorded while offline need owner authorization '
+              'before the cloud accepts them. Sign in with your cloud '
+              'account to release them.',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: usernameController,
+              decoration: const InputDecoration(labelText: 'Username'),
+            ),
+            TextField(
+              controller: passwordController,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'Password'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Later'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Authorize'),
+          ),
+        ],
+      ),
+    );
+    if (authorized != true || !mounted) return;
+    final result = await reconciler.reconcile(
+      username: usernameController.text.trim(),
+      password: passwordController.text,
+    );
+    passwordController.dispose();
+    usernameController.dispose();
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    if (result.error != null) {
+      messenger.showSnackBar(SnackBar(content: Text(result.error!)));
+    } else if (result.confirmed > 0) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            '${result.confirmed} pending void'
+            '${result.confirmed == 1 ? '' : 's'} authorized.',
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _onLoginSuccess(User user) async {
     setState(() => _currentUser = user);
+    _maybePromptOwnerAuthorization();
     // "Sign in and see the whole shop": refresh immediately instead of waiting
     // for the next cycle. Fire-and-forget so a dead network can never hold
     // up a cashier who is standing at the till ready to sell.
