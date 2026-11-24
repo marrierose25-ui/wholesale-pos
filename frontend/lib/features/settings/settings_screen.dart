@@ -5,6 +5,7 @@ import 'package:pos_contracts/pos_contracts.dart' hide AppBackend;
 import 'package:pos_local_engine/pos_local_engine.dart' show ActivationClient;
 
 import '../../core/backend/app_backend.dart';
+import '../../core/backend/native_backend.dart';
 import '../../core/theme/app_design.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/sync/sync_runtime.dart';
@@ -38,6 +39,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isImporting = false;
   bool _rememberLogin = true;
   bool _isSyncing = false;
+  int _pendingOwnerActions = 0;
+  bool _pendingStoreCorrupt = false;
+  bool _isReconcilingOwnerActions = false;
 
   bool get _isOwner => widget.currentUser.role == 'OWNER';
   bool get _supportsLocalDataOps => widget.backend.supportsLocalDataOps;
@@ -45,7 +49,142 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
-    _loadRememberPreference();
+    if (widget.backend is NativeBackend) {
+      // ONE sqflite round-trip for both values — two initState queries
+      // serialize on the ffi isolate and the second leaks a pending timer
+      // during widget-test teardown (Stage 4.1.4).
+      _loadBootstrap();
+    } else {
+      _loadRememberPreference();
+    }
+    // The NativeBackend path already loaded pending status inside
+    // settingsBootstrap — a second initState query would leak an ffi timer.
+  }
+
+  Future<void> _loadBootstrap() async {
+    final boot = await (widget.backend as NativeBackend).settingsBootstrap();
+    if (!mounted) return;
+    setState(() {
+      // Persistent sign-in is ON by default; only an explicit '0' disables it.
+      _rememberLogin = boot.remember != '0';
+      _pendingOwnerActions = boot.pendingOwnerActions;
+      _pendingStoreCorrupt = boot.pendingOwnerActionsCorrupt;
+    });
+  }
+
+  /// Stage 4.1.4: persistent owner recovery entry point. Loads the durable
+  /// pending-transition count (and corruption state) so the owner can retry
+  /// authorization any time — after restart, deferral, or a missing cloud
+  /// target that has since synced.
+  Future<void> _refreshPendingOwnerActions() async {
+    if (!_isOwner ||
+        !_supportsLocalDataOps ||
+        widget.backend is! NativeBackend) {
+      return;
+    }
+    final backend = widget.backend as NativeBackend;
+    try {
+      final status = await backend.pendingOwnerActionStatus();
+      if (!mounted) return;
+      setState(() {
+        _pendingOwnerActions = status.count;
+        _pendingStoreCorrupt = status.corrupt;
+      });
+    } catch (_) {
+      // The database can be closed while this refresh is in flight during
+      // widget teardown — a missing count is harmless, never crash the UI.
+    }
+  }
+
+  Future<void> _authorizePendingOwnerActions() async {
+    if (_isReconcilingOwnerActions ||
+        widget.backend is! NativeBackend) {
+      return; // single-flight: no parallel flows
+    }
+    final backend = widget.backend as NativeBackend;
+    final reconciler = await backend.ownerActionReconciler();
+    if (!mounted) return;
+    if (reconciler == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'This build cannot reach the cloud authorization service.',
+          ),
+        ),
+      );
+      return;
+    }
+    final usernameController = TextEditingController();
+    final passwordController = TextEditingController();
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Authorize pending voids'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Voids recorded while offline need owner authorization. '
+              'Sign in with your cloud account to release them.',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: usernameController,
+              decoration: const InputDecoration(labelText: 'Username'),
+            ),
+            TextField(
+              controller: passwordController,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'Password'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Later'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Authorize'),
+          ),
+        ],
+      ),
+    );
+    if (go != true || !mounted) return;
+    setState(() => _isReconcilingOwnerActions = true);
+    try {
+      final result = await reconciler.reconcile(
+        username: usernameController.text.trim(),
+        password: passwordController.text,
+      );
+      passwordController.clear();
+      usernameController.clear();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.error ??
+                '${result.confirmed} pending void'
+                    '${result.confirmed == 1 ? '' : 's'} authorized.'
+                    '${result.conflicts > 0 ? ' ${result.conflicts} conflict(s) need review.' : ''}',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Authorization failed: $e')),
+        );
+      }
+    } finally {
+      passwordController.dispose();
+      usernameController.dispose();
+      if (mounted) {
+        setState(() => _isReconcilingOwnerActions = false);
+        _refreshPendingOwnerActions();
+      }
+    }
   }
 
   Future<void> _loadRememberPreference() async {
@@ -474,6 +613,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       padding: EdgeInsets.zero,
                       child: Column(
                         children: [
+                          // Stage 4.1.4: persistent owner recovery for voids
+                          // recorded offline. Owner-gated by the enclosing
+                          // `_isOwner` block; the server re-verifies anyway.
+                          ListTile(
+                            leading: Icon(
+                              _pendingStoreCorrupt
+                                  ? CupertinoIcons.exclamationmark_triangle
+                                  : CupertinoIcons.checkmark_seal,
+                              color: _pendingStoreCorrupt ||
+                                      _pendingOwnerActions != 0
+                                  ? AppDesign.warning
+                                  : AppDesign.accent,
+                            ),
+                            title: const Text('Pending Owner Approvals'),
+                            subtitle: Text(
+                              _pendingStoreCorrupt
+                                  ? 'Recovery record needs attention — '
+                                        'raw data preserved.'
+                                  : _pendingOwnerActions > 0
+                                  ? '$_pendingOwnerActions offline void'
+                                        '${_pendingOwnerActions == 1 ? '' : 's'} '
+                                        'waiting for cloud authorization.'
+                                  : _pendingOwnerActions == 0
+                                  ? 'No pending owner actions.'
+                                  : 'Checking…',
+                            ),
+                            trailing: _isReconcilingOwnerActions
+                                ? const SizedBox(
+                                    width: 24,
+                                    height: 24,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : (_pendingOwnerActions != 0 ||
+                                          _pendingStoreCorrupt)
+                                  ? const Icon(CupertinoIcons.chevron_right)
+                                  : null,
+                            onTap: (_pendingOwnerActions != 0 ||
+                                        _pendingStoreCorrupt) &&
+                                    !_isReconcilingOwnerActions
+                                ? _authorizePendingOwnerActions
+                                : null,
+                          ),
+                          const Divider(height: 1, indent: 56),
                           ListTile(
                             leading: Icon(
                               CupertinoIcons.square_arrow_down,

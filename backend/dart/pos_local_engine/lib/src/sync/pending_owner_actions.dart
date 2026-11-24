@@ -47,25 +47,44 @@ class PendingOwnerAction {
     'created_at': createdAt.toIso8601String(),
   };
 
+  static const Set<String> validKinds = {
+    PendingOwnerActions.voidSale,
+    PendingOwnerActions.approveVoid,
+    PendingOwnerActions.rejectVoid,
+  };
+
   static PendingOwnerAction? fromJson(Map<String, dynamic> json) {
-    final kind = json['kind'];
-    final targetId = json['target_id'];
-    final userId = json['local_user_id'];
-    final created = json['created_at'];
-    if (kind is! String ||
-        targetId is! String ||
-        targetId.isEmpty ||
-        userId is! String ||
-        created is! String) {
+    try {
+      final kind = json['kind'];
+      final targetId = json['target_id'];
+      final userId = json['local_user_id'];
+      final created = json['created_at'];
+      final reason = json['reason'];
+      // Strict validation (Stage 4.1.4): every field must have the exact
+      // expected type — a wrong type is corruption, never a TypeError and
+      // never a silent repair.
+      if (kind is! String ||
+          !validKinds.contains(kind) ||
+          targetId is! String ||
+          targetId.isEmpty ||
+          userId is! String ||
+          userId.isEmpty ||
+          created is! String ||
+          (reason != null && reason is! String)) {
+        return null;
+      }
+      final parsed = DateTime.tryParse(created);
+      if (parsed == null) return null;
+      return PendingOwnerAction(
+        kind: kind,
+        targetId: targetId,
+        reason: reason as String?,
+        localUserId: userId,
+        createdAt: parsed,
+      );
+    } catch (_) {
       return null;
     }
-    return PendingOwnerAction(
-      kind: kind,
-      targetId: targetId,
-      reason: json['reason'] as String?,
-      localUserId: userId,
-      createdAt: DateTime.tryParse(created) ?? DateTime.now(),
-    );
   }
 }
 
@@ -192,16 +211,22 @@ class PendingOwnerActions {
 
   /// Drops every entry the server has now confirmed (or that no longer
   /// needs authorizing). Entries not named here stay pending.
+  ///
+  /// The read/filter/write runs inside ONE transaction (Stage 4.1.4): a
+  /// concurrent [record] cannot be lost between the load and the write,
+  /// because sqflite serializes transactions on the same database.
   static Future<void> removeConfirmed(
-    DatabaseExecutor db,
+    Database db,
     Set<String> dedupeKeys,
   ) async {
     if (dedupeKeys.isEmpty) return;
-    final remaining = [
-      for (final a in await load(db))
-        if (!dedupeKeys.contains(a.dedupeKey)) a,
-    ];
-    await _write(db, remaining);
+    await db.transaction((txn) async {
+      final remaining = [
+        for (final a in await load(txn))
+          if (!dedupeKeys.contains(a.dedupeKey)) a,
+      ];
+      await _write(txn, remaining);
+    });
   }
 
   static Future<void> _write(

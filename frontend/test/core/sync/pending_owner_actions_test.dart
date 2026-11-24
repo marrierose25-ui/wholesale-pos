@@ -183,7 +183,7 @@ void main() {
       });
     }
 
-    test('lost-response void confirmed when cloud shows same actor+reason',
+    test('already-applied void by same actor+reason confirms without re-call',
         () async {
       await seedPending();
       final client = lostResponseClient(sale: {
@@ -422,6 +422,74 @@ void main() {
     });
   });
 
+    test('stateful lost response: reject commits, 503, retry confirms',
+        () async {
+      await db.transaction((txn) => PendingOwnerActions.record(
+            txn,
+            kind: PendingOwnerActions.rejectVoid,
+            targetId: 'vr-r1',
+            localUserId: 'owner-1',
+          ));
+      var status = 'PENDING';
+      var decidedBy = '';
+      var rejectCalls = 0;
+      final client = MockClient((req) async {
+        final body = req.body;
+        if (body.contains('"login"')) {
+          return http.Response(
+              '{"ok":true,"token":"jwt","user_id":"owner-1"}', 200);
+        }
+        if (body.contains('"list_void_requests"')) {
+          final rows = status == 'PENDING'
+              ? '{"id":"vr-r1","status":"PENDING"}'
+              : '{"id":"vr-r1","status":"$status","decided_by":"$decidedBy"}';
+          return http.Response('{"ok":true,"void_requests":[$rows]}', 200);
+        }
+        if (body.contains('"reject_void"')) {
+          rejectCalls++;
+          status = 'REJECTED';
+          decidedBy = 'owner-1';
+          return http.Response('{"ok":false,"error":"lost"}', 503);
+        }
+        return http.Response('{"ok":false}', 400);
+      });
+      final result = await OwnerActionReconciler(
+        db: db,
+        api: CloudApiClient(
+          url: 'http://test.local/pos-api',
+          client: client,
+          activationCode: 'ACT-1',
+        ),
+        activationCode: 'ACT-1',
+      ).reconcile(username: 'u', password: 'p');
+      expect(rejectCalls, 1);
+      expect(result.confirmed, 1);
+      expect(await PendingOwnerActions.load(db), isEmpty);
+      expect(status, 'REJECTED');
+    });
+
+    test('concurrent removeConfirmed + record preserves the new action',
+        () async {
+      await db.transaction((txn) => PendingOwnerActions.record(
+            txn,
+            kind: PendingOwnerActions.voidSale,
+            targetId: 'old-1',
+            localUserId: 'u',
+          ));
+      await Future.wait([
+        PendingOwnerActions.removeConfirmed(db, {'void_sale:old-1'}),
+        db.transaction((txn) => PendingOwnerActions.record(
+              txn,
+              kind: PendingOwnerActions.approveVoid,
+              targetId: 'new-1',
+              localUserId: 'u',
+            )),
+      ]);
+      final rest = await PendingOwnerActions.load(db);
+      expect(rest, hasLength(1));
+      expect(rest.single.targetId, 'new-1');
+    });
+
   group('PendingOwnerActions corruption safety', () {
     Future<void> writeRaw(String raw) => db.insert('settings', {
           'key': PendingOwnerActions.settingKey,
@@ -471,13 +539,51 @@ void main() {
       expect(await PendingOwnerActions.corruptRaw(db), isNotNull);
     });
 
-    test('unknown kind is preserved as corrupt, not dropped', () async {
+    test('unknown action kind throws and preserves raw', () async {
       await writeRaw('[{"kind":"bogus","target_id":"t",'
           '"local_user_id":"u","created_at":"2026-01-01T00:00:00Z"}]');
-      // fromJson accepts any non-empty kind string; kind validation happens
-      // at reconcile time, so this loads but stays pending forever-safe.
-      final actions = await PendingOwnerActions.load(db);
-      expect(actions.single.kind, 'bogus');
+      await expectLater(
+        PendingOwnerActions.load(db),
+        throwsA(isA<PendingOwnerActionsCorrupt>()),
+      );
+      expect(await PendingOwnerActions.corruptRaw(db), isNotNull);
+    });
+
+    test('empty kind throws', () async {
+      await writeRaw('[{"kind":"","target_id":"t",'
+          '"local_user_id":"u","created_at":"2026-01-01T00:00:00Z"}]');
+      await expectLater(
+        PendingOwnerActions.load(db),
+        throwsA(isA<PendingOwnerActionsCorrupt>()),
+      );
+    });
+
+    test('empty user id throws', () async {
+      await writeRaw('[{"kind":"void_sale","target_id":"t",'
+          '"local_user_id":"","created_at":"2026-01-01T00:00:00Z"}]');
+      await expectLater(
+        PendingOwnerActions.load(db),
+        throwsA(isA<PendingOwnerActionsCorrupt>()),
+      );
+    });
+
+    test('invalid timestamp throws (no silent repair to now)', () async {
+      await writeRaw('[{"kind":"void_sale","target_id":"t",'
+          '"local_user_id":"u","created_at":"not-a-date"}]');
+      await expectLater(
+        PendingOwnerActions.load(db),
+        throwsA(isA<PendingOwnerActionsCorrupt>()),
+      );
+    });
+
+    test('non-string reason throws', () async {
+      await writeRaw('[{"kind":"void_sale","target_id":"t",'
+          '"local_user_id":"u","created_at":"2026-01-01T00:00:00Z",'
+          '"reason":42}]');
+      await expectLater(
+        PendingOwnerActions.load(db),
+        throwsA(isA<PendingOwnerActionsCorrupt>()),
+      );
     });
   });
 
