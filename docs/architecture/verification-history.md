@@ -511,3 +511,18 @@ databases that never ran the `<20` branch.
   `CloudBackend` imports the package barrel and no `../cloud/` paths.
 - Verification: see Stage 1 report — `flutter analyze`, `flutter test`,
   `dart analyze` (pos_cloud_engine), and web/windows/android release builds.
+
+### Stage 4.1 / H1 closure addendum (2026-11-24)
+
+- Supabase schema verified against a real export: `supabase db pull
+  --remote --declarative` (read-only) + local `postgres:17` Docker replica.
+  Migrations `20261125000000`–`20261127000000` applied cleanly; new
+  `20261127000000` adds the missing `void_requests(customer_id, sale_id)`
+  FK and a one-PENDING-request-per-sale unique index.
+- Six void-invariant scenarios executed as live SQL (settle, post-void
+  insert refusal, both concurrency orderings, missing/cross-tenant sale
+  FK, unattributed-void fail-visible, sync_apply rejection + privilege
+  checks). Script: `backend/supabase/tests/h1_void_invariants/`.
+- `interrupted_migration_test` flake fixed via process-tree kill
+  (`taskkill /T`); no tests skipped or weakened.
+- Full report: `docs/architecture/stage4-h1-closure.md`.

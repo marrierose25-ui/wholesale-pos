@@ -325,17 +325,28 @@ enforced in code and covered by a test.
   mirror table, so *no* writer can forget. Moving later in the ordering is also
   safe for the walk: the worst case is a second delivery, and re-applying a
   known row is a no-op.
-* **State transitions are not content** (`terminalState` in
-  `supabase/functions/sync/index.ts`). `sync_mirror` is keyed per entity and
-  deliberately keeps the first payload, and `pos_sync_apply` can only INSERT a
-  sale — replaying an existing one through `pos_create_sale` is an idempotent
-  no-op. So a sale voided on a till never voided in the cloud and every other
-  device kept the revenue. The gateway now applies `VOIDED` sales and
-  `APPROVED`/`REJECTED` void requests through `pos_void_sale` /
-  `pos_approve_void` / `pos_reject_void`, after the apply pass (the sale has to
-  exist first). A refused repeat is a success: a retried entry looks exactly
-  like a repeat. A transition whose row is still queued behind a backlog is
-  reported retryable rather than acked, so it is attempted again.
+* **Privileged transitions are never applied from pushed payloads** (Stage
+  4.1 / audit H1). A license proves the device, never WHICH USER acted, so
+  the gateway stages and applies only data: `pos_create_sale` hardcodes
+  `COMPLETED` and `pos_sync_apply` inserts void requests as `PENDING`. A
+  pushed `VOIDED`/`APPROVED`/`REJECTED` payload can no longer mint an
+  authoritative transition. Owner-authorized voids recorded offline are
+  kept in the local `pending_owner_actions` store and released through
+  `pos-api`'s JWT-authenticated `void_sale`/`approve_void`/`reject_void`
+  actions, where `p_user` is carved from the verified token — see
+  `frontend/lib/core/sync/owner_action_reconciler.dart`.
+* **Cloud-side void invariants** (`backend/supabase/migrations/
+  20261125000000`–`20261127000000`). A `BEFORE INSERT` trigger on
+  `void_requests` takes `SELECT ... FOR UPDATE` on the sale row, which
+  serializes request insertion against `pos_void_sale`/`pos_approve_void`:
+  insert-first commits PENDING and the void's settle trigger approves it;
+  void-first makes the insert fail. An `AFTER UPDATE` trigger on `sales`
+  settles still-PENDING requests in the same transaction, attributed to
+  `voided_by` — and only when it is non-NULL, so no unattributed approval
+  can be manufactured. A composite FK `(customer_id, sale_id)` →
+  `sales(customer_id, id)` rejects requests for missing or cross-tenant
+  sales, and a partial unique index allows at most one PENDING request
+  per sale.
 
 **Client** (`lib/core/sync/sync_pull_applier.dart`)
 

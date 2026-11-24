@@ -23,10 +23,6 @@ void main() {
   late Directory tempDir;
   late String workerScript;
 
-  setUpAll(() {
-    sqfliteFfiInit();
-  });
-
   setUp(() async {
     tempDir = await Directory.systemTemp.createTemp('pos_kill_test');
     workerScript = p.absolute('tool/db_migration_kill_worker.dart');
@@ -43,6 +39,10 @@ void main() {
     } catch (_) {
       // Windows can hold the SQLite handle for a moment.
     }
+  });
+
+  setUpAll(() {
+    sqfliteFfiInit();
   });
 
   /// Copies the v12 fixture (a mid-chain historical version) and returns the
@@ -75,6 +75,25 @@ void main() {
     fail('could not locate dart.exe inside the Flutter SDK');
   }
 
+  /// `dart run` goes through the Dart frontend, which can keep the kernel
+  /// alive as a child process. `Process.kill()` only terminates the
+  /// frontend, so the orphaned child could keep the SQLite file locked and
+  /// let the "killed" migration finish anyway — the intermittent failure
+  /// this test was seeing. On Windows, taskkill /T takes the whole tree;
+  /// elsewhere dart run executes in-process and a plain kill suffices.
+  Future<void> _killTree(Process process) async {
+    if (Platform.isWindows) {
+      await Process.run('taskkill', [
+        '/PID',
+        '${process.pid}',
+        '/T',
+        '/F',
+      ]);
+    } else {
+      process.kill();
+    }
+  }
+
   /// Runs the worker, waits until it reports the named checkpoint via the
   /// marker file, then kills the process — a real OS-level termination while
   /// the migration transaction is open, not a simulated Dart exception.
@@ -97,14 +116,14 @@ void main() {
     final deadline = DateTime.now().add(const Duration(seconds: 120));
     while (!File(marker).existsSync()) {
       if (DateTime.now().isAfter(deadline)) {
-        process.kill();
+        await _killTree(process);
         fail(
           'worker never reached checkpoint "$checkpoint".\n$output',
         );
       }
       await Future<void>.delayed(const Duration(milliseconds: 250));
     }
-    process.kill();
+    await _killTree(process);
     await process.exitCode;
   }
 
