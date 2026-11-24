@@ -636,6 +636,9 @@ class _AuthWrapperState extends State<AuthWrapper> {
   }
 
   Future<void> _onLogout() async {
+    // Re-arm the owner-authorization prompt: pending void transitions must be
+    // recoverable after sign-out, not only once per app launch.
+    _ownerAuthPromptShown = false;
     await _sessions.clear();
     if (!mounted) return;
     setState(() => _currentUser = null);

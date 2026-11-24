@@ -140,20 +140,30 @@ class OwnerActionReconciler {
     var stop = false;
     for (final action in pending) {
       if (stop) break;
-      try {
-        // 1. Make sure the prerequisite cloud record can exist: re-queue the
-        //    sync event if a restore dropped it, then require the target to
-        //    be visible through pos-api before attempting the transition.
-        await _ensureOutboxTarget(action);
-        final prereq = await _prerequisiteMet(action);
-        if (prereq == Prereq.missing) continue; // stays pending, retry later
-        if (prereq == Prereq.error) {
+      // Stage 4.1.2 ordering: assess authoritative state BEFORE executing.
+      // A target that already reflects this exact action is confirmed
+      // without a second privileged call; a conflicting decision is kept
+      // pending and surfaced; a missing target waits for the sync pipeline.
+      await _ensureOutboxTarget(action);
+      var verdict = await _assess(action);
+      if (verdict == Verdict.waitingForTarget ||
+          verdict == Verdict.retryableFailure) {
+        if (verdict == Verdict.retryableFailure) {
           firstError ??= 'Could not verify cloud state.';
           stop = true;
-          break;
         }
-
-        // 2. Attempt the authoritative transition.
+        continue; // stays pending; retried on the next pass
+      }
+      if (verdict == Verdict.confirmed) {
+        confirmed.add(action.dedupeKey);
+        continue;
+      }
+      if (verdict == Verdict.conflict) {
+        conflicts++;
+        continue;
+      }
+      // readyToExecute — attempt the privileged transition.
+      try {
         await _callAction(action);
         confirmed.add(action.dedupeKey);
       } on CloudApiException catch (e) {
@@ -163,16 +173,15 @@ class OwnerActionReconciler {
           stop = true;
           break;
         }
-        // 3. Lost-response / already-applied handling: read the
-        //    authoritative state instead of trusting the error.
-        final verdict = await _verdict(action);
+        // The transition may have committed with a lost response. Re-assess
+        // authoritative state rather than trusting the error.
+        verdict = await _assess(action);
         if (verdict == Verdict.confirmed) {
           confirmed.add(action.dedupeKey);
         } else if (verdict == Verdict.conflict) {
           conflicts++;
         } else {
-          // stillPending or unknown — keep queued, retry next pass.
-          stop = true; // a hard failure likely affects later actions too
+          stop = true; // waitingForTarget/retryableFailure: keep queued
         }
       }
     }
@@ -270,91 +279,105 @@ class OwnerActionReconciler {
     }
   }
 
-  /// Whether the action's cloud target exists yet. `missing` → keep pending
-  /// (the sync pipeline will deliver it); `met` → safe to attempt.
-  Future<Prereq> _prerequisiteMet(PendingOwnerAction action) async {
-    try {
-      if (action.kind == PendingOwnerActions.voidSale) {
-        final res = await api.call('search_sales', {
-          'sale_id': action.targetId,
-          'limit': 1,
-        });
-        final sales = res['sales'];
-        return sales is List && sales.isNotEmpty ? Prereq.met : Prereq.missing;
-      }
-      // approve/reject: the request must exist in the cloud. PENDING is the
-      // only state that can still be acted on; decided states are handled by
-      // _verdict after the call fails.
-      final res = await api.call('list_void_requests', {'limit': 1000});
-      final reqs = res['void_requests'];
-      if (reqs is! List) return Prereq.missing;
-      final found = reqs.any(
-        (r) => r is Map && '${r['id']}' == action.targetId,
-      );
-      return found ? Prereq.met : Prereq.missing;
-    } on CloudApiException {
-      return Prereq.error;
-    }
-  }
-
-  /// Reads the authoritative cloud state after a failed transition attempt
-  /// and classifies it: does it already reflect EXACTLY this action by THIS
-  /// owner (confirmed), a different decision (conflict), or neither
-  /// (stillPending → retry later)?
-  Future<Verdict> _verdict(PendingOwnerAction action) async {
-    try {
-      if (action.kind == PendingOwnerActions.voidSale) {
-        final res = await api.call('search_sales', {
-          'sale_id': action.targetId,
-          'limit': 1,
-        });
-        final sales = res['sales'];
-        if (sales is! List || sales.isEmpty) return Verdict.stillPending;
-        final sale = sales.first;
-        if (sale is! Map) return Verdict.stillPending;
-        if ('${sale['status']}' != 'VOIDED') return Verdict.stillPending;
-        // Confirmed only when the recorded voidor is this same verified
-        // owner — a void by anyone else is a conflict, not a success.
-        return '${sale['voided_by']}' == _authedUserId
-            ? Verdict.confirmed
-            : Verdict.conflict;
-      }
-      final wanted = action.kind == PendingOwnerActions.approveVoid
-          ? 'APPROVED'
-          : 'REJECTED';
+  /// Exact-id void-request lookup. `status` may be null to probe every
+  /// decision state — exact-id queries bypass the list page limit, so this
+  /// is reliable regardless of how many requests the shop has.
+  Future<Map<String, dynamic>?> _findVoidRequest(
+    String requestId, {
+    String? status,
+  }) async {
+    final statuses = status != null
+        ? [status]
+        : const ['PENDING', 'APPROVED', 'REJECTED'];
+    for (final s in statuses) {
       final res = await api.call('list_void_requests', {
-        'status': wanted,
-        'limit': 1000,
+        'request_id': requestId,
+        'status': s,
+        'limit': 1,
       });
       final reqs = res['void_requests'];
-      if (reqs is! List) return Verdict.stillPending;
-      for (final r in reqs) {
-        if (r is Map && '${r['id']}' == action.targetId) {
-          return '${r['decided_by']}' == _authedUserId
+      if (reqs is List && reqs.isNotEmpty && reqs.first is Map) {
+        return Map<String, dynamic>.from(reqs.first as Map);
+      }
+    }
+    return null;
+  }
+
+  /// Authoritative-state assessment for [action] (Stage 4.1.2 verdict
+  /// model). Reads only through pos-api's tenant-scoped, JWT-authenticated
+  /// endpoints — never trusts local rows or payload claims.
+  Future<Verdict> _assess(PendingOwnerAction action) async {
+    try {
+      if (action.kind == PendingOwnerActions.voidSale) {
+        final res = await api.call('search_sales', {
+          'sale_id': action.targetId,
+          'limit': 1,
+        });
+        final sales = res['sales'];
+        if (sales is! List || sales.isEmpty) return Verdict.waitingForTarget;
+        final sale = sales.first;
+        if (sale is! Map) return Verdict.retryableFailure;
+        final status = '${sale['status']}';
+        if (status == 'VOIDED') {
+          // Confirmed only when the recorded voidor is this same verified
+          // owner AND the reason matches the recorded intent.
+          final sameActor = '${sale['voided_by']}' == _authedUserId;
+          final sameReason = _norm(sale['void_reason']) ==
+              _norm(action.reason);
+          return sameActor && sameReason
               ? Verdict.confirmed
               : Verdict.conflict;
         }
+        return status == 'COMPLETED'
+            ? Verdict.readyToExecute
+            : Verdict.conflict;
       }
-      // Not decided as intended: check whether it was decided the OTHER way
-      // (conflict) or is still pending/missing (retry later).
-      final other = await api.call('list_void_requests', {
-        'status': action.kind == PendingOwnerActions.approveVoid
-            ? 'REJECTED'
-            : 'APPROVED',
-        'limit': 1000,
-      });
-      final otherReqs = other['void_requests'];
-      if (otherReqs is List &&
-          otherReqs.any((r) => r is Map && '${r['id']}' == action.targetId)) {
-        return Verdict.conflict;
+
+      final wanted = action.kind == PendingOwnerActions.approveVoid
+          ? 'APPROVED'
+          : 'REJECTED';
+      final other = action.kind == PendingOwnerActions.approveVoid
+          ? 'REJECTED'
+          : 'APPROVED';
+      final req = await _findVoidRequest(action.targetId);
+      if (req == null) return Verdict.waitingForTarget;
+      final status = '${req['status']}';
+      final decidedBy = '${req['decided_by']}';
+      if (status == wanted) {
+        return decidedBy == _authedUserId
+            ? Verdict.confirmed
+            : Verdict.conflict;
       }
-      return Verdict.stillPending;
+      if (status == other) return Verdict.conflict;
+      return status == 'PENDING'
+          ? Verdict.readyToExecute
+          : Verdict.conflict;
     } on CloudApiException {
-      return Verdict.stillPending;
+      return Verdict.retryableFailure;
     }
   }
+
+  static String _norm(Object? v) =>
+      v == null ? '' : v.toString().trim().toLowerCase();
 }
 
-enum Prereq { met, missing, error }
+/// Explicit reconciliation verdicts (Stage 4.1.2).
+enum Verdict {
+  /// Authoritative cloud state already reflects exactly this action by this
+  /// verified actor — safe to drop the pending record.
+  confirmed,
 
-enum Verdict { confirmed, conflict, stillPending }
+  /// The cloud holds a DIFFERENT authoritative decision (other actor, or
+  /// same actor with different parameters). Never overwritten.
+  conflict,
+
+  /// The target record has not reached the cloud business table yet.
+  waitingForTarget,
+
+  /// Target exists and is still in the pre-transition state — safe to call
+  /// the privileged pos-api action.
+  readyToExecute,
+
+  /// Transient failure (network, 5xx, unreadable state) — retry later.
+  retryableFailure,
+}

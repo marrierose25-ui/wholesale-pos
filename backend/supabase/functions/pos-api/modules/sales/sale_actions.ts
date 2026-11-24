@@ -204,6 +204,12 @@ export async function listVoidRequests(db: any, ctx: Ctx, body: any) {
   let q = db.from("void_requests").select("*")
     .eq("customer_id", ctx.customerId).eq("status", status)
     .order("created_at", { ascending: false });
+  // Stage 4.1.2: exact-id lookup for reconciliation verdicts. Bypasses the
+  // page limit because it is a single-row probe, not a list — and it is
+  // still tenant-scoped by the customer_id filter above, so a request id can
+  // never select another shop's row.
+  const requestId = str(body.request_id);
+  if (requestId) q = q.eq("id", requestId).limit(1);
   q = excludeDemoRows(q, await demoUserIds(db, ctx), "requested_by");
   const { data, error } = await q.limit(limit);
   if (error) throw new Error(error.message);
