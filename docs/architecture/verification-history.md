@@ -11,10 +11,10 @@
 The following test counts have been reported at different stages:
 
 | Stage | Date | Location | Claimed Count | Actual Count | Notes |
-|-------|------|----------|---------------|--------------|-------|
+| ------- | ------ | ---------- | --------------- | -------------- | ------- |
 | Stage 6 | 2026-10-20 | `docs/DEVELOPMENT.md` line 77 | 741 | — | PWA build verification mentioned |
 | Stage 7 | 2026-10-24 | `docs/DEVELOPMENT.md` | 684 | — | After sync fixes |
-| Stage 8 | 2026-11-18 | `docs/DEVELOPMENT.md` line 87 | 684 passed, 1 skipped | To be verified |
+| Stage 8 | 2026-11-18 | `docs/DEVELOPMENT.md` line 87 | 684 passed, 1 skipped | — | To be verified |
 | Current (Stage 9) | 2026-11-21 | `docs/architecture/architecture-rules.md` line 211 | 684 passed, 1 skipped | — | Verified |
 
 ### Discrepancy Explanation
@@ -36,13 +36,15 @@ The variation between 678, 682, and 684 counts is due to:
 ### Flutter Test Suite
 
 **Command (as documented in docs/DEVELOPMENT.md):**
+
 ```powershell
 cd frontend
 flutter test
 ```
 
 **Expected output (per Stage 8 verification):**
-```
+
+```text
 684 passed, 1 skipped
 ```
 
@@ -51,6 +53,7 @@ flutter test
 ### Flutter Analyze
 
 **Command:**
+
 ```powershell
 cd frontend
 flutter analyze
@@ -63,6 +66,7 @@ flutter analyze
 ### Flutter Build Web
 
 **Command:**
+
 ```powershell
 cd frontend
 flutter build web --release -t lib/main_web.dart
@@ -75,6 +79,7 @@ flutter build web --release -t lib/main_web.dart
 ### Windows Build
 
 **Command:**
+
 ```powershell
 cd frontend
 powershell -File tools\build_release.ps1 windows
@@ -87,6 +92,7 @@ powershell -File tools\build_release.ps1 windows
 ### Deno Type Check
 
 **Command:**
+
 ```powershell
 cd supabase/functions
 deno check "pos-api"
@@ -95,6 +101,7 @@ deno check "pos-api"
 **Expected output:** Exit code 0, all 29 files pass
 
 **Verification evidence:**
+
 - From commit `9145a9f`: `deno check "supabase/functions/pos-api"` exit code 0
 - From `docs/architecture/architecture-rules.md` line 214
 - From `docs/DEVELOPMENT.md` line 84
@@ -112,11 +119,13 @@ deno check "pos-api"
 The web entry graph must not reach `sqflite`, `dart:io`, `path_provider`, or `LocalDatabase`.
 
 **Evidence:**
+
 - `docs/architecture/architecture-rules.md` Rule L2: Verified by architecture test - PASS
 - `docs/DEVELOPMENT.md` line 83: "Web graph has zero sqflite/dart:io/path_provider/LocalDatabase imports from main_web.dart entry point"
 - Architecture test `'web entry graph never reaches the native engine or SQLite'` - PASS
 
 **Actual imports in web path:**
+
 - `main_web.dart` → `app_shell.dart` → `pos_contracts/AppBackend`
 - No imports from `pos_local_engine`, `sqflite`, `dart:io`
 - Cloud HTTP clients used instead
@@ -126,12 +135,14 @@ The web entry graph must not reach `sqflite`, `dart:io`, `path_provider`, or `Lo
 **Verification status:** PASS
 
 `pos_cloud_engine` has zero imports of:
+
 - `sqflite`
 - `dart:io`
 - `path_provider`
 - Any Flutter-specific SDK packages
 
 **Allowed imports only:**
+
 - `http`
 - `uuid`
 - Package imports from `pos_contracts` and `pos_core`
@@ -163,6 +174,7 @@ static const int schemaVersion = 22;
 **Verification status:** PASS
 
 Per `docs/architecture/api-action-inventory.md`:
+
 - All 60 API actions documented
 - Modularization complete: ~2399 lines → ~434 lines router + 28 module files
 - `deno check` passed for all 29 files
@@ -170,7 +182,7 @@ Per `docs/architecture/api-action-inventory.md`:
 ### Action Verification by Module
 
 | Module | Actions | Status |
-|--------|---------|--------|
+| -------- | --------- | -------- |
 | auth | 4 | ✅ Verified |
 | catalog | 4 | ✅ Verified |
 | sales | 7 | ✅ Verified |
@@ -192,7 +204,7 @@ Per `docs/architecture/api-action-inventory.md`:
 **Verification status:** PASS
 
 | Migration | Date | Tables Affected |
-|-----------|------|-----------------|
+| ----------- | ------ | ----------------- |
 | v15 | 2026-11-05 | picklists, picklist_items, picklist_customers |
 | v16 | 2026-11-06 | finance_entries.payment_method |
 | v17 | 2026-11-06 | users.username (unique) |
@@ -209,7 +221,7 @@ Per `docs/architecture/api-action-inventory.md`:
 **Reference:** `docs/architecture/feature-ownership.md` Table Ownership Map
 
 | Table | Owning Repo | Sync | Export | Cross-Module Deps |
-|-------|-------------|------|--------|-------------------|
+| ------- | ------------- | ------ | -------- | ------------------- |
 | users | pos_local_engine | ✅ | ✅ (strips pw_hash/salt) | sale, shift, audit |
 | products | pos_local_engine | ✅ | ✅ | - |
 | sales | pos_local_engine | ✅ | ✅ | finance, audit |
@@ -234,7 +246,7 @@ Per `docs/architecture/api-action-inventory.md`:
 From `docs/architecture/architecture-rules.md` Section "Verification Checklist":
 
 | Item | Status | Notes |
-|------|--------|-------|
+| ------ | -------- | ------- |
 | `flutter analyze --fatal-infos` | PASS | No infos |
 | `flutter test` | 684 passed, 1 skipped | To be independently verified |
 | `flutter build web --release -t lib/main_web.dart` | PASS | |
@@ -253,7 +265,7 @@ From `docs/architecture/architecture-rules.md` Section "Verification Checklist":
 
 ### deno check result
 
-```
+```bash
 $ deno check "supabase/functions/pos-api"
 Check file:///path/to/supabase/functions/pos-api/index.ts
 # Exit code: 0
@@ -262,7 +274,7 @@ Check file:///path/to/supabase/functions/pos-api/index.ts
 
 ### Flutter test result (documented)
 
-```
+```bash
 $ flutter test
 00:00 + 684: All tests passed!
 1: skipped
@@ -270,7 +282,7 @@ $ flutter test
 
 ### Windows release build
 
-```
+```bash
 $ powershell -File tools/build_release.ps1 windows
 # Build succeeds at: build\windows\x64\runner\Release
 # WholesalePOS_Windows_Release.zip (16 entries, no licence, no local DB)
@@ -281,7 +293,7 @@ $ powershell -File tools/build_release.ps1 windows
 ## Known Test Counts by Source
 
 | Source | Count | Context |
-|--------|-------|---------|
+| -------- | ------- | --------- |
 | `docs/DEVELOPMENT.md` line 77 | ~741 | PWA build verification (differing methodology) |
 | `docs/DEVELOPMENT.md` line 87 | 684 passed, 1 skipped | Stage 8 Flutter test |
 | `docs/architecture/architecture-rules.md` line 211 | 684 passed, 1 skipped | Current verification checklist |
@@ -306,6 +318,7 @@ $ powershell -File tools/build_release.ps1 windows
 ### Architecture Test Extension
 
 **Command:**
+
 ```powershell
 cd frontend
 flutter test test/architecture_test.dart
@@ -316,7 +329,7 @@ flutter test test/architecture_test.dart
 **New test groups added:**
 
 | Group | Tests | Description |
-|-------|-------|-------------|
+| ------- | ------- | ------------- |
 | `frontend boundaries` | 3 | raw Database handles check, platform-specific engine import guard, nav tab presence |
 | `native/web symmetry` | 2 | AppBackend getter completeness, cloud backend import isolation |
 | `backend parity` | 2 | equal repo count across backends, domain-to-cloud mapping verification |
@@ -326,7 +339,7 @@ flutter test test/architecture_test.dart
 ### Documentation Artifacts Created
 
 | Artifact | Location | Status |
-|----------|----------|--------|
+| ---------- | ---------- | -------- |
 | Final Integrity Audit | `docs/architecture/final-integrity-audit.md` | ✅ Created |
 | Synchronization Integrity Report | `docs/architecture/synchronization-integrity-report.md` | ✅ Created |
 | Commercial Readiness Report | `docs/architecture/commercial-readiness-report.md` | ✅ Created |
@@ -347,7 +360,7 @@ flutter test test/architecture_test.dart
 ### Existing Docs Updated with Stage 10 Evidence
 
 | Document | Changes |
-|----------|---------|
+| ---------- | --------- |
 | `final-architecture-overview.md` | Version bumped to Stage 10; documentation artifact index added |
 | `verification-history.md` | Stage 10 section added with test counts, new tests, doc inventory |
 | `architecture-rules.md` | Rule list extended with architecture-test evidence references |
@@ -357,7 +370,7 @@ flutter test test/architecture_test.dart
 ## Verification Artifacts
 
 | Artifact | Location | Verification Method |
-|----------|----------|---------------------|
+| ---------- | ---------- | --------------------- |
 | Flutter test results | `frontend/test/` | `flutter test` |
 | Analysis results | `frontend/lib/` | `flutter analyze` |
 | Web build output | `app/build/web/` | `flutter build web` |
@@ -387,7 +400,8 @@ The current architecture has been verified through:
 9. **Migration verification:** 10 migrations, v22 is latest
 10. **Documentation:** 16 new docs created, 3 existing docs updated with Stage 10 evidence
 
-**All verification checks PASS.** Stage 10 — FINAL ARCHITECTURE ENFORCEMENT, VERIFICATION AND DOCUMENTATION — is complete.
+**All verification checks PASS.** Stage 10 — FINAL ARCHITECTURE ENFORCEMENT, VERIFICATION AND DOCUMENTATION — is complete
+
 ---
 
 ## Post-Migration Verification — Batches 1–6, Audit, Governance (2026-11-22)
@@ -396,7 +410,7 @@ The `app/` → `frontend/` + `backend/` directory migration and the six test-mig
 batches completed. All figures below are from commands actually executed on `main`.
 
 | Check | Command | Result |
-|---|---|---|
+| --- | --- | --- |
 | Flutter analyzer | `flutter analyze` (from `frontend/`) | **exit 0 — "No issues found!"** (was 482 issues / 321 errors at migration start; 41 lint diagnostics resolved via `dart fix`) |
 | Flutter test suite | `flutter test` (from `frontend/`) | **exit 0 — 689 passed, ~1 skipped** (`sync_matrix_live_test` self-skips without `MATRIX_*` env), 0 failed |
 | Package analysis | `dart analyze` in each `backend/dart/*` | pos_core, pos_contracts, pos_local_engine, pos_cloud_engine — **all clean** |
@@ -443,7 +457,7 @@ databases that never ran the `<20` branch.
 ### Repairs verified
 
 | Defect | Fix | Evidence |
-|---|---|---|
+| --- | --- | --- |
 | No downgrade protection — sqflite silently stamped `user_version` down | `onDowngrade` throws `UnsupportedDatabaseVersionException` inside the version transaction, before `setVersion`; file untouched | `downgrade_protection_test.dart` (3 tests) |
 | v2–v5 upgrades failed (`no such table: finance_entries` at `<6`) | `_createIndexesAndTriggers` gates each index/trigger on verified table existence; deferred indexes are created by later steps in the same atomic upgrade | `historical_fixture_migration_test.dart` — genuine v2/v3/v4/v5 fixtures now reach v23 with data preserved |
 | `picklist_items_picklist_id` missing on fresh and v20+ installs | v23 convergence migration + guarded creation in `_createIndexesAndTriggers`/`_onCreate` | `PRAGMA index_list` assertions in fixture + characterization tests |

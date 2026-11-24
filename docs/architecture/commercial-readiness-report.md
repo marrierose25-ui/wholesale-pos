@@ -10,7 +10,7 @@
 ## 1. Architecture Quality Gate
 
 | Criterion | Status | Evidence |
-|-----------|--------|----------|
+| ----------- | -------- | ---------- |
 | Four-package separation enforced | ✅ PASS | pubspec dependency hierarchy verified; 12 architecture tests pass |
 | Domain purity (pos_core) | ✅ PASS | Zero flutter/sqflite/http/io imports in pos_core |
 | Contracts purity (pos_contracts) | ✅ PASS | Zero Flutter/platform imports; only meta + pos_core |
@@ -26,7 +26,7 @@
 ## 2. Database Safety Gate
 
 | Criterion | Status | Evidence |
-|-----------|--------|----------|
+| ----------- | -------- | ---------- |
 | Schema version single definition | ✅ PASS | `schemaVersion = 22` defined once at `local_database.dart:15` |
 | All 18 tables present | ✅ PASS | CREATE TABLE count matches expected 18 business + infra tables |
 | Migration chain intact | ✅ PASS | 10 migration files in supabase/migrations/; v22 is latest |
@@ -43,7 +43,7 @@
 ## 3. Authentication & Authorization Gate
 
 | Criterion | Status | Evidence |
-|-----------|--------|----------|
+| ----------- | -------- | ---------- |
 | JWT signing algorithm | ✅ PASS | HMAC-SHA256; secret from env var |
 | Token lifetime | ✅ PASS | 10-year TTL with token_version revocation |
 | Password hashing strength | ✅ PASS | PBKDF2-HMAC-SHA256 @ 210k iterations |
@@ -60,7 +60,7 @@
 ## 4. Licensing Gate
 
 | Criterion | Status | Evidence |
-|-----------|--------|----------|
+| ----------- | -------- | ---------- |
 | Ed25519 signature verification | ✅ PASS | Build-time injected public key; runtime signature check |
 | v1 format support | ✅ PASS | Legacy license format still accepted |
 | v2 format support | ✅ PASS | Current format with device binding |
@@ -74,7 +74,7 @@
 ## 5. Synchronization Gate
 
 | Criterion | Status | Evidence |
-|-----------|--------|----------|
+| ----------- | -------- | ---------- |
 | Outbox enqueue atomicity | ✅ PASS | Enqueue inside business transaction |
 | Push drain correctness | ✅ PASS | Ordered by created_at; batch size 50; on-success mark |
 | Pull application correctness | ✅ PASS | Dependency-ordered page application; cursor post-commit |
@@ -89,7 +89,7 @@
 ## 6. Security Gate
 
 | Criterion | Status | Evidence |
-|-----------|--------|----------|
+| ----------- | -------- | ---------- |
 | Tenant isolation (SQL) | ✅ PASS | All queries include `customer_id` filter; never from request body |
 | Service role bypass RLS | ✅ INTENTIONAL | Supabase Edge Function uses service role; app-level checks enforce isolation |
 | No credentials in bundle | ✅ PASS | JWT only; no Supabase key in web build |
@@ -103,7 +103,7 @@
 ## 7. Test Coverage Gate
 
 | Criterion | Status | Evidence |
-|-----------|--------|----------|
+| ----------- | -------- | ---------- |
 | Unit test count | ✅ 684 passed, 1 skipped | Stable since Stage 7 |
 | Architecture test count | ✅ 12 passing | Static boundary enforcement |
 | Backend package tests | ✅ 26 passed | pos_core domain entity tests |
@@ -119,7 +119,7 @@
 ## 8. Build Gate
 
 | Criterion | Status | Evidence |
-|-----------|--------|----------|
+| ----------- | -------- | ---------- |
 | Web release build | ✅ PASS | `flutter build web --release -t lib/main_web.dart` succeeds |
 | Windows release build | ✅ PASS | `build_release.ps1 windows` produces portable zip |
 | Android build | ✅ PASS | Standard Gradle build (no changes to platform code) |
@@ -132,7 +132,7 @@
 ## 9. Documentation Gate
 
 | Criterion | Status | Evidence |
-|-----------|--------|----------|
+| ----------- | -------- | ---------- |
 | Architecture docs complete | ✅ PASS | 28 architecture markdown files |
 | User guides complete | ✅ PASS | 6 user-facing guides (created Stage 10) |
 | API docs complete | ✅ PASS | 6 API reference documents (created Stage 10) |
@@ -148,7 +148,7 @@
 ## 10. Commercial Deployment Readiness Verdict
 
 | Category | Score | Weighted Status |
-|----------|-------|-----------------|
+| ---------- | ------- | ----------------- |
 | Architecture Quality | 10/10 | ✅ Ready |
 | Database Safety | 9/10 | ⚠️ One note (F-12) |
 | Authentication & Authz | 10/10 | ✅ Ready |
@@ -162,6 +162,7 @@
 ### Overall Verdict: **CONDITIONALLY COMMERCIAL READY**
 
 **Conditions:**
+
 1. **F-12 (pre-v6 upgrade blocking):** Acknowledged limitation. Any shop on schema version < 6 must perform a manual upgrade step before adopting the current build. Existing v6+ shops are unaffected.
 2. **Rollback coverage gap:** 29 of 40 transaction sites lack dedicated rollback tests. Production-safe due to structured try/catch around each transaction, but verification coverage is incomplete. Acceptable for commercial deployment given the simplicity of each transaction.
 
@@ -172,7 +173,7 @@
 ## 11. Known Risks at Deployment
 
 | Risk | Likelihood | Impact | Mitigation |
-|------|-----------|--------|------------|
+| ------ | ----------- | -------- | ------------ |
 | Supabase edge function cold start latency | Medium | Low — 200-500ms on first request | Acceptable for POS scale; warm pooling available |
 | Outbox growth under prolonged offline | Low | Medium — storage increases linearly | Automatic pruning of synced rows; monitor threshold |
 | Customer data loss on restore from corrupted export | Low | High — data dependent on export quality | Pre-restore backup always created; recovery export before destructive operations |
@@ -181,4 +182,4 @@
 
 ---
 
-**Report End**
+## Report End

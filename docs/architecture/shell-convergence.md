@@ -20,7 +20,7 @@ localStorage prefs) → `PosRoot` (theme + MaterialApp) → `AuthGate`
 ## Actual differences
 
 | Concern | Native | Web |
-|---|---|---|
+| --- | --- | --- |
 | Startup gate | `LicenseWrapper` + `ActivationScreen` (Ed25519, device fingerprint) | `WebActivationGate` inside `AuthGate` (`isProvisioned`) |
 | Session store | `SettingsSessionStore(db)` | `WebSessionStore` (localStorage + JWT rehydrate) |
 | Settings screen | `SettingsScreen` (backup/restore/devices/sync tile, `LocalDataOps`) | `WebSettingsScreen` (account controls only) |

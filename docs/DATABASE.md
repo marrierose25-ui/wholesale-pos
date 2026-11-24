@@ -1,8 +1,8 @@
-﻿> ⚠️ Partially stale. The system has 3 Edge Functions, 10 timestamped
+﻿# Database Schema (SQLite, schema version 23)
+
+> ⚠️ Partially stale. The system has 3 Edge Functions, 10 timestamped
 > Supabase migrations under `backend/supabase/migrations/`, and active cloud
 > sync. Verify claims against code before trusting them.
-
-# Database Schema (SQLite, schema version 23)
 
 This document describes the local SQLite database used by the native app. The
 Flutter application lives in `frontend/`; the database engine and all schema
@@ -21,6 +21,7 @@ The cloud/Supabase side is documented under `backend/supabase/`.
 ## Tables
 
 ### `users`
+
 - `id` TEXT PK
 - `username` TEXT UNIQUE NOT NULL — the login identifier: the account's phone
   number in one canonical form (0 + 9/7 + 8 digits, e.g. `0912345678`), looked up
@@ -37,15 +38,18 @@ The cloud/Supabase side is documented under `backend/supabase/`.
 Deleting an account is a two-step, owner-only action. An account that never recorded a sale, shift, cash movement, finance entry or void request is removed outright, which frees its phone number. One that did keeps its row with `deleted_at` set (the foreign keys would otherwise be violated and old sales would lose their cashier); such rows are hidden from the Users list, from login and from session restore, and re-creating the same phone number reuses the row so the history stays attributed. The demo account and the acting owner's own row are always refused.
 
 ### `products`
+
 - `id` TEXT PK, `name`, `code` (UNIQUE), `category`, `unit`
 - `selling_price_minor_units` INTEGER
 - `is_active` INTEGER, `created_at`, `updated_at`
 
 ### `devices`
+
 - `id` TEXT PK — stable per installation, persisted in `device_id.txt` next to the database
 - `name`, `platform`, `license_key`, `last_sync_at`
 
 ### `shifts`
+
 - `id` TEXT PK, `cashier_id` TEXT
 - `opening_cash_minor_units`, `closing_cash_minor_units`, `expected_cash_minor_units`
 - `status` TEXT (`OPEN`/`CLOSED`), `opened_at`, `closed_at`
@@ -53,10 +57,12 @@ Deleting an account is a two-step, owner-only action. An account that never reco
 A partial unique index (`one_open_shift`) plus insert/update triggers enforce at most one open shift.
 
 ### `cash_movements`
+
 - `id` TEXT PK, `shift_id` TEXT FK -> shifts, `user_id` TEXT FK -> users
 - `type` TEXT (`DEPOSIT`, `WITHDRAWAL`, `EXPENSE`), `amount_minor_units`, `reason`, `created_at`
 
 ### `sales`
+
 - `id` TEXT PK, `receipt_number` TEXT UNIQUE (`REC-YYYYMMDD-NNNN`, sequential per day)
 - `cashier_id` FK -> users, `device_id` FK -> devices, `shift_id` FK -> shifts
 - `customer_name`, `payment_method` (`CASH`/`BANK`/`LOAN`). `LOAN` is recorded in history but collects no money, so it is excluded from the dashboard revenue, the reports aggregates and the register drawer math (only `CASH` feeds the drawer; `BANK`/`LOAN` never do).
@@ -71,6 +77,7 @@ A partial unique index (`one_open_shift`) plus insert/update triggers enforce at
 Voids are soft deletes. `voided_shift_id` attributes the cash refund to the shift that was open when the void happened; refunds fall back to the original `shift_id` for legacy voids.
 
 ### `void_requests` (cashier-initiated, owner-approved voids)
+
 - `id` TEXT PK
 - `sale_id` TEXT FK -> sales
 - `requested_by` TEXT FK -> users (the cashier who flagged the sale)
@@ -83,6 +90,7 @@ Voids are soft deletes. `voided_shift_id` attributes the cash refund to the shif
 A pending request leaves the sale `COMPLETED` and does not touch revenue or the cash drawer. Only an active `OWNER` may approve (which runs the normal void path, marking the sale `VOIDED` and stamping `voided_shift_id`) or reject. A direct owner void auto-settles any `PENDING` request on that sale.
 
 ### `sale_items`
+
 - `id` TEXT PK, `sale_id` FK -> sales ON DELETE CASCADE
 - `product_id` TEXT (catalog ID, or `MANUAL` for free-form items)
 - `product_name_snapshot`, `unit_price_snapshot_minor_units`
@@ -92,10 +100,12 @@ A pending request leaves the sale `COMPLETED` and does not touch revenue or the 
 - `notes` TEXT — free-text remark on the line
 
 ### `finance_categories` (money tracking)
+
 - `id` TEXT PK, `name` TEXT NOT NULL (a person/source label)
 - `created_at`, `updated_at`
 
 ### `finance_entries` (money tracking)
+
 - `id` TEXT PK, `category_id` TEXT FK -> finance_categories
 - `source` TEXT NOT NULL, `amount_minor_units` INTEGER NOT NULL (> 0)
 - `description` TEXT
@@ -105,17 +115,21 @@ A pending request leaves the sale `COMPLETED` and does not touch revenue or the 
 Finance entries are completely separate from sales: completing one never affects revenue. Access is the `finance` ("Money Tracking") tick — an active `OWNER`, or a staff account the owner ticked — enforced in the data layer (every read/write re-checks the acting row inside its own transaction), not by hiding the tab. The cloud backend (`pos-api`) applies the same rule to every `finance_*` action.
 
 ### `audit_logs`
+
 - `id` TEXT PK, `user_id` TEXT (nullable for unknown login attempts)
 - `action` TEXT (e.g. `LOGIN_SUCCEEDED`, `LOGIN_FAILED`, `SALE_COMPLETED`, `SALE_VOIDED`, `SHIFT_OPENED`, `SHIFT_CLOSED`, `CASH_MOVEMENT_ADDED`, `PASSWORD_CHANGED`, `PASSWORD_RESET`, `USER_CREATED`, `USER_ACTIVATED`, `USER_DEACTIVATED`, `USER_DELETED`, `USER_PHONE_CHANGED`, `BACKUP_EXPORTED`, `BACKUP_RESTORED`, and `FINANCE_*` for money-tracking mutations)
 - `details` TEXT, `created_at` TEXT
 
 ### `counters`
+
 - `name` TEXT PK (e.g. `receipt-20261021`), `value` INTEGER — sequential receipt allocation.
 
 ### `settings`
+
 - `key` TEXT PK, `value` TEXT — currently stores `theme_mode` (`light`/`dark`), `remember_login` (`1`/`0`, opt-in persistent sign-in, default off) and `auth_session` (opaque JSON nonce for a persisted sign-in; never the password or hash).
 
 ### `sync_outbox` (transactional change queue for future cloud sync)
+
 - `id` TEXT PK, `entity_type` TEXT (`sale`/`shift`/`cash_movement`/`void_request`), `entity_id` TEXT
 - `operation` TEXT (`UPSERT`/`DELETE`), `payload` TEXT (serialized aggregate: the row plus any children)
 - `created_at` TEXT, `synced_at` TEXT (null until pushed)

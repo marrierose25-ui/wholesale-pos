@@ -28,7 +28,7 @@ Every file is a real SQLite database whose DDL came from the commit named in its
 columns.
 
 | Fixture | Source commit | Provenance | Tables |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `v2` | `f644ceb` | **Reconstructed** from the v3 initial-commit `_onCreate` with `sales.payment_method` removed. The `<3` upgrade step adds exactly that column and is the only difference between v2 and v3. | 7 |
 | `v3` | `f644ceb` | Verbatim `_onCreate` of the first committed schema. | 7 |
 | `v4` | `0d071dd` | Verbatim `_onCreate` of v4. | 8 |
@@ -56,7 +56,7 @@ of weakening the assertion.
 ## 2. Upgrade matrix actually executed
 
 | From | Result on this build | Evidence |
-|---|---|---|
+| --- | --- | --- |
 | v2 | **Blocked** at `<6`; whole upgrade rolls back | `historical_fixture_migration_test.dart` |
 | v3 | **Blocked** at `<6`; whole upgrade rolls back | same |
 | v4 | **Blocked** at `<6`; whole upgrade rolls back | same |
@@ -94,7 +94,7 @@ it does not fix it.
 (line 322). `_createIndexesAndTriggers` emits indexes on `finance_entries`, so
 SQLite raises:
 
-```
+```text
 no such table: main.finance_entries
 ```
 
@@ -128,7 +128,7 @@ The missing `picklist_items_picklist_id` index exists on **more** paths than the
 original risk-register entry described:
 
 | Database origin | Has the index at v22? | Why |
-|---|---|---|
+| --- | --- | --- |
 | Fresh v22 install | **No** | `_onCreate` never creates it. |
 | Upgrade from v20 | **No** | v20's `_onCreate` omits it, and the `<20` branch does not run. |
 | Upgrade from v21 | **No** | same. |
@@ -150,7 +150,7 @@ fresh-install behaviour and invalidate the approved schema.
 `SchemaSnapshot.differences(freshV22, upgradedV22)` produced these goldens:
 
 | Source | Differences from fresh v22 |
-|---|---|
+| --- | --- |
 | v22 | none — a genuine v22 file needs no migration |
 | v21 | none |
 | v20 | `picklist_items` physical column order and `sqlite_master.sql` text only |

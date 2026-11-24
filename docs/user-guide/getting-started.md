@@ -60,7 +60,7 @@ For detailed steps see [Troubleshooting → Data Restore](troubleshooting.md).
 ## 7. Keyboard Shortcuts (Desktop)
 
 | Shortcut | Action |
-|----------|--------|
+| ---------- | -------- |
 | `F2` | New sale |
 | `F3` | Open register |
 | `F4` | Finance |

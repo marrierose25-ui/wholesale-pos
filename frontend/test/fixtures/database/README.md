@@ -8,7 +8,7 @@ preserved pre-v6 upgrade limitation.
 ## Contents
 
 | Directory | File | Meaning |
-|---|---|---|
+| --- | --- | --- |
 | `v2/` | `wholesale_pos.db` | Reconstructed v2 (v3 DDL minus `sales.payment_method`; see `fixture.json`). |
 | `v3/` | `wholesale_pos.db` | Verbatim v3 schema with representative history. |
 | `v4/` | `wholesale_pos.db` | Verbatim v4. |

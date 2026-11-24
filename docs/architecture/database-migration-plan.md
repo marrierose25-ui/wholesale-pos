@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD024 -->
+
 # Database Migration Plan — Stage 6 Proposal
 
 **Status:** plan only. **Not executed, not authorised.**
@@ -29,7 +31,7 @@ Before the first Stage 6 edit:
    test, build the affected target, inspect the diff, update
    `migration-log.md`, report, stop.
 
-**Hard prohibitions for every sub-stage**
+### Hard prohibitions for every sub-stage
 
 - `git reset`, `git clean`, force-push, history rewrite.
 - Committing, pushing, deploying, reconnecting Cloudflare/GitHub.
@@ -44,7 +46,7 @@ Before the first Stage 6 edit:
 ## 2. Sub-stage overview
 
 | Sub-stage | Goal | Production behaviour change |
-|---|---|---|
+| --- | --- | --- |
 | **6.0** | Characterisation and schema snapshots | None (test/tooling only) |
 | **6.1** | Create `pos_contracts`; extract ports and pure types | None (imports/constructors only) |
 | **6.2** | Create `pos_local_engine`; move lifecycle/schema/migrations/backup | None (verbatim move) |
@@ -112,7 +114,7 @@ moves.
 
 ### Files created
 
-```
+```text
 backend/dart/pos_contracts/pubspec.yaml
 backend/dart/pos_contracts/lib/pos_contracts.dart
 backend/dart/pos_contracts/lib/src/repositories/*.dart
@@ -182,7 +184,7 @@ runtime cannot be affected.
 
 ### Package created
 
-```
+```text
 backend/dart/pos_local_engine/pubspec.yaml
 backend/dart/pos_local_engine/lib/pos_local_engine.dart
 backend/dart/pos_local_engine/lib/src/lifecycle/{database_factory,local_database}.dart
@@ -194,7 +196,7 @@ backend/dart/pos_local_engine/lib/src/backup/pre_migration_backup.dart
 ### Moves
 
 | Current | Target |
-|---|---|
+| --- | --- |
 | `frontend/lib/core/database/local_database.dart` — factory selection, `open`, `openAt`, `openInMemory`, `onConfigure`, `onCreate`, `onUpgrade`, backup call | `engine/lifecycle/` + `engine/schema/` + `engine/migrations/` + `engine/backup/` |
 | `schemaVersion` constant | `engine/schema/schema_version.dart` |
 | `_createIndexesAndTriggers` | `engine/schema/indexes_triggers.dart` |
@@ -257,7 +259,7 @@ changing storage.
 ### Moves
 
 | Current | Target |
-|---|---|
+| --- | --- |
 | `LocalDatabase.getSetting` / `setSetting` | `engine/settings/settings_store.dart` |
 | Key strings scattered across callers | `engine/settings/settings_keys.dart` (same values) |
 | `registerCurrentDevice` and `device_id.txt` handling | `engine/device/device_identity.dart` |
@@ -301,7 +303,7 @@ reviewable diff per module.
 Each repository is its own sub-step (commit/checkpoint) in this order:
 
 | Order | Repository | Why this position | Extra proof |
-|---:|---|---|---|
+| ---: | --- | --- | --- |
 | 1 | `ProductRepository` | No cross-module writes | product repository tests; outbox row shape |
 | 2 | `PicklistRepository` | Self-contained; soft delete; outbox | picklist tests; header re-derivation |
 | 3 | `ShiftRepository` | Register owner; drawer math | shift/cash-math tests; one-open-shift trigger |
@@ -355,7 +357,7 @@ checkpoint keeps rollback local.
 ### Part A — outbox
 
 | Current | Target |
-|---|---|
+| --- | --- |
 | `core/sync/sync_outbox.dart` | `engine/sync/sync_outbox.dart` |
 | `core/sync/sync_outbox_repository.dart` | `engine/sync/sync_outbox_repository.dart` |
 | `SyncOutboxEntry`/`SyncEntities` | already in `pos_contracts` (6.1) |
@@ -373,7 +375,7 @@ transaction inventory unchanged; outbox table DDL unchanged.
 ### Part B — JSON export/import
 
 | Current | Target |
-|---|---|
+| --- | --- |
 | `core/utils/data_exporter.dart` | `engine/backup/json_backup_service.dart` (or `backup/export_service.dart` + `import_service.dart`) |
 | `core/utils/data_importer.dart` | same |
 
@@ -485,7 +487,7 @@ Restore shims from the previous checkpoint. No data/schema change.
 ## 11. File move map
 
 | Current file | Target |
-|---|---|
+| --- | --- |
 | `frontend/lib/core/database/local_database.dart` | `engine/lifecycle/local_database.dart` + `engine/schema/*` + `engine/migrations/*` + `engine/backup/pre_migration_backup.dart` |
 | `frontend/lib/core/repositories/{product,sale,reporting,shift,finance,picklist,user}_repository.dart` | port in `pos_contracts`; implementation in `engine/repositories/sqlite_*` |
 | `frontend/lib/core/repositories/feature_gate.dart` | `engine/repositories/feature_gate.dart` |
@@ -513,7 +515,7 @@ Restore shims from the previous checkpoint. No data/schema change.
 ## 12. Compatibility-shim rules
 
 | Rule | Reason |
-|---|---|
+| --- | --- |
 | Port shims may live in old app paths and export `pos_contracts` | Keeps the tree compiling during the move |
 | Implementation shims must be native-only files | Prevents sqflite from re-entering the web graph |
 | Never combine port + implementation in one re-export file | That is exactly today’s leak |
@@ -526,7 +528,7 @@ Restore shims from the previous checkpoint. No data/schema change.
 ## 13. Preservation proof matrix
 
 | Artefact | Proof before/after |
-|---|---|
+| --- | --- |
 | DB path/filename | `openInMemory` tests + a temp-path test asserting basename `wholesale_pos.db` and `.bak` sibling |
 | Schema v22 | `sqlite_master` snapshot equality (fresh + every upgrade fixture) |
 | Columns/FKs/indexes/triggers | PRAGMA snapshot equality; name lists identical |
@@ -549,7 +551,7 @@ Restore shims from the previous checkpoint. No data/schema change.
 ## 14. Test and build gates (every sub-stage)
 
 | Gate | Command | Pass condition |
-|---|---|---|
+| --- | --- | --- |
 | App analyze | `flutter analyze --fatal-infos` | 0 issues |
 | App tests | `flutter test` | Same or higher pass count, 0 failures |
 | Domain package | `dart analyze` + `dart test` in `pos_core` | 0 issues, all pass |

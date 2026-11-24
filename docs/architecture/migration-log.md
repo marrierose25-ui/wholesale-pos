@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD024 -->
+
 # Migration Log
 
 Append-only record of every refactoring stage. Format per entry:
@@ -10,6 +12,7 @@ date, stage, files moved/changed, checks run + results, notes/risks hit.
 **Stage:** 0 — investigation only.
 
 **Actions:**
+
 - Full source audit of `app/lib` (≈29k LOC Dart), `app/test` (80+ files),
   `app/tools`, `supabase/functions` (3 Edge Functions, ~3.3k LOC TS),
   `supabase/migrations`, `docs/*.sql`, `.github/workflows`.
@@ -19,7 +22,7 @@ date, stage, files moved/changed, checks run + results, notes/risks hit.
 **Baseline results:**
 
 | Check | Result |
-|---|---|
+| --- | --- |
 | `flutter pub get` | OK |
 | `flutter analyze --fatal-infos` | PASS — 0 issues |
 | `flutter test` | PASS — 637 passed, 1 skipped, 0 failed |
@@ -32,6 +35,7 @@ date, stage, files moved/changed, checks run + results, notes/risks hit.
 `target-state.md`, `migration-plan.md`, `migration-log.md` (this file).
 
 **Confirmed pre-existing issues (not fixed — audit only):**
+
 - `core/` imports `features/` in 5 files (sales models + web widgets).
 - Two parallel shells (`main.dart` vs `app_shell.dart`) with duplicated
   `_NavItem`/`_ShellDestination` nav logic.
@@ -56,7 +60,7 @@ imports. No repositories, UI, sync, or backend touched.
 `backend/dart/pos_core/` — pure Dart (`sdk: ^3.13.5`), zero runtime
 dependencies, `publish_to: 'none'`:
 
-```
+```text
 lib/pos_core.dart                        # public barrel export
 lib/src/modules/
   sales/domain/entities/      sale.dart, sale_item.dart, void_request.dart
@@ -72,7 +76,7 @@ test/entities_test.dart       # 20 tests
 ### Models moved (old → new)
 
 | Class | From | To |
-|---|---|---|
+| --- | --- | --- |
 | `Sale`, `SaleItem`, `VoidRequest` | `features/sales/{sale,sale_item,void_request}.dart` | `modules/sales/domain/entities/` |
 | `Shift`, `CashMovement` | `features/sales/shift.dart` (both classes) | `modules/register/domain/entities/{shift,cash_movement}.dart` |
 | `Product` | `core/models/product.dart` | `modules/catalog/domain/entities/` |
@@ -115,7 +119,7 @@ the account entity; auth services remain in `core/auth`.
 ### Checks run
 
 | Check | Result |
-|---|---|
+| --- | --- |
 | `dart format` (pos_core) | clean — 14 files formatted |
 | `dart analyze` (pos_core) | PASS — 0 issues |
 | `dart test` (pos_core) | PASS — 20/20 |
@@ -203,7 +207,7 @@ re-registration preserved inside the existing statics.
 ### Checks run
 
 | Check | Result |
-|---|---|
+| --- | --- |
 | `dart analyze` (app, incl. test/) | PASS — 0 issues |
 | `dart analyze` + `dart test` (pos_core) | PASS — 0 issues, 26/26 |
 | `flutter test` | PASS — 641 passed, 1 skipped, 0 failed (+4 arch tests) |
@@ -266,7 +270,7 @@ same sync wake points (sale completed, shift updated).
 ### Checks
 
 | Check | Result |
-|---|---|
+| --- | --- |
 | `dart analyze` (lib+test) | PASS — 0 issues |
 | `flutter test` | PASS — 641 passed, 1 skipped (baseline identical) |
 | Web release build | PASS |
@@ -307,7 +311,7 @@ else audited and left intact per the preservation freeze.
 ### Checks
 
 | Check | Result |
-|---|---|
+| --- | --- |
 | `dart analyze` (lib + test) | PASS — 0 issues |
 | `flutter test` | see below |
 | pos_core analyze + test | unchanged (26 tests) |
@@ -371,7 +375,7 @@ separately.
 ### Baseline results (docs-only tree)
 
 | Check | Result |
-|---|---|
+| --- | --- |
 | `flutter analyze --fatal-infos` (`app/`) | PASS — 0 issues |
 | `flutter test` (`app/`) | PASS — 643 passed, 1 skipped, 0 failed |
 | `dart analyze` (`pos_core`) | PASS — 0 issues |
@@ -484,7 +488,7 @@ modified. The Stage 1–4 working tree remains untouched.
 ### Baseline results after Stage 6.0 additions
 
 | Check | Result |
-|---|---|
+| --- | --- |
 | `flutter analyze --fatal-infos` (`app/`) | **PASS — 0 issues** (fixed 2 warnings in new test files) |
 | `dart analyze` (`pos_core`) | **PASS — 0 issues** |
 | `dart test` (`pos_core`) | **PASS — 26/26** |
@@ -495,7 +499,7 @@ modified. The Stage 1–4 working tree remains untouched.
 **Executed evidence (genuine fixture + atomicity proof):**
 
 | Suite | Tests | Outcome |
-|---|---:|---|
+| --- | ---: | --- |
 | `transaction_rollback_test.dart` | 9 | **PASSED** — failure-injection proves rollback of sale/void/approval/markCompleted/deleteEntry/addCashMovement/closeShift/restore(2) |
 | `backup_export_restore_characterization_test.dart` | 3 | **PASSED** — `.bak` failure non-blocking, secret stripping+cursor loss+owner retention, recovery snapshot+device re-registration |
 | `schema_characterization_test.dart` | 8 | **PASSED** — fresh v22 golden (18 tables), F-2 breadth (fresh/v19/v20/v21), frozen fresh-vs-upgraded diffs |
@@ -553,7 +557,7 @@ evidence.
 
 ### Packages created
 
-```
+```text
 backend/dart/pos_contracts/   — repository interfaces, SyncBackend contract,
                                 SyncOutboxEntry, SyncPullResult, SyncOperations
 backend/dart/pos_local_engine/ — SqfliteLocalDatabase, SqfliteSyncOutboxRepository,
@@ -564,7 +568,7 @@ backend/dart/pos_local_engine/ — SqfliteLocalDatabase, SqfliteSyncOutboxReposi
 ### What moved (old → new, verbatim bodies)
 
 | From | To | Class(es) |
-|------|-----|-----------|
+| ------ | ----- | ----------- |
 | `core/database/local_database.dart` | `pos_local_engine/lib/local_database.dart` | LocalDatabase, SqliteDatabase |
 | `core/repositories/sale_repository.dart` | `pos_local_engine/lib/src/repositories/sales/sqflite_sale_repository.dart` | SqfliteSaleRepository |
 | `core/repositories/picklist_repository.dart` | `pos_local_engine/lib/src/repositories/warehouse/sqflite_picklist_repository.dart` | SqflitePicklistRepository |
@@ -582,7 +586,7 @@ backend/dart/pos_local_engine/ — SqfliteLocalDatabase, SqfliteSyncOutboxReposi
 ### Checks run
 
 | Check | Result |
-|---|---|
+| --- | --- |
 | `dart analyze` (pos_contracts) | PASS — 0 issues |
 | `dart analyze` (pos_local_engine) | PASS — 0 issues |
 | `flutter analyze --fatal-infos` (app) | PASS — 0 issues |
@@ -607,7 +611,7 @@ verbatim.
 
 ### Package created
 
-```
+```text
 backend/dart/pos_cloud_engine/
 ├── pubspec.yaml          # name: pos_cloud_engine, deps: pos_core, pos_contracts, http, uuid
 └── lib/
@@ -630,7 +634,7 @@ backend/dart/pos_cloud_engine/
 ### Files migrated (old path → new path)
 
 | Original | New location | Notes |
-|----------|-------------|-------|
+| ---------- | ------------- | ------- |
 | `frontend/lib/core/cloud/cloud_api_client.dart` | `pos_cloud_engine/lib/src/api/cloud_api_client.dart` | moved verbatim |
 | `frontend/lib/core/cloud/cloud_sale_repository.dart` | `pos_cloud_engine/lib/src/repositories/sales/cloud_sale_repository.dart` | moved verbatim |
 | `frontend/lib/core/cloud/cloud_shift_repository.dart` | `pos_cloud_engine/lib/src/repositories/register/cloud_shift_repository.dart` | moved verbatim |
@@ -659,6 +663,7 @@ All import paths in migrated files corrected to reflect new nesting depth
 ### Test updates
 
 Updated 6 test files to import from `pos_cloud_engine` instead of deleted paths:
+
 - `test/core/cloud/cloud_repositories_test.dart`
 - `test/core/sync/backend_selection_test.dart`
 - `test/core/sync/supabase_sync_backend_test.dart`
@@ -667,6 +672,7 @@ Updated 6 test files to import from `pos_cloud_engine` instead of deleted paths:
 - `test/integration/sync_matrix_live_test.dart`
 
 Added architecture tests in `frontend/test/architecture_test.dart`:
+
 - `'no Flutter or native database imports (web-safe)'` — scans `pos_cloud_engine/lib`
   and asserts zero `package:flutter`, `package:sqflite`, `dart:io`, `/features/`, or
   `/presentation/` occurrences.
@@ -684,7 +690,7 @@ verbatim, only imports and one flutter-dep extraction were modified).
 ### Checks run
 
 | Check | Result |
-|---|---|
+| --- | --- |
 | `dart analyze` (pos_cloud_engine) | PASS — 0 issues |
 | `flutter analyze --fatal-infos` (app) | PASS — 0 issues |
 | `dart analyze` (pos_local_engine) | PASS — 0 issues (unchanged) |
@@ -697,7 +703,7 @@ verbatim, only imports and one flutter-dep extraction were modified).
 
 Four-package boundary achieved exactly per directive:
 
-```
+```text
 pos_core          ← pure entities
 pos_contracts     ← interfaces + sync contracts
 pos_local_engine  ← SQLite persistence + pull applier
@@ -727,7 +733,7 @@ barrel exclusively — never touches `pos_local_engine` or sqflite.
 ### What changed
 
 | File | Lines before | Lines after |
-|------|-------------|------------|
+| ------ | ------------- | ------------ |
 | `index.ts` | ~2399 | 434 |
 | `shared/auth.ts` | (extracted) | 641 |
 | `shared/authorization.ts` | (extracted) | ~50 |
@@ -786,7 +792,7 @@ flutter test                               # PASS — 684 passed, 1 skipped
 
 ### Architecture
 
-```
+```text
 index.ts              ← Minimal router (~434 lines)
   ├── shared/         ← Types, helpers, auth primitives, authorization middleware
   │   ├── auth.ts

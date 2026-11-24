@@ -10,7 +10,7 @@ not just existing documentation.
 ### Flutter application (`app/`)
 
 | Area | Contents | Size |
-|---|---|---|
+| --- | --- | --- |
 | Entry points | `lib/main.dart` (native, 1351 lines), `lib/main_web.dart` (PWA, 32 lines) | 2 files |
 | Shells | `lib/app_shell.dart` (web shell: `PosRoot`/`AuthGate`/`MainScaffold`, 983 lines) and a **parallel native shell inside `main.dart`** (`WholesalePosApp`/`LicenseWrapper`/`AuthWrapper`/`MainLayout`, ~1100 lines) | 2 implementations |
 | `lib/core/` | `auth/` (2), `backend/` (3: `AppBackend` seam, `CloudBackend`, `web_local_storage`), `cloud/` (7: `CloudApiClient` + 6 cloud repositories), `database/` (`local_database.dart`, 1066 lines — open/migrate/backup + settings + device registration helpers), `licensing/` (4), `models/` (7 — but the sales-domain models are NOT here), `repositories/` (6 SQLite repos + interfaces), `sync/` (10 files), `theme/` (2), `util/` + `utils/` (split, 12 files) | ~45 files |
@@ -21,8 +21,8 @@ not just existing documentation.
 ### Backend (`supabase/`)
 
 | Function | File | Size | Role |
-|---|---|---|---|
-| `pos-api` | `functions/pos-api/index.ts` (~210-line router) + `modules/*` (7 domains) + `shared/*` (auth, authorization, helpers, env) + `tests/*` | Modular Edge Function — `index.ts` is the production entry point: CORS/JSON guards → JWT verify → `checkAuthorization` (actor load, token_version, OWNER_ONLY, ACTION_FEATURES) → `ACTIONS` dispatch table → domain module handlers. Action contract unchanged. `Deno.serve` is guarded by `import.meta.main` so tests can import `handleRequest` with an injected DB. |
+| --- | --- | --- | --- |
+| `pos-api` | `functions/pos-api/index.ts` (~210-line router) + `modules/*` (7 domains) + `shared/*` (auth, authorization, helpers, env) + `tests/*` | — | Modular Edge Function — `index.ts` is the production entry point: CORS/JSON guards → JWT verify → `checkAuthorization` (actor load, token_version, OWNER_ONLY, ACTION_FEATURES) → `ACTIONS` dispatch table → domain module handlers. Action contract unchanged. `Deno.serve` is guarded by `import.meta.main` so tests can import `handleRequest` with an injected DB. |
 | `sync` | `functions/sync/index.ts` | 576 lines | License-gated push/pull gateway; stages into `sync_mirror`, `pos_sync_apply` RPC replays to canonical tables |
 | `licensing` | `functions/licensing/index.ts` | 358 lines | Device activation/seats, vouchers, Ed25519 license issuance helpers |
 
@@ -222,7 +222,7 @@ repositories and the pull applier.
 ## 5. Baseline results (Part 1, before any refactoring)
 
 | Check | Command | Result |
-|---|---|---|
+| --- | --- | --- |
 | Analyze | `flutter analyze --fatal-infos` | **PASS** — no issues (62.7s) |
 | Tests | `flutter test` | **PASS** — 637 passed, 1 skipped, 0 failed (~4:53) |
 | Web release | `flutter build web --release -t lib/main_web.dart` | **PASS** (211.6s) |

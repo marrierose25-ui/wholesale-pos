@@ -90,6 +90,7 @@ The steps below were executed once and are complete; they are kept as a referenc
 
 1. Get paid (bank transfer, cash, Chapa — anything out of band).
 2. Run the tool:
+
    ```powershell
    $env:SUPABASE_URL    = "https://<your-ref>.supabase.co"
    $env:SUPABASE_SECRET = "sb_secret_..."   # service_role key
@@ -99,6 +100,7 @@ The steps below were executed once and are complete; they are kept as a referenc
      --seats 3 `
      --expires never
    ```
+
    The tool prints one `ACTIVATION_CODE=XXXX-XXXX-XXXX-XXXX-XX` line. Send that to the buyer.
 3. The buyer opens the app on their first device, pastes the code into the activation screen, the app auto-generates their device fingerprint, calls the licensing function, and gets back a signed per-device license which is stored locally. They can now sell offline indefinitely.
 4. Buyer installs on a second device → pastes the same code → gets another seat. Third device → same. Fourth device (if seat_limit=3) → the app shows "Seat limit reached" and points at Settings → Devices.
@@ -112,6 +114,7 @@ The steps below were executed once and are complete; they are kept as a referenc
 ### Handling a lost or replaced device
 
 The buyer does this themselves in **Settings → My devices** (visible to the OWNER account only — cashiers cannot touch seats) — no email to you:
+
 - The screen lists every active seat with a masked fingerprint and the device name; the caller's own row is marked "This device".
 - Tap **Deactivate** on the lost phone (a confirmation dialog explains the seat becomes free immediately) → seat is freed.
 - On the replacement phone, open the app → paste the same activation code on the activation screen → it takes the freed seat.

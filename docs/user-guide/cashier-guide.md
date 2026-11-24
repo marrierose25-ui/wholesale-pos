@@ -38,7 +38,7 @@ You **cannot** void a sale yourself. Instead:
 ## Keyboard Shortcuts
 
 | Shortcut | Action |
-|----------|--------|
+| ---------- | -------- |
 | `F2` | New sale |
 | `Esc` | Clear search / go back |
 | `F9` | Quick-search product (type then press F9) |

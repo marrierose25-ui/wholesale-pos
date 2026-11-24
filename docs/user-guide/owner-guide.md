@@ -6,7 +6,7 @@ The dashboard shows today's KPIs: total sales, gross margin, number of transacti
 
 ## Managing Users
 
-**Settings → Users**
+### Settings → Users
 
 Actions available to Owners only:
 
@@ -19,7 +19,7 @@ Actions available to Owners only:
 ### Permission Matrix
 
 | Role | POS | Register | Finance | Warehouse | Reports | Users |
-|------|-----|----------|---------|-----------|---------|-------|
+| ------ | ----- | ---------- | --------- | ----------- | --------- | ------- |
 | Owner | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Manager | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | Cashier | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
@@ -38,7 +38,7 @@ Use the date-range picker at the top-right. Export to CSV for external analysis.
 
 ## Configuring Sync
 
-**Settings → Sync**
+### Settings → Sync
 
 - **Push interval** — defaults to 3 seconds when online; adaptive backoff up to 60 s during instability.
 - **Pull interval** — same adaptive logic applies.
@@ -47,7 +47,7 @@ Use the date-range picker at the top-right. Export to CSV for external analysis.
 
 ## Licensing & Device Management
 
-**Settings → Devices**
+### Settings → Devices
 
 Each activated device appears here with its fingerprint (platform + hardware ID). To transfer a license to a new machine:
 
@@ -58,7 +58,7 @@ Expired licenses show a warning banner. Contact support before expiry to avoid s
 
 ## Data Backup & Restore
 
-**Settings → Data**
+### Settings → Data
 
 - **Export** — creates a JSON snapshot of all business data. Credentials (password hashes) and sync cursors are stripped automatically.
 - **Import** — restores from a previously exported file. A backup is created before the import begins.
@@ -68,7 +68,7 @@ Expired licenses show a warning banner. Contact support before expiry to avoid s
 ## Troubleshooting Quick Reference
 
 | Symptom | Likely Cause | Fix |
-|---------|-------------|-----|
+| --------- | ------------- | ----- |
 | "Invalid activation code" | Code mistyped or already used | Re-check email; codes are single-use |
 | Sync stuck on "connecting…" | Firewall blocking outbound HTTPS | Allow `*.supabase.co` or configure custom gateway URL |
 | Can't add a second cashier | Already at seat limit | Upgrade license tier or deactivate unused seats |

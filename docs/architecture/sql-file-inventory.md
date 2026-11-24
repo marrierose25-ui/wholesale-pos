@@ -5,10 +5,11 @@
 **Date:** 2026-11-21
 
 ---
+
 ## Authoritative Source: `supabase/migrations/`
 
 | Property | Value |
-|---|---|
+| --- | --- |
 | **Location** | `supabase/migrations/` |
 | **File count** | 10 timestamped migration files |
 | **Filenames** | `20261031000000`, `20261031010000`, `20261031020000`, `20261031030000`, `20261031040000`, `20261031050000`, `20261031060000`, `20261031070000`, `20261111000000`, `20261111000001` |
@@ -19,10 +20,11 @@
 **How to use:** When adding a new table, column, or constraint, create a new timestamped migration file in this directory using the Supabase CLI (`supabase migration add <name>`). Do not edit existing files.
 
 ---
+
 ## Manual DDL Snapshot: `docs/postgres_schema.sql`
 
 | Property | Value |
-|---|---|
+| --- | --- |
 | **Location** | `docs/postgres_schema.sql` |
 | **File count** | 1 file |
 | **Authority** | **Reference only** — manually maintained DDL script, **not deployed** to Supabase. Stale compared to `supabase/migrations/`. |
@@ -32,10 +34,11 @@
 **Note:** This file exists in parallel with `supabase/migrations/` because schema changes were historically applied both via the Supabase dashboard/manual SQL and via migration files. This is the root cause of the "two sources of truth" ambiguity.
 
 ---
+
 ## Historical Scripts: `docs/*.sql` (excluding `postgres_schema.sql`)
 
 | Property | Value |
-|---|---|
+| --- | --- |
 | **Location** | `docs/*.sql` (16 files, excluding `postgres_schema.sql`) |
 | **File count** | 16 manually-applied SQL scripts |
 | **Authority** | **Historical reference only** — parallel set to `supabase/migrations/`, not deployed. |
@@ -46,7 +49,7 @@
 **Filenames inventory:**
 
 | Filename | Likely purpose |
-|---|---|
+| --- | --- |
 | `20261031000000_init.sql` | Initial schema setup |
 | `20261031010000_add_users.sql` | Add users table |
 | `20261031020000_add_products.sql` | Add products table |
@@ -66,10 +69,11 @@
 | `20261109000000_add_final_touches.sql` | Final schema refinements |
 
 ---
+
 ## Stray Temp Directory: `supabase/supabase/.temp/`
 
 | Property | Value |
-|---|---|
+| --- | --- |
 | **Location** | `supabase/supabase/.temp/` |
 | **Authority** | **Document only** — stray nested temp directory inside the supabase folder. |
 | **Contents** | Not applicable — directory exists but should not be modified. |
@@ -77,30 +81,35 @@
 | **Modification policy** | **Do not modify.** Document its existence but treat as unrelated to the authoritative schema. |
 
 ---
+
 ## Classification Summary Table
 
 | Category | Path Pattern | File Count | Authority | Action |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | **Authoritative migrations** | `supabase/migrations/*` | 9 | **Supreme** — deployed schema; never modify/delete | Use Supabase CLI for changes |
 | **Manual DDL snapshot** | `docs/postgres_schema.sql` | 1 | **Reference only** — not deployed | Update to reference migrations dir; add note |
 | **Historical scripts** | `docs/*.sql` (16 files) | 16 | **Historical reference** | Do not delete; may update for accuracy |
 | **Stray temp dir** | `supabase/supabase/.temp/` | 1 dir | **Document only** | Do not modify; document existence |
 
 ---
+
 ## Resolution of Two-Sources-of-Truth Ambiguity
 
 **Problem:** The server schema has two documented sources:
+
 1. `supabase/migrations/` — 9 timestamped migration files (authoritative, deployed)
 2. `docs/postgres_schema.sql` — 1 manual DDL script (reference only, not deployed)
 
 **Resolution:** `supabase/migrations/` is the **single source of truth** for the live Supabase schema. All documentation, deployment scripts, and reader queries must reference `supabase/migrations/` as authoritative.
 
 **Required updates to other docs:**
+
 - `docs/DATABASE.md`: Add note directing readers to `supabase/migrations/` as the authoritative source for server schema
 - `docs/architecture/current-state.md`: Reference `supabase/migrations/` for schema version and table inventory
 - Any other doc mentioning `docs/postgres_schema.sql` as the server DDL source must be updated
 
 **What NOT to do:**
+
 - Do not move schema changes from `docs/postgres_schema.sql` to `supabase/migrations/` retroactively — this would alter migration history
 - Do not delete any SQL files in `docs/` or `supabase/migrations/`
 - Do not modify the content of `supabase/migrations/` files

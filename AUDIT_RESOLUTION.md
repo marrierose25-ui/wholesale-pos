@@ -15,7 +15,7 @@
 
 ## Architectural Fix: Offline Sale Timestamp Preservation
 
-**Finding #20 (Previously Documented Incorrectly)**
+### Finding #20 (Previously Documented Incorrectly)
 
 The original audit documentation documented an incorrect fix that attempted to modify the sync gateway's `pos_create_sale` function to preserve offline sale timestamps. This approach violated the architectural separation between:
 
@@ -24,6 +24,7 @@ The original audit documentation documented an incorrect fix that attempted to m
 
 **The Incorrect Approach:**
 Modified `pos_create_sale` to accept `p_created_at` parameter and overwrite cloud storage timestamps with sync timestamps. This:
+
 - Blurred responsibility boundaries
 - Risked sync failures leaving corrupted data
 - Created unpredictable side effects
@@ -51,10 +52,12 @@ The native application layer already had correct timestamp preservation:
 ### ✅ REMOVED INCORRECT CHANGES
 
 **File**: `supabase/functions/pos-api/index.ts`
+
 - **Removed**: `p_created_at: sale.created_at != null ? sale.created_at : null` from `pos_create_sale` call in `insertSale()`
 - **Reason**: Sync gateway should not modify business logic timestamps
 
 **Files Removed from Fix List**:
+
 - `supabase/migrations/20261031000001_sync_user_privilege_check.sql` (Fix #20)
 - `supabase/migrations/20261031000003_pos_create_sale_guards.sql` (Fix #11 and #11b)
 - `supabase/migrations/20261105000001_pos_sync_apply_warehouse.sql` (related sync apply fixes)
@@ -64,6 +67,7 @@ The native application layer already had correct timestamp preservation:
 ## Correct Architecture (What Should Be Documented)
 
 ### Native Application Layer
+
 ```dart
 // Native repository correctly handles offline timestamps
 Future<void> saveSale(Sale sale) async {
@@ -78,6 +82,7 @@ Future<void> saveSale(Sale sale) async {
 ```
 
 ### Sync Gateway Layer
+
 ```typescript
 // Sync gateway is a read-only delta feed
 async function push(db, auth, body) {
@@ -92,7 +97,7 @@ async function push(db, auth, body) {
 ### Findings Actually Fixed
 
 | ID | Finding | File | Verification Method | Status |
-|----|---------|------|---------------------|--------|
+| ---- | --------- | ------ | --------------------- | -------- |
 | 1 | Receipt counter sequence | `app/lib/core/repositories/sale_repository.dart` | Code grep; tests pass | ✅ |
 | 2 | Feature gate comparison | `app/lib/core/repositories/sale_repository.dart` | Code grep; tests pass | ✅ |
 | 3 | Void request outbox handling | `app/lib/core/repositories/sale_repository.dart` | Code grep; tests pass | ✅ |
@@ -116,7 +121,7 @@ async function push(db, auth, body) {
 ## Deferred Findings
 
 | ID | Finding | Reason for Deferral |
-|----|---------|---------------------|
+| ---- | --------- | --------------------- |
 | #4 | Backup password hash exposure | Client-side format change needed |
 | #7 | Timestamp string comparison | Requires version column migration |
 | #8 | `pos_create_sale` validation | Requires caller audit before tightening |
@@ -126,7 +131,7 @@ async function push(db, auth, body) {
 
 ## Verification Commands Run
 
-```
+```bash
 # Core fixes verification
 grep -n "substr(receipt_number, ?, 8)" app/lib/core/repositories/sale_repository.dart
 grep -A3 "final required = <String>{feature, ...aliases}" app/lib/core/repositories/sale_repository.dart
@@ -201,10 +206,12 @@ If cc45662 must be reverted:
 ## Architecture Documentation Updates Needed
 
 ### README.md (Section: "Web / PWA")
+
 - **Current**: Claims sync gateway handles timestamp preservation
 - **Update**: Clarify sync gateway is a read-only delta feed
 
 ### docs/DATABASE.md
+
 - **Update**: Clarify timestamp handling architecture
 
 ## Conclusion

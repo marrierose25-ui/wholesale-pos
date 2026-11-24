@@ -14,7 +14,7 @@
 The application uses a **single shared shell** (`frontend/lib/app_shell.dart` ~1026 lines) with **two entry points**:
 
 | Entry Point | File | Backend | Purpose |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Native | `frontend/lib/main.dart` (~512 lines) | `NativeBackend` | Wraps SQLite repos from `pos_local_engine`; full offline capability |
 | Web/PWA | `frontend/lib/main_web.dart` (~55 lines) | `CloudBackend` | HTTP REST calls to `pos-api` Edge Function; no local database |
 
@@ -23,6 +23,7 @@ The application uses a **single shared shell** (`frontend/lib/app_shell.dart` ~1
 ### AppBackend Seam
 
 The abstract `AppBackend` class in `backend/dart/pos_contracts/lib/src/backend/app_backend.dart` defines the storage contract. Concrete implementations:
+
 - `frontend/lib/core/backend/native_backend.dart` — Native/SQLite
 - `frontend/lib/core/backend/cloud_backend.dart` — Web/HTTP
 - `frontend/lib/core/backend/web_local_storage.dart` — Web browser storage helper
@@ -32,7 +33,7 @@ The abstract `AppBackend` class in `backend/dart/pos_contracts/lib/src/backend/a
 ## Table Ownership Map (SQLite) — As of Schema v22
 
 | Table(s) | Owning Repository | Cross-Module Access | Sync Applicable | Export/Import Status |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `users` | `UserRepository` (`SqfliteUserRepository` in `pos_local_engine`) | `session_store` (settings), `sync_pull_applier` (all three), `sync_outbox` (demo check) | ✅ Yes | ✅ Exported/Imported (except pw_hash/salt stripped) |
 | `products` | `ProductRepository` (`SqfliteProductRepository`) | `sync_pull_applier`, `data_exporter/importer` | ✅ Yes | ✅ Exported/Imported |
 | `sales`, `sale_items`, `counters` | `SaleRepository` (`SqfliteSaleRepository`) | `shift_repository` (summary), `finance_repository` (joins), `sync_pull_applier`, `data_exporter/importer` | ✅ Yes | ✅ Exported/Imported |
@@ -49,6 +50,7 @@ The abstract `AppBackend` class in `backend/dart/pos_contracts/lib/src/backend/a
 **Infrastructure Tables:** settings, sync_outbox
 
 **Source Path:** All repositories are now in:
+
 - `backend/dart/pos_local_engine/lib/src/repositories/` — SQLite implementations
 - `backend/dart/pos_cloud_engine/lib/src/repositories/` — HTTP implementations
 Domain entities (`Sale`, `SaleItem`, `VoidRequest`, `Shift`, `Product`, `User`, `FinanceEntry`, `FinanceCategory`, `Picklist`, `PicklistItem`, `PicklistCustomer`, `Device`) live in `backend/dart/pos_core/lib/src/modules/`.
@@ -72,7 +74,7 @@ behavior change).
 **Status:** ALL FIVE violations below are **HISTORICAL FINDINGS** from pre-migration code. All violating files were deleted during the Stages 1-3 domain extraction. The current architecture has **no active layering violations**.
 
 | Historical File | Import Path | Status | Resolution |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `core/repositories/sale_repository.dart` | → `features/sales/{sale,sale_item,shift,void_request}.dart` | **DELETED** — file moved to `pos_local_engine` | Fixed by extracting domain models to `pos_core` |
 | `core/repositories/shift_repository.dart` | → `features/sales/shift.dart` | **DELETED** | Fixed by extracting `Shift` to `pos_core` |
 | `core/cloud/cloud_sale_repository.dart` | → `features/sales/{sale,sale_item,void_request}.dart` | **DELETED** | Fixed by using `pos_core` domain models |
@@ -90,7 +92,7 @@ behavior change).
 Contrary to earlier documentation, there is **ONE shared shell** with **TWO entry points**:
 
 | Aspect | Native Shell | Web Shell |
-|---|---|---|
+| --- | --- | --- |
 | Entry Point | `lib/main.dart` (~512 lines) | `lib/main_web.dart` (~55 lines) |
 | Shared Code | `lib/app_shell.dart` (~1026 lines) | `lib/app_shell.dart` (same file) |
 | Backend | `NativeBackend` → `pos_local_engine` SQLite | `CloudBackend` → `pos-api` HTTP |
@@ -105,7 +107,7 @@ Contrary to earlier documentation, there is **ONE shared shell** with **TWO entr
 ## Feature-Gate Authorization Matrix (`ACTION_FEATURES`)
 
 | Action(s) | Required Permission | Feature | API Module |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `dashboard_*` | `dashboard` | Dashboard | pos-api |
 | `list_products`, `save_product`, `update_product`, `deactivate_product`, `reactivate_product`, `next_receipt_number`, `insert_sale`, `request_void` | `pos` | Products / Sales | pos-api |
 | `get_shift`, `ensure_shift`, `register_snapshot`, `open_shift`, `close_shift`, `add_cash_movement`, `shift_summary` | `register` | Shift / Register | pos-api |
@@ -125,7 +127,7 @@ Contrary to earlier documentation, there is **ONE shared shell** with **TWO entr
 Actions that reject any non-owner role with HTTP 403:
 
 | Action(s) | Description | Enforced By |
-|---|---|---|
+| --- | --- | --- |
 | `create_user`, `set_user_permissions`, `set_user_phone`, `reset_password`, `set_user_active`, `delete_user` | User management | pos-api middleware |
 | `void_sale`, `approve_void`, `reject_void` | Void sales | pos-api middleware |
 
@@ -134,7 +136,7 @@ Actions that reject any non-owner role with HTTP 403:
 ## Settings Keys Per Feature
 
 | Key | Retained in Export/Import | Feature(s) Using | Write Permission | Read Permission |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `theme_mode` | ✅ | Settings screen | Write: owner | Read: all |
 | `remember_login` | ✅ | Settings screen | Write: owner | Read: all |
 | `demo_password_version` | ✅ | Auth, settings | Write: owner | Read: all |
@@ -167,7 +169,7 @@ Actions that reject any non-owner role with HTTP 403:
 ## Feature Cross-Referencing
 
 | Feature | Owning Module | Depends On | Is Depended On By |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **Sales** | `SaleRepository` | `ShiftRepository`, `FinanceRepository` | Dashboard, Register, Audit |
 | **Register** | `ShiftRepository` | `SaleRepository` | Dashboard, Audit |
 | **Dashboard** | Multiple repos read | `SaleRepository`, `FinanceRepository`, `PicklistRepository`, `ShiftRepository` | Register, Audit |

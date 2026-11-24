@@ -37,7 +37,7 @@ CREATE TABLE settings (
 ## 2. Native SQLite keys
 
 | Key / prefix | Value shape | Written by | Read by | Purpose | In JSON export? | On JSON restore |
-|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- |
 | `theme_mode` | `'dark'` \| `'light'` | Shell via `NativeBackend.setSetting` → `LocalDatabase.setSetting` | `main.dart` startup (`LocalDatabase.getSetting`) | Chosen theme | **Yes** | Replaced by the backup's value |
 | `remember_login` | `'0'` \| `'1'` (absence means on) | Native/web Settings via `LocalDataOps`/`AppBackend` | `app_shell.dart`, Settings screens | Persistent sign-in preference | **Yes** | Replaced by the backup's value |
 | `auth_session` | JSON `{userId, token, issuedAt, expiresAt}` | `SettingsSessionStore.save` | `SettingsSessionStore.load` | Opaque local session (no password/hash) | **No** (stripped) | Deleted with the old table; absent unless the backup carried it. A matching backup is then stripped on export, so normally absent. |
@@ -68,7 +68,7 @@ in `settings`. They are not settings keys.
 ## 3. Device identity is two different things
 
 | Identity | Storage | Survives JSON restore? | Notes |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | This installation's device id | `devices` row whose id is persisted in `device_id.txt` beside `wholesale_pos.db` | **Yes, by re-registration.** The restore replaces `devices`, then `SqliteLocalDataOps.restoreBackup` calls `LocalDatabase.registerCurrentDevice`, which reads `device_id.txt` and re-inserts the row. | Sales have a NOT NULL FK to `devices`; without re-registration every new sale would fail. The backup's own device rows remain, preserving other tills' history. |
 | Platform/hardware fingerprint | `device_hw_uuid` (Windows), `device_install_uuid` (mobile fallback), platform id on Android/iOS | **No** (stripped) | Recomputed on the next fingerprint read. A restore must not copy another machine's fingerprint. |
 | Seat activation code | `activation_code` | **No** | Re-entry/activation required after a restart. |
@@ -85,7 +85,7 @@ The web build never opens SQLite. `CloudBackend` maps settings onto
 `localStorage` with a prefix:
 
 | Browser key | Shape | Writer / reader | Native counterpart |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `pos.setting.<key>` (e.g. `pos.setting.theme_mode`, `pos.setting.remember_login`) | String | `CloudBackend.getSetting/setSetting`; `main_web.dart` reads `pos.setting.theme_mode` on first paint | `settings` table rows |
 | `pos.activation_code` | String | `CloudBackend` constructor / provisioning | `activation_code` |
 | `pos.device_id` | String UUID | `CloudBackend` constructor creates it if absent | `device_id.txt` + `devices` row |

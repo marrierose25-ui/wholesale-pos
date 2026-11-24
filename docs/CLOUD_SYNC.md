@@ -28,7 +28,7 @@ business write now also appends one row to a new local `sync_outbox` table,
 **inside the same database transaction**, recording "this entity changed and
 still needs pushing."
 
-```
+```text
 SaleRepository.saveSale()  ──►  BEGIN TRANSACTION
    insert sales row                │
    insert sale_items rows          │
@@ -39,7 +39,7 @@ SaleRepository.saveSale()  ──►  BEGIN TRANSACTION
 Files added (`frontend/lib/core/sync/`):
 
 | File | Responsibility |
-|------|----------------|
+| ------ | ---------------- |
 | `sync_outbox_entry.dart` | The queued-change model + the `SyncEntities` / `SyncOperations` vocabulary shared with any future backend. |
 | `sync_outbox.dart` | `upsert()` / `delete()` helpers that write an outbox row through a `DatabaseExecutor` so they can run **inside** the caller's transaction. |
 | `sync_outbox_repository.dart` | `pending(limit)`, `pendingCount()`, `markSynced(ids)`, `pruneSynced()` — read/compaction API for the queue. |
@@ -254,7 +254,7 @@ desktop builds — never in a distributable. The Phase-18 replacement reuses the
 trust primitive the licensing system already mints: the **signed v2 license**
 (Ed25519, device-bound, contains `customer_id`).
 
-```
+```text
 client (no keys)                    sync Edge Function (service role)
   outbox batch ───────────────────►  1. verify Ed25519 signature + expiry
   { action:'push',                   2. license row not revoked server-side
@@ -313,7 +313,7 @@ divergence, because nothing crashes — the other device simply keeps a differen
 opinion. The rules below are the ones that had to be made explicit; each is
 enforced in code and covered by a test.
 
-**Server**
+### Server
 
 * **An UPDATE must move the row forward** (`docs/supabase_sync_delta.sql`).
   The pull is a keyset walk over `(received_at, id)`, and `received_at` was a
@@ -348,7 +348,7 @@ enforced in code and covered by a test.
   sales, and a partial unique index allows at most one PENDING request
   per sale.
 
-**Client** (`lib/core/sync/sync_pull_applier.dart`)
+### Client (`lib/core/sync/sync_pull_applier.dart`)
 
 * **A pulled row is never dropped for a missing foreign key.** `sales` requires
   `cashier_id`, `shift_id` and `device_id`, and the till that made a sale may
@@ -386,11 +386,11 @@ Login attempts are rate-limited by an in-memory counter inside the
 `pos-api` Edge Function (see `loginThrottle` in `index.ts`). This is
 best-effort by design:
 
-- **Does not span isolates.** If Supabase scales the function to N
+* **Does not span isolates.** If Supabase scales the function to N
   containers, each container has its own counter. Effective rate limit
   is N × the configured maximum.
-- **Resets on container recycle.** A cold start zeroes the counter.
-- **Not durable.** No database, no Redis — only the process's memory.
+* **Resets on container recycle.** A cold start zeroes the counter.
+* **Not durable.** No database, no Redis — only the process's memory.
 
 The mitigation layered on top is PBKDF2-HMAC-SHA256 at 210,000
 iterations per attempt (~50ms of CPU on modest hardware). A brute-force

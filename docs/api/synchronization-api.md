@@ -22,7 +22,7 @@ CREATE TABLE sync_outbox (
 
 ### Push Endpoint
 
-```
+```text
 POST /functions/v1/sync/push
 Authorization: Bearer <jwt>
 Content-Type: application/json
@@ -36,6 +36,7 @@ Content-Type: application/json
 ```
 
 **Response:**
+
 ```json
 { "ok": true, "accepted": 3, "rejected": 0 }
 ```
@@ -45,7 +46,7 @@ Rejected rows include an `entity_id` + reason. The client should retry after fix
 ### Backoff Algorithm
 
 | Rung | Interval | Condition |
-|------|----------|-----------|
+| ------ | ---------- | ----------- |
 | 0 | 3 s | Fresh connect / boost |
 | 1 | 4 s | 1 consecutive failure |
 | 2 | 6 s | 2 failures |
@@ -58,17 +59,19 @@ Boost triggers: login, explicit refresh button, app comes to foreground.
 
 ### Pull Endpoint
 
-```
+```text
 GET /functions/v1/sync/pull?table=sales&cursor=12345&limit=100
 Authorization: Bearer <jwt>
 ```
 
 **Parameters:**
+
 - `table` — one of the tracked tables (see cursor table below).
 - `cursor` — last seen primary-key value (integer). Pass `0` for a full initial load.
 - `limit` — page size; max 500.
 
 **Response:**
+
 ```json
 {
   "ok": true,
@@ -105,7 +108,7 @@ Within each table, rows are sorted by primary key ascending. The pull-applier ap
 Each table's last-seen cursor is persisted as a `settings` row:
 
 | Key | Stores |
-|-----|--------|
+| ----- | -------- |
 | `sync_cursor.users` | Last user id pulled |
 | `sync_cursor.products` | Last product id pulled |
 | `sync_cursor.sales` | Last sale id pulled |
@@ -127,6 +130,7 @@ These keys are deliberately excluded from data exports (stripped on restore).
 ## Offline Behavior
 
 When offline:
+
 - All business operations succeed against the local SQLite database.
 - `sync_outbox` accumulates unsent mutations.
 - The UI displays a connection-status indicator: `Connected` / `Connecting` / `Offline`.

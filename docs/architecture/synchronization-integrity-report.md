@@ -11,7 +11,7 @@
 The synchronization system implements a **transactional outbox pattern** with adaptive backoff. The outbox sits in `sync_outbox` (SQLite); all writes that need syncing enqueue a row; a background service drains pushes upstream and pulls changes down.
 
 | Aspect | Current State | Verified |
-|--------|--------------|----------|
+| -------- | -------------- | ---------- |
 | Push mechanism | Outbox drain → CloudApiClient POST | ✅ |
 | Pull mechanism | CloudApiClient GET paginated tables | ✅ |
 | Backoff strategy | Adaptive: 3s floor → 60s max across 20 rungs | ✅ |
@@ -29,7 +29,7 @@ The synchronization system implements a **transactional outbox pattern** with ad
 Every business repository creates outbox rows inside its transaction, guaranteeing atomicity with the business data:
 
 | Repository | Enqueue methods | Table affected |
-|------------|----------------|----------------|
+| ------------ | ---------------- | ---------------- |
 | `SqfliteSaleRepository` | `saveSale`, `voidSale`, `requestVoid`, `approveVoidRequest`, `rejectVoidRequest` | `sync_outbox` |
 | `SqfliteShiftRepository` | `openShift`, `addCashMovement`, `closeShift`, `ensureActiveShift` | `sync_outbox` |
 | `SqfliteFinanceRepository` | `createCategory`, `renameCategory`, `deleteCategory`, `restoreCategory`, `permanentlyDeleteCategory`, `addEntry`, `updateEntry`, `markCompleted`, `deleteEntry` | `sync_outbox` |
@@ -76,11 +76,13 @@ CREATE TABLE IF NOT EXISTS sync_outbox (
 
 1. **Page fetch**: For each tracked table, queries Supabase via CloudApiClient with cursor (`sync_cursor.<table>`)
 2. **Apply order**: Tables pulled in dependency order:
-   ```
+
+   ```text
    users → products → shifts → sales → sale_items → cash_movements
          → finance_categories → finance_entries → picklists → picklist_items
          → devices → void_requests → audit_logs
    ```
+
 3. **Transaction wrapping**: Each page applied inside a single `db.transaction()` via `SyncPullApplier.apply(page)`
 4. **Conflict resolution**: Upsert using primary key; latest `updated_at` wins
 5. **Cursor advance**: After successful page commit, cursor updated to last received row id
@@ -92,7 +94,7 @@ CREATE TABLE IF NOT EXISTS sync_outbox (
 Cursors stored as `settings` rows with key format `sync_cursor.<table_name>`:
 
 | Key | Purpose |
-|-----|---------|
+| ----- | --------- |
 | `sync_cursor.users` | Last sync user id |
 | `sync_cursor.products` | Last sync product id |
 | `sync_cursor.sales` | Last sync sale id |
@@ -138,12 +140,14 @@ All operations succeed locally against SQLite. Outbox rows accumulate. UI shows 
 ### 4.1 Multi-Device Shop
 
 A shop can activate multiple devices. Each device:
+
 1. Activates with the same activation code
 2. Receives identical JWT signed with shop-specific claims
 3. Operates independently (separate SQLite, separate outbox)
 4. Shares cloud state through `pos-api`
 
 **Example scenario:**
+
 - Device A (till 1) processes sale → outbox row → push to cloud → INSERT in postgres `sales`
 - Device B (till 2) pulls → receives sale from Device A → displays in sales list
 - Device B creates sale → Device A pulls → sees new sale
@@ -151,7 +155,7 @@ A shop can activate multiple devices. Each device:
 ### 4.2 Conflict Scenarios
 
 | Scenario | Resolution |
-|----------|------------|
+| ---------- | ------------ |
 | Two devices edit same product | Last-write-wins based on `updated_at` timestamp |
 | Two devices open shifts simultaneously | First writer wins; second gets existing shift via `ensureActiveShift` |
 | Two devices delete same entity | Idempotent DELETE; duplicate deletes are no-ops |
@@ -166,7 +170,7 @@ A shop can activate multiple devices. Each device:
 Two sync backends coexist; selection depends on deployment:
 
 | Backend | Location | Transport | Use Case |
-|---------|----------|-----------|----------|
+| --- | --- | --- | --- |
 | `SupabaseSyncBackend` | `frontend/lib/core/sync/supabase_sync_backend.dart` | Direct Supabase REST | Native deployment with Supabase project |
 | `SyncGatewayBackend` | `frontend/lib/core/sync/sync_gateway_backend.dart` | Custom gateway HTTP proxy | Deployments behind reverse proxy / custom middleware |
 
@@ -179,15 +183,19 @@ Both implement `SyncBackend` abstract interface from `pos_contracts`. Neither im
 ## 6. Known Limitations (Preserved)
 
 ### L-1: Export is Not Point-in-Time (F-7)
+
 `DataExporter.exportToJson` reads tables sequentially without a transaction snapshot. If a sync pull interleaves between reads, the exported JSON may contain partial state. Mitigated by the pre-restore backup, but the artifact itself has no consistency guarantee.
 
 ### L-2: Cursor Write Order
+
 The cursor is written AFTER the page transaction commits, not inside it. A crash between commit and cursor write causes one-page reapplication on restart — harmless because upserts are idempotent. The reverse (cursor before commit) would skip rows and is deliberately avoided.
 
 ### L-3: Outbox Pruning
+
 Pruned rows are those marked `synced_at` older than retention threshold. The prune runs periodically but is NOT transactional with respect to pull; a concurrent pull could theoretically re-fetch already-pruned data (idempotent upsert makes this safe).
 
 ### L-4: Batch Size Limits
+
 Each push batch is capped at 50 rows. Large outbox queues will drain over multiple cycles rather than one massive request.
 
 ---
@@ -195,7 +203,7 @@ Each push batch is capped at 50 rows. Large outbox queues will drain over multip
 ## 7. Testing Coverage
 
 | Test File | Coverage Area |
-|-----------|---------------|
+| ----------- | --------------- |
 | `sync_outbox_test.dart` | Enqueue/dequeue semantics, deduplication |
 | `sync_backoff_test.dart` | Adaptive backoff rung progression |
 | `sync_master_data_test.dart` | Pull ordering of reference tables |
@@ -230,4 +238,4 @@ All verify cleanly. No production code was modified during Stage 10.
 
 ---
 
-**Report End**
+## Report End

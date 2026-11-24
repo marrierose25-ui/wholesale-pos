@@ -26,7 +26,7 @@ dart run tools/create_customer.dart `
 
 It prints:
 
-```
+```text
 CUSTOMER_ID=...
 ACTIVATION_CODE=XXXX-XXXX-XXXX-XXXX-XX
 SEAT_LIMIT=3

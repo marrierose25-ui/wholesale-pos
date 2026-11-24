@@ -5,7 +5,7 @@ All actions POST to `/functions/v1/pos-api` with `{"action":"<name>","payload":{
 ## Auth Module
 
 | Action | Method | Requires Auth | Summary |
-|--------|--------|--------------|---------|
+| -------- | -------- | -------------- | --------- |
 | `login` | POST | ❌ | Issue JWT |
 | `setup_owner` | POST | ❌ | Bootstrap first user |
 | `has_users` | GET | ❌ | Tenant probe |
@@ -14,7 +14,7 @@ All actions POST to `/functions/v1/pos-api` with `{"action":"<name>","payload":{
 ## Catalog Module
 
 | Action | Method | Requires Auth | Summary |
-|--------|--------|--------------|---------|
+| -------- | -------- | -------------- | --------- |
 | `list_products` | GET | ✅ | Paginated catalog |
 | `save_product` | POST | ✅ | Upsert product |
 | `update_product` | PATCH | ✅ | Partial update |
@@ -23,7 +23,7 @@ All actions POST to `/functions/v1/pos-api` with `{"action":"<name>","payload":{
 ## Sales Module
 
 | Action | Method | Requires Auth | Summary |
-|--------|--------|--------------|---------|
+| -------- | -------- | -------------- | --------- |
 | `insert_sale` | POST | ✅ | Record a sale (+ items) |
 | `search_sales` | GET | ✅ | Filtered history query |
 | `next_receipt_number` | GET | ✅ | Atomic counter increment |
@@ -35,7 +35,7 @@ All actions POST to `/functions/v1/pos-api` with `{"action":"<name>","payload":{
 ## Register Module
 
 | Action | Method | Requires Auth | Summary |
-|--------|--------|--------------|---------|
+| -------- | -------- | -------------- | --------- |
 | `openShift` | POST | ✅ | Start a shift |
 | `closeShift` | POST | ✅ | End a shift with cash count |
 | `getActiveShift` | GET | ✅ | Current shift status |
@@ -48,7 +48,7 @@ All actions POST to `/functions/v1/pos-api` with `{"action":"<name>","payload":{
 ## Finance Module
 
 | Action | Method | Requires Auth | Summary |
-|--------|--------|--------------|---------|
+| -------- | -------- | -------------- | --------- |
 | `createCategory` | POST | ✅ | Add income/expense bucket |
 | `renameCategory` | POST | ✅ | Update name |
 | `deleteCategory` | POST | ✅ | Soft-delete (recycle bin) |
@@ -68,7 +68,7 @@ All actions POST to `/functions/v1/pos-api` with `{"action":"<name>","payload":{
 ## Warehouse Module
 
 | Action | Method | Requires Auth | Summary |
-|--------|--------|--------------|---------|
+| -------- | -------- | -------------- | --------- |
 | `createPicklist` | POST | ✅ | New picklist with items |
 | `updatePicklistItems` | POST | ✅ | Bulk update quantities |
 | `updatePicklistItem` | POST | ✅ | Single-line edit |
@@ -83,7 +83,7 @@ All actions POST to `/functions/v1/pos-api` with `{"action":"<name>","payload":{
 ## Reporting Module
 
 | Action | Method | Requires Auth | Summary |
-|--------|--------|--------------|---------|
+| -------- | -------- | -------------- | --------- |
 | `dashboardSummary` | GET | ✅ | KPI tiles |
 | `revenueTrend` | GET | ✅ | Time-series chart data |
 | `reportSummary` | GET | ✅ | Detailed report |
@@ -92,7 +92,7 @@ All actions POST to `/functions/v1/pos-api` with `{"action":"<name>","payload":{
 ## Users Module
 
 | Action | Method | Requires Auth | Summary |
-|--------|--------|--------------|---------|
+| -------- | -------- | -------------- | --------- |
 | `listUsers` | GET | ✅ | Tenant users |
 | `createUser` | POST | OWNER_ONLY | Add staff member |
 | `updateUser` | POST | OWNER_ONLY | Edit role/name |
@@ -106,7 +106,7 @@ All actions POST to `/functions/v1/pos-api` with `{"action":"<name>","payload":{
 ## Action Count Summary
 
 | Module | Unauth | Auth | Owner-only | Total |
-|--------|--------|------|------------|-------|
+| -------- | -------- | ------ | ------------ | ------- |
 | auth | 3 | 1 | 0 | 4 |
 | catalog | 0 | 4 | 0 | 4 |
 | sales | 0 | 4 | 3 | 7 |

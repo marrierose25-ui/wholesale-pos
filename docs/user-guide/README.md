@@ -3,7 +3,7 @@
 Quick-start guides for every role in a wholesale shop.
 
 | Guide | Audience | What you'll learn |
-|-------|----------|-------------------|
+| ------- | ---------- | ------------------- |
 | [Getting Started](getting-started.md) | Everyone | Install, activate your license, set up your first owner account |
 | [Owner Guide](owner-guide.md) | Shop owners | Manage users, view reports, configure sync, handle licensing |
 | [Cashier Guide](cashier-guide.md) | Cashiers / till operators | Process sales, manage shifts, void requests, quick reference |

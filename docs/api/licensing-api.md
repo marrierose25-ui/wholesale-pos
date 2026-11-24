@@ -4,7 +4,7 @@ The POS licensing subsystem binds a software license to a specific device using 
 
 ## Activation Flow
 
-```
+```text
 Device ──(1)──▶ License Server
     │               │
     │◀──(2)── Activation code (email/SMS)
@@ -18,6 +18,7 @@ Store locally → unlock full app
 ### Step 1 — Collect Device Fingerprint
 
 The app computes a fingerprint from:
+
 - Platform identifier (`windows`, `android`, `web`)
 - Hardware ID (CPU serial / MAC address, abstracted via `device_info_plus`)
 - A random installation UUID persisted to secure storage
@@ -53,7 +54,7 @@ interface LicensePayload {
 ## Expiration Handling
 
 | Time remaining | Behavior |
-|---------------|----------|
+| --------------- | ---------- |
 | > 30 days | Normal operation |
 | 7–30 days | Warning banner; no functional restriction |
 | 0–7 days | Warning banner + restricted write operations |

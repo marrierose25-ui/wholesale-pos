@@ -7,7 +7,7 @@ A picklist is a structured request to receive goods from a supplier. It tracks w
 Picklists have four statuses:
 
 | Status | Meaning |
-|--------|---------|
+| -------- | --------- |
 | `PENDING` | Created but no items taken yet |
 | `PARTIAL` | Some items fully received |
 | `COMPLETED` | All line items matched or exceeded requested qty |

@@ -47,7 +47,7 @@ Test script: `backend/supabase/tests/h1_void_invariants/h1_void_invariants_test.
 (run with `psql -f`; output reproduced below, abridged).
 
 | # | Scenario | Result |
-|---|----------|--------|
+| --- | ---------- | -------- |
 | S1 | PENDING request + `pos_void_sale` | `APPROVED`, `decided_by=owner1`, `decided_at` set, sale `VOIDED`; replay refused ("already voided") |
 | S2 | INSERT request on VOIDED sale | `ERROR: Sale sale-s2 is not voidable (status VOIDED)` — 0 rows leaked |
 | S3 | Concurrent insert vs void, **both orderings** (two live psql sessions) | Insert-first: request committed PENDING → void blocked on row lock → proceeded → settle trigger `APPROVED` it (`decided_by=owner1`). Void-first: insert's `FOR UPDATE` blocked → saw `VOIDED` → `ERROR`, 0 rows. Neither ordering can end VOIDED+PENDING. |
@@ -57,7 +57,7 @@ Test script: `backend/supabase/tests/h1_void_invariants/h1_void_invariants_test.
 
 Concurrency evidence (verbatim):
 
-```
+```text
 -- insert-first: A: BEGIN; INSERT req-conc-a; pg_sleep(8); COMMIT
 --               B: pos_void_sale(...)  -- blocked ~8s, then succeeded
 req-conc-a | APPROVED | owner1 | VOIDED | owner1
@@ -106,7 +106,7 @@ leaked rows for req-conc-b: 0
 ## 5. Test results (actual commands run)
 
 | Command | Result |
-|---|---|
+| --- | --- |
 | `deno check index.ts` (pos-api, sync) | clean |
 | `deno fmt --check` (pos-api, sync) | clean (34 + 2 files) |
 | `deno test --allow-env --allow-read --allow-net tests/` (pos-api) | **33 passed, 0 failed** |
