@@ -2,13 +2,15 @@
 //
 // Proves the pos-api list_devices / deactivate_device actions are
 // owner-only, tenant-scoped, fingerprint-masked, and self-deactivation
-// protected — the properties the removed licensing-endpoint path lacked.
+// protected by a SERVER-VERIFIED signed device license — not by any
+// client-supplied fingerprint field.
 
-import "./test_env.ts";
+import { LICENSE_SECRET_KEY } from "./test_env.ts";
 import {
   assert,
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { ed25519 } from "https://esm.sh/@noble/curves@1.4.0/ed25519";
 import { createMockDb, resetMockRateLimits, type Row } from "./mock_db.ts";
 import { handleRequest } from "../index.ts";
 import { signJwt } from "../shared/auth.ts";
@@ -105,6 +107,50 @@ function seedDb() {
   });
 }
 
+// --- Signed device-license proofs -----------------------------------------
+// deactivate_device requires the caller's Ed25519-signed license so the
+// server — not a request field — knows which hardware is calling.
+function b64u(bytes: Uint8Array): string {
+  let s = "";
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function canonicalJson(v: any): string {
+  if (Array.isArray(v)) return "[" + v.map(canonicalJson).join(",") + "]";
+  if (v && typeof v === "object") {
+    return "{" + Object.keys(v).sort()
+      .map((k) => JSON.stringify(k) + ":" + canonicalJson(v[k])).join(",") +
+      "}";
+  }
+  return JSON.stringify(v);
+}
+async function makeLicense(
+  overrides: Record<string, unknown> = {},
+  secretKey: Uint8Array = LICENSE_SECRET_KEY,
+): Promise<string> {
+  const payload = {
+    format: "wholesale-pos-license",
+    version: 2,
+    product: "wholesale_pos",
+    entitlements: ["pos"],
+    activation_code: CODE,
+    customer_id: CUST,
+    device_fingerprint: FP_SELF,
+    issued_at: new Date(Date.now() - 86400000).toISOString().replace(
+      /\.\d{3}Z$/,
+      "Z",
+    ),
+    expires_at: new Date(Date.now() + 86400000 * 300).toISOString().replace(
+      /\.\d{3}Z$/,
+      "Z",
+    ),
+    ...overrides,
+  };
+  const bytes = new TextEncoder().encode(canonicalJson(payload));
+  const sig = ed25519.sign(bytes, secretKey);
+  return `${b64u(bytes)}.${b64u(sig)}`;
+}
+
 async function authed(
   db: any,
   action: string,
@@ -177,6 +223,21 @@ Deno.test("list_devices: owner gets masked fingerprints + registration ids", asy
   assert(other.fingerprint_masked.length < FP_OTHER.length);
 });
 
+Deno.test("list_devices: verified license overrides a forged fingerprint hint", async () => {
+  resetMockRateLimits();
+  const db = seedDb();
+  const res = await authed(db, "list_devices", {
+    device_fingerprint: FP_OTHER, // forged hint
+    license: await makeLicense(), // proves FP_SELF
+  });
+  assertEquals(res.status, 200);
+  const body = await res.json();
+  const self = body.devices.find((d: any) => d.id === "reg-self");
+  const other = body.devices.find((d: any) => d.id === "reg-other");
+  assertEquals(self.is_self, true);
+  assertEquals(other.is_self, false);
+});
+
 Deno.test("list_devices: wrong-tenant owner sees no foreign devices", async () => {
   resetMockRateLimits();
   const db = seedDb();
@@ -195,7 +256,7 @@ Deno.test("deactivate_device: owner deactivates another device, audited", async 
   const db = seedDb();
   const res = await authed(db, "deactivate_device", {
     registration_id: "reg-other",
-    device_fingerprint: FP_SELF,
+    license: await makeLicense(), // device-bound to FP_SELF
   });
   assertEquals(res.status, 200);
   const body = await res.json();
@@ -208,16 +269,95 @@ Deno.test("deactivate_device: owner deactivates another device, audited", async 
   assert(auditRows.some((r) => r.event === "deactivate"));
 });
 
-Deno.test("deactivate_device: self-deactivation refused server-side", async () => {
+Deno.test("deactivate_device: self-deactivation refused via verified proof", async () => {
   resetMockRateLimits();
   const db = seedDb();
+  // License proves the caller IS reg-self's device; deactivating it must 409
+  // even though no fingerprint field is sent at all.
   const res = await authed(db, "deactivate_device", {
     registration_id: "reg-self",
-    device_fingerprint: FP_SELF,
+    license: await makeLicense(),
   });
   assertEquals(res.status, 409);
   const reg = db.table("device_registrations").find((r) => r.id === "reg-self");
   assert(reg && reg.revoked_at == null, "self row must stay active");
+});
+
+Deno.test("deactivate_device: forged body fingerprint cannot spoof self", async () => {
+  resetMockRateLimits();
+  const db = seedDb();
+  // Attacker-controlled field claims to be FP_OTHER while the verified
+  // license proves FP_SELF: the request field is ignored entirely, so
+  // deactivating reg-other still succeeds and reg-self is untouched.
+  const res = await authed(db, "deactivate_device", {
+    registration_id: "reg-other",
+    device_fingerprint: FP_OTHER, // forged hint — must not be trusted
+    license: await makeLicense(),
+  });
+  assertEquals(res.status, 200);
+});
+
+Deno.test("deactivate_device: missing license proof fails closed", async () => {
+  resetMockRateLimits();
+  const db = seedDb();
+  const res = await authed(db, "deactivate_device", {
+    registration_id: "reg-other",
+    device_fingerprint: FP_SELF,
+  });
+  assertEquals(res.status, 403);
+  const reg = db.table("device_registrations").find((r) =>
+    r.id === "reg-other"
+  );
+  assert(reg && reg.revoked_at == null, "unproven request must not revoke");
+});
+
+Deno.test("deactivate_device: forged license signature rejected", async () => {
+  resetMockRateLimits();
+  const db = seedDb();
+  const wrongKey = ed25519.utils.randomPrivateKey();
+  const res = await authed(db, "deactivate_device", {
+    registration_id: "reg-other",
+    license: await makeLicense({}, wrongKey),
+  });
+  assertEquals(res.status, 403);
+});
+
+Deno.test("deactivate_device: license for another tenant rejected", async () => {
+  resetMockRateLimits();
+  const db = seedDb();
+  const res = await authed(db, "deactivate_device", {
+    registration_id: "reg-other",
+    license: await makeLicense({ customer_id: OTHER_CUST }),
+  });
+  assertEquals(res.status, 403);
+});
+
+Deno.test("deactivate_device: unbound web session (no device proof) fails closed", async () => {
+  resetMockRateLimits();
+  const db = seedDb();
+  // A web/PWA owner JWT is a valid session but carries no per-device
+  // license — the endpoint refuses rather than pretend self-protection.
+  const res = await authed(db, "deactivate_device", {
+    registration_id: "reg-other",
+  });
+  assertEquals(res.status, 403);
+});
+
+Deno.test("deactivate_device: license whose device was revoked is not proof", async () => {
+  resetMockRateLimits();
+  const db = seedDb();
+  // Revoke the caller's own registration, then try to manage devices with
+  // its still-unexpired license: the active-seat check must refuse.
+  const self = db.table("device_registrations").find((r) =>
+    r.id === "reg-self"
+  );
+  assert(self);
+  self.revoked_at = new Date().toISOString();
+  const res = await authed(db, "deactivate_device", {
+    registration_id: "reg-other",
+    license: await makeLicense(),
+  });
+  assertEquals(res.status, 403);
 });
 
 Deno.test("deactivate_device: wrong-tenant registration id is 404", async () => {
@@ -225,7 +365,7 @@ Deno.test("deactivate_device: wrong-tenant registration id is 404", async () => 
   const db = seedDb();
   const res = await authed(db, "deactivate_device", {
     registration_id: "reg-foreign",
-    device_fingerprint: FP_SELF,
+    license: await makeLicense(),
   });
   assertEquals(res.status, 404);
   const reg = db.table("device_registrations").find((r) =>

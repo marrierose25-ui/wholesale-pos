@@ -22,10 +22,14 @@ const { handleRequest } = await import("../index.ts");
 const CODE = "MERCA-7Q2F-9K3X-4D8M-BN";
 const FP = "fp-device-1";
 
-function post(body: unknown): Request {
+function post(body: unknown, xff?: string): Request {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (xff !== undefined) headers["x-forwarded-for"] = xff;
   return new Request("http://localhost/licensing", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(body),
   });
 }
@@ -103,14 +107,14 @@ function makeDb(opts: {
   return { db, regs, audit };
 }
 
-async function activate(db: any, code = CODE, fp = FP) {
+async function activate(db: any, code = CODE, fp = FP, xff?: string) {
   const res = await handleRequest(
     post({
       action: "activate_device",
       activation_code: code,
       device_fingerprint: fp,
       device_name: "Test device",
-    }),
+    }, xff),
     db,
   );
   return { res, body: await res.json() };
@@ -211,6 +215,70 @@ Deno.test("durable rate limit: repeated activation attempts get 429", async () =
     }
   }
   assert(saw429, "expected a 429 within 35 attempts");
+});
+
+Deno.test("source limit: many different codes from one source get 429", async () => {
+  resetMockRateLimits();
+  const { db } = makeDb({});
+  // ACTIVATE_SOURCE_LIMIT is 120 per 600s. Rotate through DISTINCT codes so
+  // the per-code bucket never trips — only the source bucket can stop this.
+  let saw429 = false;
+  for (let i = 0; i < 130 && !saw429; i++) {
+    const { res } = await activate(
+      db,
+      `PROBE-${i.toString().padStart(4, "0")}-XXXX-XXXX-XXXX`,
+      `fp-probe-${i}`,
+      "203.0.113.10, 10.0.0.1", // rightmost = platform-appended peer
+    );
+    if (res.status === 429) saw429 = true;
+  }
+  assert(saw429, "expected source-level 429 while rotating codes");
+});
+
+Deno.test("source limit: different sources do not share a bucket", async () => {
+  resetMockRateLimits();
+  const { db } = makeDb({});
+  // Exhaust source A's bucket.
+  let blocked = false;
+  for (let i = 0; i < 130 && !blocked; i++) {
+    const { res } = await activate(
+      db,
+      `PROBE-A${i}-XXXX-XXXX-XXXX-XXXX`,
+      `fp-a-${i}`,
+      "198.51.100.7",
+    );
+    if (res.status === 429) blocked = true;
+  }
+  assert(blocked, "source A should have been throttled");
+  // Source B must still be served — buckets are per-source, not global.
+  // (The mock register_device accepts any code while a license exists, so
+  // a served request returns 200; the assertion is "not 429".)
+  const { res } = await activate(
+    db,
+    "OTHER-CODE-XXXX-XXXX-XXXX-XXXX",
+    "fp-b-1",
+    "192.0.2.55",
+  );
+  assert(res.status !== 429, `source B must not share source A's bucket`);
+});
+
+Deno.test("source limit: client-forged leftmost XFF entries are ignored", async () => {
+  resetMockRateLimits();
+  const { db } = makeDb({});
+  // Two requests claiming different forged leftmost addresses but the same
+  // platform-appended rightmost peer must share ONE source bucket.
+  for (let i = 0; i < 125; i++) {
+    const { res } = await activate(
+      db,
+      `FORGE-${i}-XXXX-XXXX-XXXX-XXXX`,
+      `fp-f-${i}`,
+      `${10 + i}.1.1.1, 203.0.113.99`,
+    );
+    if (i === 124) {
+      // Requests 121+ on the same rightmost source exceed the 120 cap.
+      assertEquals(res.status, 429);
+    }
+  }
 });
 
 Deno.test("rate limit survives a new function instance (fresh db object)", async () => {

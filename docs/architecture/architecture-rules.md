@@ -35,17 +35,17 @@
 
 | Detail | Enforcement |
 | --- | --- |
-| **`supabase/migrations/` is the single authoritative source for the live Supabase schema** | 9 timestamped migration files (newest: `20261111000000`); all schema changes must go through these files |
-| **`docs/postgres_schema.sql` is reference only** | Manually maintained DDL script; not deployed to Supabase; stale compared to `supabase/migrations/` |
-| **`docs/*.sql` (16 files) are historical reference only** | Parallel set to `supabase/migrations/`; not deployed; do not delete per Stage 9 constraint |
-| **Documentation must reference `supabase/migrations/` as authoritative** | All docs referencing server schema must direct readers to `supabase/migrations/` |
+| **`backend/supabase/migrations/` is the single authoritative source for the live Supabase schema** | 6 timestamped migration files (newest: `20261128000001`; production baseline `20261030000000` + H1 void hardening `20261125`–`20261127` + Request 2 licensing/rate-limit `20261128`); all schema changes must go through these files |
+| **`docs/postgres_schema.sql` is reference only** | Manually maintained DDL script; not deployed to Supabase; stale compared to `backend/supabase/migrations/` |
+| **`docs/*.sql` (17 files) are historical reference only** | Parallel set to `backend/supabase/migrations/`; not deployed; do not delete per Stage 9 constraint |
+| **Documentation must reference `backend/supabase/migrations/` as authoritative** | All docs referencing server schema must direct readers to `backend/supabase/migrations/` |
 | **Schema version:** | `schemaVersion = 23` defined in `backend/dart/pos_local_engine/lib/src/database/local_database.dart` — one definition only |
 
 ### Rule L4: One `schemaVersion = 23` definition only
 
 | Detail | Enforcement |
 | --- | --- |
-| **The single source of truth for SQLite schema version is `frontend/lib/core/database/local_database.dart`** | `LocalDatabase.schemaVersion = 23` |
+| **The single source of truth for SQLite schema version is `backend/dart/pos_local_engine/lib/src/database/local_database.dart`** | `LocalDatabase.schemaVersion = 23` (defined once in `pos_local_engine`) |
 | **No other file should define or override `schemaVersion`** | All documentation claims must align with v23 |
 | **DATABASE.md claims must be corrected:** | Title: "schema version 23"; Body: "currently 23" |
 | **Other docs referencing schema versions must be updated** | Any doc claiming v9, v14, or any version ≠ 23 must be corrected |
@@ -196,9 +196,9 @@ Per STRICT SOURCE PROTECTION, the following must remain unchanged:
 
 | Category | Files | Reason |
 | --- | --- | --- |
-| **SQL migrations** | `supabase/migrations/` (9 files) | Never modify, never delete; part of Supabase migration history |
-| **Database schema** | `frontend/lib/core/database/local_database.dart` | Actual schema v22; only documentation may change |
-| **TypeScript handlers** | `supabase/functions/pos-api/` | Modular router + `modules/*`/`shared/*` is the production path (Stage 2); action names, params, response shapes, and error semantics must not change |
+| **SQL migrations** | `backend/supabase/migrations/` (6 files) | Append-only once applied to a shared environment; the Stage 5 chain (baseline + H1 + Request 2) is still unmerged branch work |
+| **Database schema** | `backend/dart/pos_local_engine/lib/src/database/local_database.dart` | Actual schema v22; only documentation may change |
+| **TypeScript handlers** | `backend/supabase/functions/{pos-api,sync,licensing}/` | Modular router + `modules/*`/`shared/*`; the public action contract must not change, but Stage 5 legitimately hardened licensing/device-management internals (owner-gated device actions, durable rate limits, device-license proofs) — earlier "handlers are frozen" wording was a Stage-9-era constraint, now superseded |
 | **API contracts** | pos-api action signatures | Verified unchanged by Stage 8 |
 | **Sync implementation** | sync backends, pull applier | Verified unchanged by Stage 7 |
 | **Licensing implementation** | Ed25519 license validator, device activation | Verified unchanged by Stage 7 |
@@ -209,18 +209,42 @@ Per STRICT SOURCE PROTECTION, the following must remain unchanged:
 
 ---
 
+## Stage 5 security model (current — supersedes earlier seat-cap wording)
+
+- **Unlimited-device licensing:** one activation code = one business with
+  unlimited devices. `register_device` (migration `20261128000000`) performs
+  the whole activation decision atomically under a license-row lock; legacy
+  `seat_limit`/`try_reserve_seat` no longer gate admission.
+- **Owner-authenticated device management:** `list_devices` /
+  `deactivate_device` are OWNER-only `pos-api` actions scoped by the
+  verified JWT's `customer_id`. Self-deactivation is enforced against the
+  device fingerprint inside the caller's Ed25519-signed license proof —
+  never a request field; sessions without a verifiable device proof fail
+  closed.
+- **Durable rate limiting:** `rate_limit_buckets` + `rate_limit_hit` /
+  `rate_limit_reset` RPCs (migration `20261128000001`) replace in-memory
+  limiters. Bucket keys are HMAC-SHA256 digests. Public endpoints are
+  bounded per activation code AND per trusted source address (rightmost
+  `X-Forwarded-For` entry appended by the platform edge) plus a global
+  backstop.
+- **H1 void invariants** (`20261125`–`20261127` migrations) and the Request 2
+  SQL suites under `backend/supabase/tests/` are enforced in the
+  `supabase-replay` CI job on PostgreSQL 17.
+
+---
+
 ## Verification Checklist
 
 Before any code change or stage progression, verify:
 
 - [ ] `flutter analyze --fatal-infos` — PASS (no infos)
-- [ ] `flutter test` — PASS (684 passed, 1 skipped)
+- [ ] `flutter test` — PASS (see verification-history.md for current counts)
 - [ ] `flutter build web --release -t lib/main_web.dart` — PASS
 - [ ] Windows build — PASS
-- [ ] `deno check "supabase/functions/pos-api"` — exit code 0 (all 29 files pass)
+- [ ] `deno check backend/supabase/functions/{licensing,pos-api,sync}/index.ts` — exit code 0
 - [ ] Web graph has zero sqflite/dart:io/path_provider/LocalDatabase imports from `main_web.dart` entry point
 - [ ] `schemaVersion = 23` is the only definition in the codebase
-- [ ] `supabase/migrations/` is the authoritative source for server schema references
+- [ ] `backend/supabase/migrations/` is the authoritative source for server schema references
 - [ ] Transaction inventory count = 38 (verified against risk register)
 - [ ] No new shims added since Stage 6.7
 - [ ] `pos_cloud_engine` has no sqflite/dart:io/path_provider imports

@@ -1,5 +1,22 @@
 # Current-State Architecture Audit
 
+> **Status note (2026-11-24, Stage 5 branch `stage5/licensing-and-server-schema`):**
+> This document is a HISTORICAL audit (baseline `64ff4fe`, pre-migration
+> `app/` layout). The repository has since been reorganized: the app lives in
+> `frontend/`, shared Dart packages in `backend/dart/` (`pos_core`,
+> `pos_contracts`, `pos_local_engine`, `pos_cloud_engine`), and the Supabase
+> backend in `backend/supabase/` (`functions/{licensing,pos-api,sync}` +
+> `migrations/`). Server schema authority is `backend/supabase/migrations/`
+> (6 files: `20261030000000` production baseline, H1 void migrations
+> `20261125`–`20261127`, Request 2 `20261128000000`/`20261128000001`).
+> SQLite `schemaVersion = 23` in `pos_local_engine`. Licensing is now
+> unlimited-device; device management is owner-authenticated on `pos-api`
+> with Ed25519 device-license proofs; rate limiting is durable
+> (`rate_limit_buckets`). Paths, file counts, and test totals below are
+> historical and superseded — see `verification-history.md` for current
+> results.
+
+
 Audit date: 2026-11-18. Baseline commit: `64ff4fe` on `main` (clean tree).
 Method: full source inspection of `app/lib`, `app/test`, `app/tools`,
 `supabase/functions`, `supabase/migrations`, `docs/`, `.github/workflows` —

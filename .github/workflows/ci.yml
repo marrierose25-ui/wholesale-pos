@@ -7,7 +7,7 @@ name: CI
 # gate: analyze, test, then build the artefact we actually ship.
 on:
   push:
-    branches: [main, 'stage0/**']
+    branches: [main, 'stage0/**', 'stage5/**']
   pull_request:
   workflow_dispatch:
 
@@ -214,10 +214,34 @@ jobs:
           PGUSER: postgres
           PGPASSWORD: postgres
         run: bash backend/supabase/scripts/replay_migrations.sh
+      # Every SQL gate runs with ON_ERROR_STOP=1 and explicit assertions —
+      # no || true masking. Any unexpected error or failed assertion exits
+      # non-zero and fails this job.
       - name: H1 void invariants on the replayed schema
         env:
           PGHOST: 127.0.0.1
           PGPORT: "55432"
           PGUSER: postgres
           PGPASSWORD: postgres
-        run: psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/h1_void_invariants/h1_void_invariants_test.sql > /tmp/h1.log 2>&1 || true; grep -c "PASS" /tmp/h1.log || true; tail -5 /tmp/h1.log
+        run: psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/h1_void_invariants/h1_void_invariants_test.sql
+      - name: H1 void concurrency (two sessions, both orderings + race)
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: bash backend/supabase/tests/h1_void_invariants/concurrency.sh
+      - name: Request 2 licensing + rate-limit invariants
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request2_licensing/request2_licensing_test.sql
+      - name: Request 2 licensing concurrency
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: bash backend/supabase/tests/request2_licensing/concurrency.sh

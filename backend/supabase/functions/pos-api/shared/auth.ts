@@ -103,6 +103,14 @@ const PROBE_LIMIT = 60;
 const PROBE_WINDOW_SECONDS = 60;
 const SETUP_LIMIT = 5;
 const SETUP_WINDOW_SECONDS = 300;
+// Source-based bound for the UNAUTHENTICATED actions (login, setup_owner,
+// has_users). The per-code probe limit cannot stop an attacker rotating
+// through many activation codes or usernames from one address; this bucket
+// bounds total public-endpoint traffic per verified source address. A
+// global bucket backstops it when no trustworthy source exists.
+const PUBLIC_SOURCE_LIMIT = 240;
+const PUBLIC_GLOBAL_LIMIT = 5000;
+const PUBLIC_WINDOW_SECONDS = 60;
 
 async function rateLimitKey(scope: string, subject: string): Promise<string> {
   const key = await crypto.subtle.importKey(
@@ -158,6 +166,34 @@ function tooManyAttempts(retryAfter: number): Response {
     error: `Too many attempts. Retry in ${retryAfter}s.`,
     retry_after_seconds: retryAfter,
   }, 429);
+}
+
+// Durable per-source + global throttle applied to every unauthenticated
+// action BEFORE dispatch. Charged on each call; the per-code probe limits
+// inside the handlers still apply on top.
+async function publicSourceAllowed(
+  db: any,
+  source: string | null,
+): Promise<Response | null> {
+  const src = await rateLimitAllow(
+    db,
+    "posapi:pubsrc",
+    source ?? "unknown",
+    PUBLIC_SOURCE_LIMIT,
+    PUBLIC_WINDOW_SECONDS,
+    true,
+  );
+  if (!src.allowed) return tooManyAttempts(src.retryAfter);
+  const glob = await rateLimitAllow(
+    db,
+    "posapi:pubany",
+    "*",
+    PUBLIC_GLOBAL_LIMIT,
+    PUBLIC_WINDOW_SECONDS,
+    true,
+  );
+  if (!glob.allowed) return tooManyAttempts(glob.retryAfter);
+  return null;
 }
 
 // Probe bound applied BEFORE the license lookup on every unauthenticated
@@ -721,6 +757,7 @@ export {
   OWNER,
   OWNER_ONLY,
   PBKDF2_ITERATIONS,
+  publicSourceAllowed,
   randomDemoPassword,
   rateLimitAllow,
   rateLimitClear,

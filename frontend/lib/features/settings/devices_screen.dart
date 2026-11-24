@@ -24,6 +24,11 @@ class DevicesScreen extends StatefulWidget {
   final Future<String?> Function() activationCodeProvider;
   final Future<String> Function() fingerprintProvider;
 
+  /// This device's signed license (`license_code` setting). Sent with
+  /// list/deactivate calls so the server can verify WHICH device is calling
+  /// instead of trusting the client-supplied fingerprint.
+  final Future<String?> Function() licenseProvider;
+
   /// pos-api client. [CloudApiClient.token] starts empty; this screen drives
   /// the owner `login` action itself and keeps the JWT in memory only.
   final CloudApiClient api;
@@ -32,6 +37,7 @@ class DevicesScreen extends StatefulWidget {
     super.key,
     required this.activationCodeProvider,
     required this.fingerprintProvider,
+    required this.licenseProvider,
     required this.api,
   });
 
@@ -45,6 +51,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
   String? _error;
   String? _activationCode;
   String _fingerprint = '';
+  String? _license;
   List<Map<String, dynamic>> _devices = const [];
   int _activeDevices = 0;
 
@@ -82,6 +89,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
     }
     final code = await widget.activationCodeProvider();
     final fp = await widget.fingerprintProvider();
+    final license = await widget.licenseProvider();
     if (!mounted) return;
     if (code == null || code.isEmpty) {
       setState(() {
@@ -98,6 +106,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
     }
     _activationCode = code;
     _fingerprint = fp;
+    _license = license;
     if (!widget.api.isSignedIn) {
       setState(() {
         _loading = false;
@@ -112,6 +121,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
     try {
       final res = await widget.api.call('list_devices', {
         'device_fingerprint': _fingerprint,
+        if (_license != null && _license!.isNotEmpty) 'license': _license,
       });
       if (!mounted) return;
       final raw = res['devices'];
@@ -201,6 +211,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
       await widget.api.call('deactivate_device', {
         'registration_id': registrationId,
         'device_fingerprint': _fingerprint,
+        if (_license != null && _license!.isNotEmpty) 'license': _license,
       });
       _showSnack('Device deactivated.');
       await _refreshDevices();

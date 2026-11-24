@@ -11,8 +11,11 @@
 -- transaction serialized on the license row (SELECT ... FOR UPDATE):
 --   1. lock the license row;
 --   2. refuse unknown / revoked / expired codes;
---   3. refresh an existing active (code, fingerprint) registration;
---   4. reactivate a revoked registration for the same fingerprint;
+--   3. refresh an existing ACTIVE (code, fingerprint) registration — checked
+--      FIRST so a stale revoked row can never collide with it on the
+--      device_reg_active_unique index;
+--   4. otherwise reactivate ONE deterministic revoked registration for the
+--      same fingerprint (latest revocation wins; ties broken by id);
 --   5. insert a brand-new registration — no seat count is consulted;
 --   6. return the tenant + expiry fields the Edge Function needs to mint
 --      the signed license.
@@ -52,30 +55,45 @@ begin
     return jsonb_build_object('status', 'expired');
   end if;
 
-  -- Existing (code, fingerprint) row? Reuse it; never inserts a duplicate.
+  -- Existing ACTIVE (code, fingerprint) row? Reuse it; never inserts a
+  -- duplicate. This is checked BEFORE any revoked row: a fingerprint can
+  -- accumulate several historical revoked registrations, and reactivating
+  -- one of those while an active row already exists would violate
+  -- device_reg_active_unique.
   select * into v_reg from public.device_registrations
     where activation_code = p_activation_code
-      and device_fingerprint = p_device_fingerprint;
+      and device_fingerprint = p_device_fingerprint
+      and revoked_at is null;
   if found then
-    if v_reg.revoked_at is null then
-      update public.device_registrations
-        set last_heartbeat = now(), device_name = p_device_name
-        where id = v_reg.id;
-      select count(*) into v_used from public.device_registrations
-        where activation_code = p_activation_code and revoked_at is null;
-      return jsonb_build_object('status', 'refreshed', 'seats_used', v_used,
-        'seat_limit', v_license.seat_limit, 'customer_id', v_license.customer_id,
-        'expires_at', v_license.expires_at);
-    else
-      update public.device_registrations
-        set revoked_at = null, last_heartbeat = now(), device_name = p_device_name
-        where id = v_reg.id;
-      select count(*) into v_used from public.device_registrations
-        where activation_code = p_activation_code and revoked_at is null;
-      return jsonb_build_object('status', 'reactivated', 'seats_used', v_used,
-        'seat_limit', v_license.seat_limit, 'customer_id', v_license.customer_id,
-        'expires_at', v_license.expires_at);
-    end if;
+    update public.device_registrations
+      set last_heartbeat = now(), device_name = p_device_name
+      where id = v_reg.id;
+    select count(*) into v_used from public.device_registrations
+      where activation_code = p_activation_code and revoked_at is null;
+    return jsonb_build_object('status', 'refreshed', 'seats_used', v_used,
+      'seat_limit', v_license.seat_limit, 'customer_id', v_license.customer_id,
+      'expires_at', v_license.expires_at);
+  end if;
+
+  -- No active row. Reactivate ONE revoked registration for the same
+  -- fingerprint, chosen deterministically (most recently revoked, then id)
+  -- so repeated activations always converge on the same row instead of
+  -- bouncing between historical duplicates.
+  select * into v_reg from public.device_registrations
+    where activation_code = p_activation_code
+      and device_fingerprint = p_device_fingerprint
+      and revoked_at is not null
+    order by revoked_at desc, id
+    limit 1;
+  if found then
+    update public.device_registrations
+      set revoked_at = null, last_heartbeat = now(), device_name = p_device_name
+      where id = v_reg.id;
+    select count(*) into v_used from public.device_registrations
+      where activation_code = p_activation_code and revoked_at is null;
+    return jsonb_build_object('status', 'reactivated', 'seats_used', v_used,
+      'seat_limit', v_license.seat_limit, 'customer_id', v_license.customer_id,
+      'expires_at', v_license.expires_at);
   end if;
 
   -- Brand-new device. Unlimited policy: no seat count is consulted. The

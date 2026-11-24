@@ -296,6 +296,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         builder: (_) => DevicesScreen(
           activationCodeProvider: localData.activationCode,
           fingerprintProvider: localData.deviceFingerprint,
+          // 'license_code' == DeviceActivation.licenseCodeKey; the constant
+          // lives in the native engine package, which the shared/web graph
+          // must not import, so the key is spelled out here.
+          licenseProvider: () => localData.getSetting('license_code'),
           api: CloudApiClient(),
         ),
       ),

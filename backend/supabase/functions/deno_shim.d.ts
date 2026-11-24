@@ -16,7 +16,7 @@ declare namespace Deno {
   };
 }
 
-declare module 'https://esm.sh/@supabase/supabase-js@2.39.0' {
+declare module "https://esm.sh/@supabase/supabase-js@2.39.0" {
   export function createClient(
     url: string,
     key: string,
@@ -24,6 +24,6 @@ declare module 'https://esm.sh/@supabase/supabase-js@2.39.0' {
   ): any;
 }
 
-declare module 'https://esm.sh/@noble/curves@1.4.0/ed25519' {
+declare module "https://esm.sh/@noble/curves@1.4.0/ed25519" {
   export const ed25519: any;
 }

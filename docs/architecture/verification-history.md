@@ -540,3 +540,43 @@ databases that never ran the `<20` branch.
 - `interrupted_migration_test` flake fixed via process-tree kill
   (`taskkill /T`); no tests skipped or weakened.
 - Full report: `docs/architecture/stage4-h1-closure.md`.
+
+## Stage 5 Request 2 — Acceptance Repair & Verification (2026-11-24)
+
+Branch `stage5/licensing-and-server-schema`. All commands run locally on
+Windows; PostgreSQL 17 via Docker (`postgres:17`, port 55432) with a
+`psql` shim into the container.
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Deno format | `deno fmt functions/` (cwd `backend/supabase`) | exit 0 (4 files formatted) |
+| Deno check | `deno check functions/{licensing,pos-api,sync}/index.ts` | exit 0 |
+| Deno tests | `deno test --allow-env --allow-read functions/{licensing,pos-api,sync}/tests/` | **67 passed, 0 failed** |
+| Flutter analyze | `flutter analyze --fatal-infos` (cwd `frontend`) | **exit 0 — no issues** (61.5s) |
+| Flutter test | `flutter test` (cwd `frontend`) | **746 passed, 1 skipped, 0 failed** (~9min; one pre-existing architecture-test defect fixed — see below) |
+| Architecture test | `flutter test test/architecture_test.dart` | 20 passed (re-run after fix) |
+| PG cold replay | `bash backend/supabase/scripts/replay_migrations.sh` | **exit 0 — 6 migrations applied**, all object/grant/RLS assertions pass |
+| H1 invariants | `psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/h1_void_invariants/h1_void_invariants_test.sql` | **ALL H1 INVARIANT CHECKS PASSED** |
+| H1 concurrency | `bash backend/supabase/tests/h1_void_invariants/concurrency.sh` | **ALL PASSED** (both orderings + true race) |
+| Request 2 invariants | `psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request2_licensing/request2_licensing_test.sql` | **ALL REQUEST-2 LICENSE/RATE-LIMIT CHECKS PASSED** |
+| Request 2 concurrency | `bash backend/supabase/tests/request2_licensing/concurrency.sh` | **ALL PASSED** (same/different fingerprint, revocation race, rate-limit atomicity: exactly `limit` allowed of N) |
+| Web release | `flutter build web --release -t lib/main_web.dart` | **PASS** — `√ Built build\web` (380.9s) |
+| Windows release | `flutter build windows --release` | **PASS** — `√ Built wholesale_pos_app.exe` (300.3s) |
+
+Request 2 corrections in this commit: `register_device` now checks the
+ACTIVE (code, fingerprint) row before any revoked row and reactivates the
+deterministically-latest revoked row (fixes the
+`device_reg_active_unique` collision); activation + pos-api public actions
+are additionally throttled per trusted source address (rightmost
+platform-appended `X-Forwarded-For` entry, HMAC'd) plus a global bucket;
+`deactivate_device` requires a verified Ed25519 device-license proof
+(`shared/license_proof.ts`, `POS_API_LICENSE_PUBLIC_KEY`) and fails closed
+for unbound sessions; `replay_migrations.sh` asserts exact function
+signatures; H1/Request-2 SQL suites assert outcomes with `ON_ERROR_STOP=1`
+and include two-session concurrency runners; CI triggers on `stage5/**`
+with unmasked gates.
+
+Note: `test/architecture_test.dart` previously asserted zero
+`pos_cloud_engine` imports from `lib/features/` while its own contract
+states pos_cloud_engine is permitted — corrected to forbid NEW
+`pos_local_engine` imports outside the two tracked legacy files.

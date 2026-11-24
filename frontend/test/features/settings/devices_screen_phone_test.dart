@@ -80,6 +80,7 @@ void main() {
         home: DevicesScreen(
           activationCodeProvider: () async => activationCode,
           fingerprintProvider: () async => fingerprint,
+          licenseProvider: () async => null,
           api: api,
         ),
       ),

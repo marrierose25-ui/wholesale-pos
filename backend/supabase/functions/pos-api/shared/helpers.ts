@@ -27,6 +27,22 @@ export function str(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
 }
 
+// Trusted client address for rate limiting (Request 2 review). Supabase's
+// edge gateway appends the verified peer address as the RIGHTMOST
+// X-Forwarded-For entry; a client can prepend forged entries but cannot
+// append to the right of what the platform adds, so only the last entry is
+// trustworthy. Anything else (missing header, non-IP literal) yields null
+// and the caller falls back to shared buckets — fail-safe, never fail-open.
+const IP_LITERAL = /^[0-9a-fA-F:.%[\]]{3,45}$/;
+export function trustedSourceAddress(req: Request): string | null {
+  const xff = req.headers.get("x-forwarded-for");
+  if (!xff) return null;
+  const parts = xff.split(",").map((s) => s.trim()).filter((s) => s.length);
+  const last = parts[parts.length - 1];
+  if (!last || !IP_LITERAL.test(last)) return null;
+  return last;
+}
+
 export function strip(rows: any[] | null): any[] {
   return (rows ?? []).map((r) => {
     const { customer_id: _c, received_at: _r, ...rest } = r;

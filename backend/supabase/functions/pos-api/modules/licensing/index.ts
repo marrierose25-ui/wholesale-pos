@@ -10,11 +10,15 @@
 //   * Masked fingerprints — the management list never returns a full device
 //     fingerprint, only `fingerprint_masked` plus the registration `id` the
 //     client uses for deactivation.
-//   * Self-deactivation is refused server-side when the caller identifies
-//     its own device fingerprint; hiding the button in the UI is not the
-//     enforcement.
+//   * Self-deactivation is refused server-side when the caller's device
+//     identity — proven by a signed device license, NOT a request field —
+//     matches the target registration; hiding the button in the UI is not
+//     the enforcement. Requests without a verifiable device proof are
+//     rejected outright (fail closed): an unbound session cannot prove
+//     which hardware it runs on, so it must not claim self-protection.
 
 import { audit, json, str } from "../../shared/helpers.ts";
+import { verifyDeviceLicense } from "../../shared/license_proof.ts";
 import type { Ctx } from "../../shared/types.ts";
 
 const MAX_FIELD_LEN = 256;
@@ -35,7 +39,9 @@ async function tenantCodes(db: any, customerId: string) {
 }
 
 // list_devices — every ACTIVE registration across the tenant's codes.
-// Input:  { action, device_fingerprint? }  (fingerprint only marks is_self)
+// Input:  { action, device_fingerprint?, license? }
+//   `license` is the caller's signed device license; when it verifies, its
+//   fingerprint (not the request field) marks is_self.
 // Output: { ok, devices: [{id, device_name, fingerprint_masked,
 //           activation_code_masked, first_seen, last_heartbeat, is_self}],
 //           active_devices }
@@ -47,6 +53,15 @@ export async function listDevices(
   const selfFp = str(body.device_fingerprint);
   if (selfFp.length > MAX_FIELD_LEN) {
     return json({ ok: false, error: "Field too long." }, 400);
+  }
+  // A verified license proof upgrades the self marker from a client-supplied
+  // hint to a server-verified identity. An absent/invalid proof simply falls
+  // back to the hint — is_self is display-only, never an authorization input.
+  let verifiedFp: string | null = null;
+  const license = str(body.license);
+  if (license) {
+    const proof = await verifyDeviceLicense(db, license, ctx.customerId);
+    if (proof.ok) verifiedFp = proof.deviceFingerprint;
   }
   const licenses = await tenantCodes(db, ctx.customerId);
   const codes = licenses.map((l) => l.activation_code);
@@ -67,27 +82,42 @@ export async function listDevices(
     activation_code_masked: maskFingerprint(String(r.activation_code ?? "")),
     first_seen: r.first_seen,
     last_heartbeat: r.last_heartbeat,
-    is_self: selfFp.length > 0 && r.device_fingerprint === selfFp,
+    is_self: (verifiedFp ?? selfFp).length > 0 &&
+      r.device_fingerprint === (verifiedFp ?? selfFp),
   }));
   return json({ ok: true, devices, active_devices: devices.length });
 }
 
 // deactivate_device — revoke one registration by its database id.
-// Input:  { action, registration_id, device_fingerprint? }
-// Output: { ok } | 404 unknown/foreign id | 409 already revoked / self
+// Input:  { action, registration_id, license }
+//   `license` is REQUIRED: the signed device license proving which hardware
+//   is calling. body.device_fingerprint is deliberately NOT consulted — it
+//   is client-supplied and forgeable, so it can never stand in for proof.
+// Output: { ok } | 403 no/invalid device proof | 404 unknown/foreign id |
+//         409 already revoked / self
 export async function deactivateDevice(
   db: any,
   ctx: Ctx,
   body: any,
 ): Promise<Response> {
   const registrationId = str(body.registration_id ?? body.device_id);
-  const selfFp = str(body.device_fingerprint);
   if (!registrationId || registrationId.length > MAX_FIELD_LEN) {
     return json({ ok: false, error: "Missing fields" }, 400);
   }
-  if (selfFp.length > MAX_FIELD_LEN) {
-    return json({ ok: false, error: "Field too long." }, 400);
+
+  // Device binding: the caller must prove which device it is running on via
+  // its signed license. Sessions that cannot produce one (e.g. a web/PWA
+  // sign-in, which has no per-device license) fail closed — the endpoint
+  // never falls back to trusting a request field for self-protection.
+  const proof = await verifyDeviceLicense(
+    db,
+    str(body.license),
+    ctx.customerId,
+  );
+  if (!proof.ok) {
+    return json({ ok: false, error: proof.error }, proof.status);
   }
+  const selfFp = proof.deviceFingerprint;
 
   const { data: reg, error: regErr } = await db.from("device_registrations")
     .select("id, activation_code, device_fingerprint, device_name")
@@ -105,11 +135,10 @@ export async function deactivateDevice(
     return json({ ok: false, error: "Device not found." }, 404);
   }
 
-  // Server-side self-deactivation protection: when the caller names its own
-  // device fingerprint, that registration cannot be revoked through this
-  // endpoint. (Web callers carry no licensing fingerprint; native callers
-  // always send it.)
-  if (selfFp && reg.device_fingerprint === selfFp) {
+  // Server-side self-deactivation protection: the VERIFIED device identity
+  // from the license proof — not any request field — decides whether the
+  // target registration is the device making this call.
+  if (reg.device_fingerprint === selfFp) {
     return json(
       { ok: false, error: "You cannot deactivate the device you are using." },
       409,

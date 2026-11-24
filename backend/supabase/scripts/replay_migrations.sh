@@ -43,8 +43,10 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role NOLOGIN BYPASSRLS; END IF;
 END $$;
-CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA extensions;
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp" SCHEMA extensions;
+-- NOTE: the baseline migration creates the pgcrypto/uuid-ossp extensions
+-- itself (CREATE EXTENSION ... SCHEMA "extensions", no IF NOT EXISTS), so
+-- they must NOT be pre-created here — only the schema and roles are needed.
+CREATE SCHEMA IF NOT EXISTS extensions;
 SQL
 
 # Baseline guard requires an empty app schema — verify before applying.
@@ -77,16 +79,22 @@ BEGIN
     RAISE EXCEPTION 'missing tables: %', missing;
   END IF;
 
+  -- Functions are asserted by EXACT signature: to_regprocedure('name()')
+  -- returns NULL for any function that takes arguments, which produced
+  -- false "missing function" failures. Each entry is the full
+  -- schema.name(argtypes) identity.
   SELECT string_agg(p, ', ') INTO missing
   FROM (VALUES
-    ('register_device'),('rate_limit_hit'),('rate_limit_reset'),
-    ('try_reserve_seat'),('pos_create_sale'),('pos_sync_apply'),
-    ('pos_setup_owner'),('rls_auto_enable')
+    ('public.register_device(text,text,text)'),
+    ('public.rate_limit_hit(text,integer,integer,boolean)'),
+    ('public.rate_limit_reset(text)'),
+    ('public.try_reserve_seat(text,text,text)'),
+    ('public.pos_create_sale(uuid,text,text,text,text,jsonb,text,bigint,bigint,text,text)'),
+    ('public.pos_sync_apply(uuid,integer)'),
+    ('public.pos_setup_owner(uuid,text,text,text,text)'),
+    ('public.rls_auto_enable()')
   ) AS v(p)
-  WHERE to_regprocedure('public.' || p || '()') IS NULL
-     OR NOT EXISTS (
-       SELECT 1 FROM pg_proc pr JOIN pg_namespace n ON n.oid=pr.pronamespace
-       WHERE n.nspname='public' AND pr.proname=p);
+  WHERE to_regprocedure(p) IS NULL;
   IF missing IS NOT NULL THEN
     RAISE EXCEPTION 'missing functions: %', missing;
   END IF;

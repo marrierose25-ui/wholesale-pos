@@ -376,14 +376,19 @@ void main() {
 
     test('features do not import platform-specific engine implementations directly '
         '(pos_cloud_engine is OK; pos_local_engine references are legacy and tracked)', () {
-      // Some feature screens import package:pos_local_engine/pos_local_engine.dart
-      // to get LocalDataOps / SettingsSessionStore — these are pre-existing and
-      // documented as F-5 residue. We allow them but assert there are zero
-      // pos_cloud_engine imports from features (that would be a structural break).
+      // pos_cloud_engine is the sanctioned cloud package (Rule L8) and may
+      // be imported by features. pos_local_engine is the native engine:
+      // references are pre-existing F-5 residue, allowed only for the two
+      // tracked legacy files below — any NEW importer fails this test.
+      const legacyPosLocalEngine = {
+        'lib/features/licensing/activation_screen.dart',
+        'lib/features/startup/unsupported_database_view.dart',
+      };
       final offenders = <String>[];
       for (final f in appLib.where((f) => rel(f).startsWith('lib/features/'))) {
+        if (legacyPosLocalEngine.contains(rel(f))) continue;
         for (final imp in importsOf(f)) {
-          if (imp.startsWith('package:pos_cloud_engine')) {
+          if (imp.startsWith('package:pos_local_engine')) {
             offenders.add('${rel(f)} -> $imp');
           }
         }

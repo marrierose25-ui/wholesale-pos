@@ -81,7 +81,7 @@ void main() {
   /// let the "killed" migration finish anyway — the intermittent failure
   /// this test was seeing. On Windows, taskkill /T takes the whole tree;
   /// elsewhere dart run executes in-process and a plain kill suffices.
-  Future<void> _killTree(Process process) async {
+  Future<void> killTree(Process process) async {
     if (Platform.isWindows) {
       await Process.run('taskkill', [
         '/PID',
@@ -116,14 +116,14 @@ void main() {
     final deadline = DateTime.now().add(const Duration(seconds: 120));
     while (!File(marker).existsSync()) {
       if (DateTime.now().isAfter(deadline)) {
-        await _killTree(process);
+        await killTree(process);
         fail(
           'worker never reached checkpoint "$checkpoint".\n$output',
         );
       }
       await Future<void>.delayed(const Duration(milliseconds: 250));
     }
-    await _killTree(process);
+    await killTree(process);
     await process.exitCode;
   }
 

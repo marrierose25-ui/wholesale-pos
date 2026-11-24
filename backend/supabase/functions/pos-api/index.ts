@@ -44,7 +44,13 @@ import {
   verifyJwt,
 } from "./shared/auth.ts";
 import { checkAuthorization } from "./shared/authorization.ts";
-import { CORS_HEADERS, json, str } from "./shared/helpers.ts";
+import {
+  CORS_HEADERS,
+  json,
+  str,
+  trustedSourceAddress,
+} from "./shared/helpers.ts";
+import { publicSourceAllowed } from "./shared/auth.ts";
 import type { Ctx } from "./shared/types.ts";
 import * as catalog from "./modules/catalog/index.ts";
 import * as finance from "./modules/finance/index.ts";
@@ -179,7 +185,17 @@ export async function handleRequest(
   try {
     // --- Unauthenticated actions ---------------------------------------
     const publicHandler = PUBLIC_ACTIONS[action];
-    if (publicHandler) return await publicHandler(client, body);
+    if (publicHandler) {
+      // Source-based durable throttle BEFORE any license/credential work:
+      // bounds activation-code and username probing from a single address
+      // even when every attempt uses a different candidate code.
+      const blocked = await publicSourceAllowed(
+        client,
+        trustedSourceAddress(req),
+      );
+      if (blocked) return blocked;
+      return await publicHandler(client, body);
+    }
 
     // --- Authenticated actions -----------------------------------------
     const cid = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ??
