@@ -94,6 +94,13 @@ void main() {
         'lib/core/licensing/device_activation.dart',
         'lib/core/licensing/device_fingerprint.dart',
         'lib/core/licensing/license_validator.dart',
+        'lib/core/cloud/cloud_api_client.dart',
+        'lib/core/cloud/cloud_product_repository.dart',
+        'lib/core/cloud/cloud_sale_repository.dart',
+        'lib/core/cloud/cloud_shift_repository.dart',
+        'lib/core/cloud/cloud_finance_repository.dart',
+        'lib/core/cloud/cloud_user_repository.dart',
+        'lib/core/cloud/cloud_picklist_repository.dart',
       ];
       final remaining = removed.where((p) => File(p).existsSync()).toList();
       expect(remaining, isEmpty, reason: remaining.join('\n'));
@@ -207,6 +214,27 @@ void main() {
         }
       }
       expect(offenders, isEmpty, reason: offenders.join('\n'));
+    });
+  });
+
+  group('cloud backend composition', () {
+    test('CloudBackend uses pos_cloud_engine, never frontend-local cloud copies', () {
+      final f = File('lib/core/backend/cloud_backend.dart');
+      expect(f.existsSync(), isTrue);
+      final content = f.readAsStringSync();
+      expect(
+        content.contains("import 'package:pos_cloud_engine/pos_cloud_engine.dart'"),
+        isTrue,
+        reason: 'CloudBackend must import the canonical cloud engine barrel',
+      );
+      final offenders = importsOf(f)
+          .where((i) => i.contains('/cloud/cloud_'))
+          .toList();
+      expect(
+        offenders,
+        isEmpty,
+        reason: 'CloudBackend still imports duplicate cloud files: $offenders',
+      );
     });
   });
 

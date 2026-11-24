@@ -493,3 +493,21 @@ databases that never ran the `<20` branch.
   `integration_test/database_migration_test.dart` + CI jobs
   `android-database`/`ios-database` added. **Not yet executed**: no Android
   emulator or iOS toolchain on the dev machine; first CI run pending.
+
+### Stage 1 addendum — cloud repository consolidation (2026-11-23)
+
+- `pos_cloud_engine` confirmed canonical owner of cloud repositories and
+  `pos-api` transport. The seven `frontend/lib/core/cloud/*.dart` duplicates
+  were verified line-by-line equivalent to the package implementations
+  (identical action strings, payloads, response mapping, error handling);
+  `CloudSaleRepository` differs only by delegating its six reporting methods
+  to `CloudReportingRepository`, whose bodies are byte-identical to the former
+  inline implementations.
+- `CloudBackend` now imports `package:pos_cloud_engine/pos_cloud_engine.dart`
+  only; all frontend-local cloud files deleted. `reporting` remains `null`;
+  session/device/activation wiring unchanged.
+- Architecture test extended: deleted-file list now includes the seven cloud
+  duplicates, and a new `cloud backend composition` test asserts
+  `CloudBackend` imports the package barrel and no `../cloud/` paths.
+- Verification: see Stage 1 report — `flutter analyze`, `flutter test`,
+  `dart analyze` (pos_cloud_engine), and web/windows/android release builds.

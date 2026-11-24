@@ -81,6 +81,7 @@
 | **The `pos_cloud_engine` package (`backend/dart/pos_cloud_engine/`) must have zero imports of `sqflite`, `dart:io`, `path_provider`, or any Flutter-specific SDK packages** | Verified by architecture test; PASS — `pos_cloud_engine` uses only `http`, `uuid`, and package: imports |
 | **Packages it may import from:** | `pos_contracts`, `pos_core` (both zero-dependency pure Dart packages) |
 | **Verified by:** | Architecture test `'web entry graph never reaches the native engine or SQLite'` and import-graph traversal |
+| **Canonical ownership (Stage 1):** | `pos_cloud_engine` is the only home for cloud repositories and `pos-api` transport; `frontend/lib/core/cloud/` duplicates were deleted and `CloudBackend` may only import the `pos_cloud_engine` barrel — enforced by the `cloud backend composition` architecture test |
 
 ---
 ## Synchronization Rules

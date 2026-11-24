@@ -53,6 +53,18 @@ The abstract `AppBackend` class in `backend/dart/pos_contracts/lib/src/backend/a
 - `backend/dart/pos_cloud_engine/lib/src/repositories/` — HTTP implementations
 Domain entities (`Sale`, `SaleItem`, `VoidRequest`, `Shift`, `Product`, `User`, `FinanceEntry`, `FinanceCategory`, `Picklist`, `PicklistItem`, `PicklistCustomer`, `Device`) live in `backend/dart/pos_core/lib/src/modules/`.
 
+**Cloud ownership (Stage 1 consolidation):** `pos_cloud_engine` is the single
+authoritative implementation of cloud repositories and `pos-api` transport
+(`CloudApiClient` + the six domain repositories + `CloudReportingRepository`).
+`frontend/lib/core/cloud/` duplicate implementations were deleted;
+`CloudBackend` (`frontend/lib/core/backend/cloud_backend.dart`) is now only the
+web composition adapter — it builds the package repositories over one shared
+`CloudApiClient`, owns `WebSessionStore`/localStorage/activation/device-id
+wiring, and keeps `reporting => null` (reporting stays reachable through
+`CloudSaleRepository`'s compatibility delegates; a dedicated
+`CloudReportingRepository` injection is a documented future improvement, not a
+behavior change).
+
 ---
 
 ## Layering Violations — Historical (Pre-Stages 1-3)
