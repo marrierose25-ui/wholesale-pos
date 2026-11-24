@@ -103,11 +103,14 @@ const PROBE_LIMIT = 60;
 const PROBE_WINDOW_SECONDS = 60;
 const SETUP_LIMIT = 5;
 const SETUP_WINDOW_SECONDS = 300;
-// Source-based bound for the UNAUTHENTICATED actions (login, setup_owner,
+// Source-hint bound for the UNAUTHENTICATED actions (login, setup_owner,
 // has_users). The per-code probe limit cannot stop an attacker rotating
 // through many activation codes or usernames from one address; this bucket
-// bounds total public-endpoint traffic per verified source address. A
-// global bucket backstops it when no trustworthy source exists.
+// adds a bound keyed on a best-effort XFF hint (see
+// bestEffortSourceAddress — the hosted ingress contract is unverified, so
+// this is NOT a trusted identity and a header-forging client can rotate
+// buckets). The global bucket is the actual backstop and applies whether or
+// not a usable hint exists.
 const PUBLIC_SOURCE_LIMIT = 240;
 const PUBLIC_GLOBAL_LIMIT = 5000;
 const PUBLIC_WINDOW_SECONDS = 60;
@@ -168,9 +171,11 @@ function tooManyAttempts(retryAfter: number): Response {
   }, 429);
 }
 
-// Durable per-source + global throttle applied to every unauthenticated
-// action BEFORE dispatch. Charged on each call; the per-code probe limits
-// inside the handlers still apply on top.
+// Durable per-source-hint + global throttle applied to every
+// unauthenticated action BEFORE dispatch. Charged on each call; the
+// per-code probe limits inside the handlers still apply on top. The source
+// bucket is best-effort (unverified XFF hint) — the global bucket is the
+// guarantee.
 async function publicSourceAllowed(
   db: any,
   source: string | null,

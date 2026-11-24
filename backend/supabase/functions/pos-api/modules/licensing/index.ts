@@ -10,12 +10,14 @@
 //   * Masked fingerprints — the management list never returns a full device
 //     fingerprint, only `fingerprint_masked` plus the registration `id` the
 //     client uses for deactivation.
-//   * Self-deactivation is refused server-side when the caller's device
-//     identity — proven by a signed device license, NOT a request field —
-//     matches the target registration; hiding the button in the UI is not
-//     the enforcement. Requests without a verifiable device proof are
-//     rejected outright (fail closed): an unbound session cannot prove
-//     which hardware it runs on, so it must not claim self-protection.
+//   * Self-deactivation is refused server-side when the device identity
+//     carried inside the caller's Ed25519-signed license proof — a bearer
+//     document, NOT a request field and NOT hardware-bound proof-of-
+//     possession (see shared/license_proof.ts) — matches the target
+//     registration; hiding the button in the UI is not the enforcement.
+//     Requests without a verifiable device proof are rejected outright
+//     (fail closed): an unbound session cannot even assert which device
+//     identity it holds, so it must not claim self-protection.
 
 import { audit, json, str } from "../../shared/helpers.ts";
 import { verifyDeviceLicense } from "../../shared/license_proof.ts";
@@ -41,7 +43,9 @@ async function tenantCodes(db: any, customerId: string) {
 // list_devices — every ACTIVE registration across the tenant's codes.
 // Input:  { action, device_fingerprint?, license? }
 //   `license` is the caller's signed device license; when it verifies, its
-//   fingerprint (not the request field) marks is_self.
+//   fingerprint (not the request field) marks is_self. Bearer semantics:
+//   a copied license marks ITS device as self regardless of which hardware
+//   presents it — is_self is display-only, never an authorization input.
 // Output: { ok, devices: [{id, device_name, fingerprint_masked,
 //           activation_code_masked, first_seen, last_heartbeat, is_self}],
 //           active_devices }
@@ -55,8 +59,11 @@ export async function listDevices(
     return json({ ok: false, error: "Field too long." }, 400);
   }
   // A verified license proof upgrades the self marker from a client-supplied
-  // hint to a server-verified identity. An absent/invalid proof simply falls
-  // back to the hint — is_self is display-only, never an authorization input.
+  // hint to a server-verified identity ASSERTION. Because the license is a
+  // bearer document (no device-held key, no challenge), the assertion is
+  // "the presented license belongs to device X" — not proof that hardware
+  // X is calling. An absent/invalid proof simply falls back to the hint —
+  // is_self is display-only, never an authorization input.
   let verifiedFp: string | null = null;
   const license = str(body.license);
   if (license) {
@@ -90,9 +97,12 @@ export async function listDevices(
 
 // deactivate_device — revoke one registration by its database id.
 // Input:  { action, registration_id, license }
-//   `license` is REQUIRED: the signed device license proving which hardware
-//   is calling. body.device_fingerprint is deliberately NOT consulted — it
-//   is client-supplied and forgeable, so it can never stand in for proof.
+//   `license` is REQUIRED: the signed device license whose embedded
+//   fingerprint decides self-protection. It is a bearer document — whoever
+//   holds a valid license_code asserts that device identity, so the check
+//   below compares the LICENSE's fingerprint, not proven hardware.
+//   body.device_fingerprint is deliberately NOT consulted — it is
+//   client-supplied and forgeable, so it can never stand in for the proof.
 // Output: { ok } | 403 no/invalid device proof | 404 unknown/foreign id |
 //         409 already revoked / self
 export async function deactivateDevice(
@@ -105,10 +115,14 @@ export async function deactivateDevice(
     return json({ ok: false, error: "Missing fields" }, 400);
   }
 
-  // Device binding: the caller must prove which device it is running on via
-  // its signed license. Sessions that cannot produce one (e.g. a web/PWA
-  // sign-in, which has no per-device license) fail closed — the endpoint
-  // never falls back to trusting a request field for self-protection.
+  // Device binding: the caller must present its signed license so the
+  // server knows which device identity is asserted. Sessions that cannot
+  // produce one (e.g. a web/PWA sign-in, which has no per-device license)
+  // fail closed — the endpoint never falls back to trusting a request
+  // field for self-protection. Bearer caveat: a copied license from
+  // another active device verifies too (see shared/license_proof.ts), so
+  // this binds the license STRING to a fingerprint, not the caller to
+  // hardware.
   const proof = await verifyDeviceLicense(
     db,
     str(body.license),
@@ -135,9 +149,12 @@ export async function deactivateDevice(
     return json({ ok: false, error: "Device not found." }, 404);
   }
 
-  // Server-side self-deactivation protection: the VERIFIED device identity
-  // from the license proof — not any request field — decides whether the
-  // target registration is the device making this call.
+  // Server-side self-deactivation protection: the device fingerprint inside
+  // the VERIFIED license proof — not any request field — decides whether
+  // the target registration is the device identity this request claims.
+  // Bearer semantics apply: presenting another active device's license
+  // asserts THAT device, so self-protection follows the license, not the
+  // physical hardware (documented limitation — Request 3 threat model).
   if (reg.device_fingerprint === selfFp) {
     return json(
       { ok: false, error: "You cannot deactivate the device you are using." },

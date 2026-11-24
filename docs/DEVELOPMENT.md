@@ -121,10 +121,12 @@ deno check backend/supabase/functions/sync/index.ts
 deno check backend/supabase/functions/licensing/index.ts
 
 # 7. Edge function format check
-deno fmt --check backend/supabase/functions/pos-api
+deno fmt --check backend/supabase/functions
 
-# 8. pos-api behaviour tests (in-memory mock DB, no credentials needed)
+# 8. Edge function behaviour tests (in-memory mock DB, no credentials needed)
+deno test --allow-env --allow-read backend/supabase/functions/licensing/tests/
 deno test --allow-env --allow-read backend/supabase/functions/pos-api/tests/
+deno test --allow-env --allow-read backend/supabase/functions/sync/tests/
 ```
 
 All checks must pass before considering a task complete. Any failure blocks progression.

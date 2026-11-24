@@ -217,25 +217,32 @@ Deno.test("durable rate limit: repeated activation attempts get 429", async () =
   assert(saw429, "expected a 429 within 35 attempts");
 });
 
-Deno.test("source limit: many different codes from one source get 429", async () => {
+// NOTE on the XFF tests below: they exercise PARSING behaviour — which
+// header entry becomes the bucket key — under the *assumed* shape of a
+// proxy-appended chain (platform entry rightmost). Whether Supabase's
+// hosted ingress actually produces that shape is NOT verified; the source
+// bucket is best-effort only. The tests that carry the security guarantee
+// are the per-code and global bucket tests.
+Deno.test("source hint: many different codes from one parsed source get 429", async () => {
   resetMockRateLimits();
   const { db } = makeDb({});
   // ACTIVATE_SOURCE_LIMIT is 120 per 600s. Rotate through DISTINCT codes so
-  // the per-code bucket never trips — only the source bucket can stop this.
+  // the per-code bucket never trips — only the source-hint bucket can stop
+  // this, assuming the rightmost entry is the bucket key.
   let saw429 = false;
   for (let i = 0; i < 130 && !saw429; i++) {
     const { res } = await activate(
       db,
       `PROBE-${i.toString().padStart(4, "0")}-XXXX-XXXX-XXXX`,
       `fp-probe-${i}`,
-      "203.0.113.10, 10.0.0.1", // rightmost = platform-appended peer
+      "203.0.113.10, 10.0.0.1", // rightmost parsed as the source hint
     );
     if (res.status === 429) saw429 = true;
   }
   assert(saw429, "expected source-level 429 while rotating codes");
 });
 
-Deno.test("source limit: different sources do not share a bucket", async () => {
+Deno.test("source hint: different parsed sources do not share a bucket", async () => {
   resetMockRateLimits();
   const { db } = makeDb({});
   // Exhaust source A's bucket.
@@ -250,9 +257,9 @@ Deno.test("source limit: different sources do not share a bucket", async () => {
     if (res.status === 429) blocked = true;
   }
   assert(blocked, "source A should have been throttled");
-  // Source B must still be served — buckets are per-source, not global.
-  // (The mock register_device accepts any code while a license exists, so
-  // a served request returns 200; the assertion is "not 429".)
+  // Source B must still be served — buckets are per-source-hint, not
+  // global. (The mock register_device accepts any code while a license
+  // exists, so a served request returns 200; the assertion is "not 429".)
   const { res } = await activate(
     db,
     "OTHER-CODE-XXXX-XXXX-XXXX-XXXX",
@@ -262,11 +269,13 @@ Deno.test("source limit: different sources do not share a bucket", async () => {
   assert(res.status !== 429, `source B must not share source A's bucket`);
 });
 
-Deno.test("source limit: client-forged leftmost XFF entries are ignored", async () => {
+Deno.test("source hint: parsing uses the rightmost entry of the header", async () => {
   resetMockRateLimits();
   const { db } = makeDb({});
   // Two requests claiming different forged leftmost addresses but the same
-  // platform-appended rightmost peer must share ONE source bucket.
+  // rightmost entry share ONE source-hint bucket — this pins the PARSING
+  // rule only. It does NOT prove the rightmost entry is platform-verified;
+  // see the best-effort test below.
   for (let i = 0; i < 125; i++) {
     const { res } = await activate(
       db,
@@ -279,6 +288,50 @@ Deno.test("source limit: client-forged leftmost XFF entries are ignored", async 
       assertEquals(res.status, 429);
     }
   }
+});
+
+Deno.test("source hint is best-effort: rotating the rightmost entry evades it", async () => {
+  resetMockRateLimits();
+  const { db } = makeDb({});
+  // The hosted-ingress contract for X-Forwarded-For is UNVERIFIED, so a
+  // client that controls the whole header can put a different address in
+  // the rightmost position on every request and mint a fresh source bucket
+  // each time. This test pins that reality: 130 requests with distinct
+  // rightmost entries and distinct codes are ALL served — the source hint
+  // provides no security boundary. The guarantees that still hold are the
+  // per-code limit (30/code) and the global limit (2000/window), exercised
+  // by the other tests in this file.
+  for (let i = 0; i < 130; i++) {
+    const { res, body } = await activate(
+      db,
+      `ROTATE-${i.toString().padStart(4, "0")}-XXXX-XXXX-XXXX`,
+      `fp-rot-${i}`,
+      `198.51.${Math.floor(i / 256)}.${i % 256}`,
+    );
+    assertEquals(res.status, 200, `request ${i} must be served`);
+    assertEquals(body.ok, true);
+  }
+});
+
+Deno.test("missing XFF shares the 'unknown' bucket and is still bounded", async () => {
+  resetMockRateLimits();
+  const { db } = makeDb({});
+  // With no usable header every request lands in the shared "unknown"
+  // source bucket — still capped at ACTIVATE_SOURCE_LIMIT, so the endpoint
+  // cannot be probed for free just by omitting the header.
+  let saw429 = false;
+  for (let i = 0; i < 130 && !saw429; i++) {
+    const { res } = await activate(
+      db,
+      `NOHDR-${i.toString().padStart(4, "0")}-XXXX-XXXX-XXXX`,
+      `fp-nh-${i}`,
+      // no xff argument at all
+    );
+    if (res.status === 429) saw429 = true;
+  }
+  assert(saw429, "expected the shared 'unknown' bucket to throttle");
+  // Leave no exhausted shared bucket behind for later tests in this process.
+  resetMockRateLimits();
 });
 
 Deno.test("rate limit survives a new function instance (fresh db object)", async () => {

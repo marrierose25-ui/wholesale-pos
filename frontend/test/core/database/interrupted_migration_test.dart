@@ -127,13 +127,48 @@ void main() {
     await process.exitCode;
   }
 
+  /// After an OS-level kill, Windows can lag a moment releasing the SQLite
+  /// file handle and locks — `taskkill /T /F` returns once termination is
+  /// issued, but the kernel finishes reaping the process tree (and dropping
+  /// its handles) asynchronously. Opening the file in that window fails with
+  /// SQLITE_BUSY ("database is locked") even though the kill succeeded and
+  /// the rollback is correct. Poll the read-only open until the lock clears
+  /// instead of racing it: every assertion below is unchanged, and a lock
+  /// that NEVER clears (a genuinely leaked handle) still fails the test.
+  Future<Database> openWhenUnlocked(String path) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 60));
+    while (true) {
+      Database? db;
+      try {
+        db = await databaseFactoryFfi.openDatabase(
+          path,
+          options: OpenDatabaseOptions(readOnly: true),
+        );
+        // `openDatabase` can succeed while the first statement still hits a
+        // lingering lock, so force a real read before declaring success.
+        await db.rawQuery('PRAGMA user_version');
+        return db;
+      } catch (e) {
+        try {
+          await db?.close();
+        } catch (_) {
+          // A handle that failed mid-open may not close cleanly; the next
+          // attempt opens a fresh one regardless.
+        }
+        final message = e.toString();
+        final isLock = message.contains('database is locked') ||
+            message.contains('database is busy') ||
+            message.contains('database table is locked');
+        if (!isLock || DateTime.now().isAfter(deadline)) rethrow;
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
+    }
+  }
+
   /// Asserts the on-disk file is still exactly the pre-migration v12
   /// database: version, schema snapshot and rows all intact.
   Future<void> expectStillV12(String path, List<int> fixtureBytes) async {
-    final db = await databaseFactoryFfi.openDatabase(
-      path,
-      options: OpenDatabaseOptions(readOnly: true),
-    );
+    final db = await openWhenUnlocked(path);
     try {
       expect(
         (await db.rawQuery('PRAGMA user_version')).first.values.first,

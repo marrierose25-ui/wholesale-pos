@@ -220,13 +220,17 @@ Per STRICT SOURCE PROTECTION, the following must remain unchanged:
   verified JWT's `customer_id`. Self-deactivation is enforced against the
   device fingerprint inside the caller's Ed25519-signed license proof —
   never a request field; sessions without a verifiable device proof fail
-  closed.
+  closed. The license is a **bearer document** (no device-held key or
+  challenge-response): it asserts a device identity, it does not prove
+  hardware possession — recorded as a limitation for the Request 3
+  threat-model review (see `docs/LICENSING.md` "Limitations").
 - **Durable rate limiting:** `rate_limit_buckets` + `rate_limit_hit` /
   `rate_limit_reset` RPCs (migration `20261128000001`) replace in-memory
   limiters. Bucket keys are HMAC-SHA256 digests. Public endpoints are
-  bounded per activation code AND per trusted source address (rightmost
-  `X-Forwarded-For` entry appended by the platform edge) plus a global
-  backstop.
+  bounded per activation code AND per best-effort source hint (rightmost
+  `X-Forwarded-For` entry — the hosted ingress contract is UNVERIFIED, so
+  this bucket is not a trusted identity and a header-controlling client
+  can rotate it) plus a global backstop, which is the actual guarantee.
 - **H1 void invariants** (`20261125`–`20261127` migrations) and the Request 2
   SQL suites under `backend/supabase/tests/` are enforced in the
   `supabase-replay` CI job on PostgreSQL 17.

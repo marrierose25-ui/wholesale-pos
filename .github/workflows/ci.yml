@@ -47,6 +47,37 @@ jobs:
       - name: Build web (PWA entry point)
         run: flutter build web --release -t lib/main_web.dart
 
+  # Edge Function gate: the Deno suites (licensing activation + rate limits,
+  # pos-api router/auth/device authorization, sync push security) previously
+  # only ran locally, so a regression could reach the branch green. Format,
+  # typecheck, and every test file must pass — same commands as
+  # docs/DEVELOPMENT.md, no credentials needed (tests use in-memory mocks).
+  deno:
+    name: Edge Functions (Deno)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Format check
+        run: deno fmt --check backend/supabase/functions
+
+      - name: Type check entry points
+        run: |
+          deno check backend/supabase/functions/licensing/index.ts
+          deno check backend/supabase/functions/pos-api/index.ts
+          deno check backend/supabase/functions/sync/index.ts
+
+      - name: Deno tests (licensing + pos-api + sync)
+        run: >-
+          deno test --allow-env --allow-read
+          backend/supabase/functions/licensing/tests/
+          backend/supabase/functions/pos-api/tests/
+          backend/supabase/functions/sync/tests/
+
   # Stage 0: native SQLite verification. FFI tests cannot prove the sqflite
   # plugin path on Android/iOS; these jobs run the same migration/downgrade
   # suite on real emulator/simulator SQLite. Synthetic fixture only.

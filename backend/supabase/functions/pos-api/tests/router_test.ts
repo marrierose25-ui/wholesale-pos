@@ -6,7 +6,12 @@
 
 import "./test_env.ts";
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { createMockDb, type MockDb, type Row } from "./mock_db.ts";
+import {
+  createMockDb,
+  type MockDb,
+  resetMockRateLimits,
+  type Row,
+} from "./mock_db.ts";
 import { signJwt } from "../shared/auth.ts";
 
 const { handleRequest, ACTIONS } = await import("../index.ts");
@@ -59,12 +64,17 @@ async function call(
   db: MockDb,
   action: string,
   body: Record<string, unknown> = {},
-  opts: { token?: string | null; raw?: string } = {},
+  opts: {
+    token?: string | null;
+    raw?: string;
+    headers?: Record<string, string>;
+  } = {},
 ): Promise<
   { status: number; json: Record<string, unknown>; headers: Headers }
 > {
   const headers: Record<string, string> = {
     "content-type": "application/json",
+    ...opts.headers,
   };
   if (opts.token) headers["authorization"] = `Bearer ${opts.token}`;
   const payload = opts.raw ?? JSON.stringify({ action, ...body });
@@ -153,6 +163,48 @@ Deno.test("has_users reports tenant user presence", async () => {
   });
   const r2 = await call(empty, "has_users", { activation_code: "ACT-CODE" });
   assertEquals(r2.json.has_users, false);
+});
+
+// The public source bucket is keyed on a best-effort XFF hint — the hosted
+// ingress contract is unverified, so these tests pin PARSING behaviour and
+// the fail-safe fallback, not a trusted client identity. The security
+// guarantee is the durable global + per-code limits.
+Deno.test("public source hint: rotating rightmost XFF evades the bucket", async () => {
+  resetMockRateLimits();
+  const db = createMockDb(baseSeed());
+  // PUBLIC_SOURCE_LIMIT is 240/min. A client controlling the whole header
+  // mints a fresh bucket per request: 245 requests with distinct rightmost
+  // entries and distinct codes are ALL served (403 = past the throttles,
+  // rejected only by the unknown-code check). If the source bucket were a
+  // real boundary this would 429 — it is not, by design.
+  for (let i = 0; i < 245; i++) {
+    const r = await call(db, "has_users", {
+      activation_code: `PROBE-${i}-XXXX-XXXX-XXXX`,
+    }, {
+      headers: {
+        "x-forwarded-for": `198.51.${Math.floor(i / 256)}.${i % 256}`,
+      },
+    });
+    assertEquals(r.status, 403, `request ${i} must pass the throttles`);
+  }
+});
+
+Deno.test("public source hint: missing XFF shares 'unknown' and is bounded", async () => {
+  resetMockRateLimits();
+  const db = createMockDb(baseSeed());
+  // No header -> every request shares the "unknown" source bucket, still
+  // capped at PUBLIC_SOURCE_LIMIT (240). Request 241+ must 429 even though
+  // each uses a distinct activation code.
+  let saw429 = false;
+  for (let i = 0; i < 245 && !saw429; i++) {
+    const r = await call(db, "has_users", {
+      activation_code: `NOHDR-${i}-XXXX-XXXX-XXXX`,
+    });
+    if (r.status === 429) saw429 = true;
+  }
+  assert(saw429, "expected the shared 'unknown' bucket to throttle");
+  // Leave no exhausted shared bucket behind for later tests in this process.
+  resetMockRateLimits();
 });
 
 // ---------------------------------------------------------------------------

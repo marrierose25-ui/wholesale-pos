@@ -3,7 +3,10 @@
 // Proves the pos-api list_devices / deactivate_device actions are
 // owner-only, tenant-scoped, fingerprint-masked, and self-deactivation
 // protected by a SERVER-VERIFIED signed device license — not by any
-// client-supplied fingerprint field.
+// client-supplied fingerprint field. The license is a bearer document
+// (no device-held key / challenge-response): a copied license_code from
+// another active device verifies identically — see the dedicated test
+// below and docs/LICENSING.md "Limitations".
 
 import { LICENSE_SECRET_KEY } from "./test_env.ts";
 import {
@@ -358,6 +361,28 @@ Deno.test("deactivate_device: license whose device was revoked is not proof", as
     license: await makeLicense(),
   });
   assertEquals(res.status, 403);
+});
+
+Deno.test("deactivate_device: copied license is bearer proof, not hardware-bound", async () => {
+  resetMockRateLimits();
+  const db = seedDb();
+  // The signed license is a bearer DOCUMENT: there is no device-held
+  // private key and no challenge-response, so a license_code copied from
+  // another still-active device (FP_OTHER's, minted below exactly as
+  // activation would have issued it) verifies identically. Self-protection
+  // therefore follows the LICENSE's fingerprint, not proven hardware:
+  // presenting FP_OTHER's license while targeting reg-self (FP_SELF)
+  // deactivates the caller's own device — the check sees "device FP_OTHER
+  // is acting", which is not the target. This pins the documented
+  // limitation for the Request 3 threat-model review; it is NOT a claim
+  // that hardware-bound proof-of-possession exists.
+  const res = await authed(db, "deactivate_device", {
+    registration_id: "reg-self",
+    license: await makeLicense({ device_fingerprint: FP_OTHER }),
+  });
+  assertEquals(res.status, 200);
+  const reg = db.table("device_registrations").find((r) => r.id === "reg-self");
+  assert(reg && reg.revoked_at != null);
 });
 
 Deno.test("deactivate_device: wrong-tenant registration id is 404", async () => {

@@ -580,3 +580,65 @@ Note: `test/architecture_test.dart` previously asserted zero
 `pos_cloud_engine` imports from `lib/features/` while its own contract
 states pos_cloud_engine is permitted — corrected to forbid NEW
 `pos_local_engine` imports outside the two tracked legacy files.
+
+## Stage 5 — Final Acceptance Correction (2026-11-24)
+
+Branch `stage5/licensing-and-server-schema`. Corrections after independent
+review of `e1a3849`. All commands run locally on Windows; PostgreSQL 17 via
+the `pg17-replay` Docker container (`psql` shimmed through `docker exec`).
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Deno format | `deno fmt --check backend/supabase/functions` | exit 0 (44 files) |
+| Deno check | `deno check functions/{licensing,pos-api,sync}/index.ts` | exit 0 |
+| Deno tests | `deno test --allow-env --allow-read functions/{licensing,pos-api,sync}/tests/` | **72 passed, 0 failed** (was 67; +5 new: 2 source-hint parsing/trust tests on licensing, 2 on pos-api public throttle, 1 copied-license bearer test) |
+| Flutter analyze | `flutter analyze --fatal-infos` (cwd `frontend`) | **exit 0 — no issues** (113.1s) |
+| Flutter test run 1 | `flutter test` (cwd `frontend`) | **747 passed, 1 skipped, 0 failed** (~10.7min) |
+| Flutter test run 2 | `flutter test` (cwd `frontend`) | **747 passed, 1 skipped, 0 failed** (~9.8min) |
+| Interrupted-migration test | `flutter test test/core/database/interrupted_migration_test.dart` ×2 standalone | **3/3 checkpoints pass both runs** |
+| PG cold replay | `bash backend/supabase/scripts/replay_migrations.sh` | **exit 0 — 6 migrations applied** |
+| H1 invariants | `psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/h1_void_invariants/h1_void_invariants_test.sql` | **ALL H1 INVARIANT CHECKS PASSED** |
+| H1 concurrency | `bash backend/supabase/tests/h1_void_invariants/concurrency.sh` | **ALL PASSED** |
+| Request 2 invariants | `psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request2_licensing/request2_licensing_test.sql` | **ALL REQUEST-2 LICENSE/RATE-LIMIT CHECKS PASSED** |
+| Request 2 concurrency | `bash backend/supabase/tests/request2_licensing/concurrency.sh` | **ALL PASSED** |
+| Web release | `flutter build web --release -t lib/main_web.dart` | **PASS** — `√ Built build\web` (269.8s) |
+| Windows release | `flutter build windows --release` | **PASS** — `√ Built wholesale_pos_app.exe` (109.6s) |
+
+Corrections in this commit:
+
+- **Windows kill-test flake:** `interrupted_migration_test` raced the OS —
+  `taskkill /T /F` returns before the kernel finishes reaping the worker's
+  process tree, so the read-only reopen could hit `SQLITE_BUSY`
+  ("database is locked") on `PRAGMA user_version`. The reopen now polls
+  with a bounded 60s deadline until the lock clears; every rollback,
+  backup-integrity and recovery assertion is unchanged, and a lock that
+  never clears still fails.
+- **Client-IP trust:** the rightmost `X-Forwarded-For` entry is now
+  classified as a **best-effort hint**, not a trusted identity —
+  Supabase's hosted-ingress contract for that header is unverified
+  (Supabase's own examples read the header, but no published doc
+  guarantees sanitization, and a client may control the whole value).
+  `trustedSourceAddress` renamed to `bestEffortSourceAddress` in
+  `pos-api/shared/helpers.ts` and the self-contained `licensing` copy;
+  comments in `licensing/index.ts`, `pos-api/shared/auth.ts`, and
+  `pos-api/index.ts` state the guarantee is carried by the durable global
+  + per-code buckets. New tests pin parsing behaviour separately from the
+  trust assumption: rotating the rightmost entry mints fresh buckets
+  (served, not throttled) while a missing header shares the bounded
+  "unknown" bucket — on both `licensing` and `pos-api` public actions.
+- **Device-proof semantics:** `shared/license_proof.ts`,
+  `modules/licensing/index.ts`, and `sync/index.ts` now state plainly
+  that the signed license is a **bearer document** — no device-held key,
+  no challenge-response, so a copied `license_code` from another active
+  device verifies identically. New `devices_test` case proves a copied
+  license lets a request assert another device's identity (self-
+  deactivation follows the license's fingerprint). Recorded as a security
+  limitation in `docs/LICENSING.md` "Limitations" for the Request 3
+  threat-model review.
+- **CI:** new `deno` job in `ci.yml` runs `deno fmt --check`,
+  `deno check` on all three entry points, and `deno test` over the
+  licensing/pos-api/sync suites — previously local-only. The
+  `supabase-replay` PostgreSQL 17 job is unchanged.
+
+GitHub Actions verification (Windows verify + Deno + supabase-replay +
+android/ios migration jobs) is reported on the push run, not here.

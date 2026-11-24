@@ -22,6 +22,12 @@
 //     cannot write rows into another shop's partition, ever.
 //   * A revocation check on the license row itself kills stolen licenses on
 //     the next request, even before their embedded expiry.
+//   * BEARER SEMANTICS: the license is a signed document, not a
+//     hardware-bound credential — there is no device-held key or
+//     challenge-response, so a copied license_code authenticates as its
+//     embedded (activation_code, device_fingerprint) regardless of which
+//     hardware presents it. Tenant isolation still holds because
+//     customer_id comes from the verified payload.
 //
 // Actions (POST /functions/v1/sync):
 //   { action: 'push', license: '<licenseCode>', entries: [outbox entries] }
@@ -240,6 +246,9 @@ if (import.meta.main) {
 
 // ---------------------------------------------------------------------------
 // License verification — the entire security boundary of this function.
+// Bearer semantics: a valid license_code asserts the device identity inside
+// its signed payload; it does not prove the physical device holds a key
+// (no challenge-response exists). See docs/LICENSING.md "Limitations".
 // ---------------------------------------------------------------------------
 async function verifyLicense(db: any, licenseCode: string) {
   if (!licenseCode) return fail(401, "Missing license.");

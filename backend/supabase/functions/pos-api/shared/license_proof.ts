@@ -1,9 +1,21 @@
 // Server-side verification of the signed device license (the same Ed25519
 // payload the `licensing` function mints at activation and the `sync`
 // gateway already verifies). Used by device-management actions to bind a
-// request to a hardware device identity the CLIENT CANNOT FORGE: the
-// fingerprint is carved out of the verified signature payload, never read
-// from a request field.
+// request to a device identity the CLIENT CANNOT FORGE *in a request
+// field*: the fingerprint is carved out of the verified signature payload,
+// never read from a request field.
+//
+// BEARER SEMANTICS — read before relying on this: the license is a signed
+// DOCUMENT, not a hardware-bound credential. There is no device-held
+// private key and no challenge-response, so verification proves only that
+// a genuine license was issued for (activation_code, device_fingerprint)
+// and that the pair still holds an ACTIVE device_registrations row. Anyone
+// holding a valid license_code string — a copied file, a backed-up
+// activation response, another device's stored license — presents the
+// SAME proof. The result means "this request carries a valid license for
+// device X", never "the physical device X is calling". Do not describe
+// this as proof-of-possession; that claim requires a mechanism that does
+// not exist yet (flagged for the Request 3 threat-model review).
 //
 // A valid proof means ALL of:
 //   * the Ed25519 signature verifies against POS_API_LICENSE_PUBLIC_KEY;
@@ -56,6 +68,10 @@ function hexToBytes(hex: string): Uint8Array {
 /// returns) end-to-end. `expectedCustomerId` is the tenant carved from the
 /// caller's verified session JWT — a license minted for another shop is
 /// rejected even though its signature is genuine.
+///
+/// Bearer document: a copied license_code from ANY still-active device on
+/// the same tenant verifies identically. See the file header — this is not
+/// hardware-bound proof-of-possession.
 export async function verifyDeviceLicense(
   db: any,
   licenseCode: string,

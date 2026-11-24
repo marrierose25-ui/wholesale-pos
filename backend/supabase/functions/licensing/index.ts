@@ -68,11 +68,15 @@ const ACTIVATE_WINDOW_SECONDS = 600;
 // Source-based bounds (Request 2 review): the per-code limit above does NOT
 // stop an attacker rotating through many candidate codes, because every new
 // code gets a fresh bucket. These two buckets close that hole:
-//   * per-source — every activation attempt is charged against the address
-//     the platform edge reports (see trustedSourceAddress), so one probing
-//     host is bounded no matter how many codes it tries;
-//   * global — a backstop that bounds total activation traffic even if the
-//     source cannot be determined (or an attacker controls many addresses).
+//   * per-source-hint — every activation attempt is charged against a
+//     best-effort client-address hint parsed from X-Forwarded-For (see
+//     bestEffortSourceAddress). This bucket is NOT a trusted identity: the
+//     hosted ingress contract for that header is unverified, so a client
+//     that controls the whole header can rotate buckets freely. It only
+//     bounds clients that do not forge forwarding headers;
+//   * global — the actual backstop that bounds total activation traffic
+//     even when the source hint is absent, forged, or rotated, and even if
+//     an attacker controls many addresses.
 const ACTIVATE_SOURCE_LIMIT = 120;
 const ACTIVATE_GLOBAL_LIMIT = 2000;
 const ACTIVATE_SOURCE_WINDOW_SECONDS = 600;
@@ -111,10 +115,10 @@ export async function handleRequest(
     createClient(SUPABASE_URL, SERVICE_KEY, {
       auth: { persistSession: false },
     });
-  // Trusted client address, resolved ONCE per request at the verified
-  // platform boundary (see trustedSourceAddress). Only the activation
-  // action consumes it today.
-  const source = trustedSourceAddress(req);
+  // Best-effort client-address hint, resolved ONCE per request (see
+  // bestEffortSourceAddress — unverified XFF parsing, not a trusted
+  // identity). Only the activation action consumes it today.
+  const source = bestEffortSourceAddress(req);
 
   try {
     switch (body.action) {
@@ -200,18 +204,22 @@ async function rateLimited(
 }
 
 // ---------------------------------------------------------------------------
-// Trusted client address
+// Best-effort client-address hint
 // ---------------------------------------------------------------------------
-// Supabase's edge gateway sits in front of this function and appends the
-// verified peer address to X-Forwarded-For. A client CAN prepend its own
-// forged entries, but it cannot append to the RIGHT of what the platform
-// adds — so the rightmost entry is the only hop we can trust. Entries to
-// its left are attacker-controlled and ignored. When the header is absent
-// or the last entry is not an IP literal we return null and the caller
-// falls back to the shared "unknown" + global buckets, which still bound
-// the endpoint — fail-safe, never fail-open.
+// Whether Supabase's hosted edge ingress rewrites, appends to, or passes
+// through X-Forwarded-For is NOT authoritatively documented — Supabase's
+// own examples read the header, but no published contract guarantees the
+// value reaching this function is sanitized. A client may control the
+// ENTIRE header, including the rightmost entry, so the parsed address is a
+// hint for one extra throttle bucket only — never a trusted identity. The
+// security guarantee is carried by the durable global and per-code limits,
+// which do not depend on this value. The rightmost IP-literal entry is
+// parsed only because that is the shape a proxy-appended chain would have;
+// entries to its left are attacker-controlled regardless. Missing header
+// or non-IP literal yields null and the caller falls back to the shared
+// "unknown" + global buckets — fail-safe, never fail-open.
 const IP_LITERAL = /^[0-9a-fA-F:.%[\]]{3,45}$/;
-function trustedSourceAddress(req: Request): string | null {
+function bestEffortSourceAddress(req: Request): string | null {
   const xff = req.headers.get("x-forwarded-for");
   if (!xff) return null;
   const parts = xff.split(",").map((s) => s.trim()).filter((s) => s.length);
@@ -246,10 +254,12 @@ async function activateDevice(
 
   // Durable throttles BEFORE any license work. Three independent buckets,
   // all keyed by HMAC digests (raw codes and IPs are never stored):
-  //   1. per-source — bounds code probing from one address regardless of
-  //      how many distinct candidate codes are submitted;
-  //   2. global — bounds total activation traffic even when no trustworthy
-  //      source exists;
+  //   1. per-source-hint — a best-effort extra bound; useful against clients
+  //      that do not forge X-Forwarded-For, but NOT a security boundary
+  //      (the hosted ingress contract is unverified — see
+  //      bestEffortSourceAddress);
+  //   2. global — the backstop that bounds total activation traffic even
+  //      when no usable source hint exists or an attacker rotates it;
   //   3. per-code — the original bound on retries against one code.
   const srcLimited = await rateLimited(
     db,

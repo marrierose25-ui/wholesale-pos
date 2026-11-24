@@ -27,14 +27,25 @@ export function str(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
 }
 
-// Trusted client address for rate limiting (Request 2 review). Supabase's
-// edge gateway appends the verified peer address as the RIGHTMOST
-// X-Forwarded-For entry; a client can prepend forged entries but cannot
-// append to the right of what the platform adds, so only the last entry is
-// trustworthy. Anything else (missing header, non-IP literal) yields null
-// and the caller falls back to shared buckets — fail-safe, never fail-open.
+// Best-effort client-address HINT for rate limiting (Request 2 review).
+//
+// Honesty note: whether Supabase's hosted edge ingress rewrites, appends to,
+// or passes through X-Forwarded-For is NOT authoritatively documented.
+// Supabase's own examples read the header, but no published contract
+// guarantees the value reaching this function is sanitized — a client may
+// control the entire header, including the rightmost entry. We therefore
+// treat the parsed address as a hint for ONE extra throttle bucket, never
+// as a trusted identity. The security guarantee for the public endpoints is
+// carried by the durable per-code and global limits, which do not depend on
+// this value at all; this bucket only adds a bound against clients that do
+// not forge forwarding headers.
+//
+// The rightmost IP-literal entry is parsed only because that is the shape a
+// proxy-appended chain would have — it is NOT evidence the platform added
+// it. Missing header or a non-IP literal yields null and the caller falls
+// back to shared buckets — fail-safe, never fail-open.
 const IP_LITERAL = /^[0-9a-fA-F:.%[\]]{3,45}$/;
-export function trustedSourceAddress(req: Request): string | null {
+export function bestEffortSourceAddress(req: Request): string | null {
   const xff = req.headers.get("x-forwarded-for");
   if (!xff) return null;
   const parts = xff.split(",").map((s) => s.trim()).filter((s) => s.length);
