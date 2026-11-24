@@ -96,6 +96,11 @@ void main() {
         if (body.contains('"void_sale"')) {
           return http.Response('{"ok":true}', 200);
         }
+        if (body.contains('"search_sales"')) {
+          return http.Response(
+              '{"ok":true,"sales":[{"id":"sale-1","status":"COMPLETED"}]}',
+              200);
+        }
         return http.Response('{"ok":false,"error":"unexpected"}', 400);
       });
       final result = await reconcilerWith(client).reconcile(

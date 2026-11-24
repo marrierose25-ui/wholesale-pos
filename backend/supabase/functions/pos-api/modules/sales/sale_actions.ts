@@ -63,6 +63,10 @@ export async function searchSales(db: any, ctx: Ctx, body: any) {
       ascending: false,
     });
   if (body.status && body.status !== "ALL") q = q.eq("status", body.status);
+  // Exact-id lookup for the sync reconciler's authoritative-state checks
+  // (Stage 4.1.1): tenant-scoped like every other read here.
+  const saleId = str(body.sale_id);
+  if (saleId) q = q.eq("id", saleId);
   if (body.period_start) q = q.gte("created_at", body.period_start);
   if (body.period_end) q = q.lt("created_at", body.period_end);
   const query = str(body.search_query);
@@ -193,8 +197,12 @@ export async function requestVoid(db: any, ctx: Ctx, body: any) {
 
 export async function listVoidRequests(db: any, ctx: Ctx, body: any) {
   const limit = pageLimit(body, MAX_PAGE);
+  // Stage 4.1.1: the sync reconciler verifies authoritative decisions, so a
+  // decided request must be readable too. Defaults to PENDING — the approval
+  // queue contract is unchanged for existing callers.
+  const status = str(body.status).toUpperCase() || "PENDING";
   let q = db.from("void_requests").select("*")
-    .eq("customer_id", ctx.customerId).eq("status", "PENDING")
+    .eq("customer_id", ctx.customerId).eq("status", status)
     .order("created_at", { ascending: false });
   q = excludeDemoRows(q, await demoUserIds(db, ctx), "requested_by");
   const { data, error } = await q.limit(limit);
