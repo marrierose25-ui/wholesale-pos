@@ -48,7 +48,8 @@ jobs:
     # environment does not exist yet the job still runs unprotected — create
     # it before relying on this workflow for releases.
     if: github.event_name == 'push' || github.ref == 'refs/heads/main'
-    environment: production
+    environment:
+      name: 'production'
     env:
       CLOUDFLARE_ACCOUNT_ID: 649454cb5d6616042f888499d80b51b7
       PAGES_PROJECT: aymen-pos

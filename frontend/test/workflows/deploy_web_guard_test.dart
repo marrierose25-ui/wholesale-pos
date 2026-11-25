@@ -40,7 +40,11 @@ void main() {
 
   test('deploy job binds the protected production environment', () {
     expect(
-      workflow.contains('environment: production'),
+      // Accepts both `environment: production` and the object form
+      // `environment:\n  name: production`.
+      RegExp(
+        r"environment:\s*(\{?\s*)?(name:\s*)?'?production'?",
+      ).hasMatch(workflow),
       isTrue,
       reason:
           'the deploy job must route through the protected `production` '
