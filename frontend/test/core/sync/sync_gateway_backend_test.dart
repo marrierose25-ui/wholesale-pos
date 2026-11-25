@@ -398,7 +398,10 @@ void main() {
       },
     );
 
-    test('a stored-but-not-yet-applied entry is acked', () async {
+    test('a stored-but-not-yet-applied entry stays queued', () async {
+      // 'stored' means safe in staging but NOT applied — acknowledging it
+      // would drop a sale the cloud has not booked. Only 'applied' and
+      // 'rejected' are terminal; stored/deferred/failed stay queued.
       final e = _entry(
         entityType: SyncEntities.sale,
         entityId: 's-staged',
@@ -422,7 +425,71 @@ void main() {
           ),
         ),
       );
+      expect(await backend.push([e]), isEmpty);
+    });
+
+    test('a deferred entry (awaiting actor grant) stays queued', () async {
+      final e = _entry(
+        entityType: SyncEntities.sale,
+        entityId: 's-deferred',
+        payload: {
+          'sale': {'id': 's-deferred'},
+        },
+      );
+      final backend = SyncGatewayBackend(
+        fnUrl: gateway,
+        licenseProvider: licenseProviding(license),
+        client: MockClient(
+          (_) async => http.Response(
+            jsonEncode({
+              'ok': true,
+              'deferred': 1,
+              'results': [
+                {
+                  'entryId': e.id,
+                  'entityId': 's-deferred',
+                  'status': 'deferred',
+                  'error': 'ACTOR_AUTH_REQUIRED: no actor grant',
+                },
+              ],
+            }),
+            200,
+          ),
+        ),
+      );
+      expect(await backend.push([e]), isEmpty);
+    });
+
+    test('push attaches the per-entry actor grant when provided', () async {
+      final e = _entry(
+        entityType: SyncEntities.sale,
+        entityId: 's-grant',
+        payload: {
+          'sale': {'id': 's-grant', 'cashier_id': 'cash1'},
+        },
+      );
+      String? seenBody;
+      final backend = SyncGatewayBackend(
+        fnUrl: gateway,
+        licenseProvider: licenseProviding(license),
+        grantProvider: (entry) async =>
+            entry.entityId == 's-grant' ? 'grant-token-1' : null,
+        client: MockClient((req) async {
+          seenBody = req.body;
+          return http.Response(
+            jsonEncode({
+              'ok': true,
+              'results': [
+                {'entryId': e.id, 'entityId': 's-grant', 'status': 'applied'},
+              ],
+            }),
+            200,
+          );
+        }),
+      );
       expect(await backend.push([e]), {e.id});
+      expect(seenBody, contains('actorGrant'));
+      expect(seenBody, contains('grant-token-1'));
     });
   });
 }

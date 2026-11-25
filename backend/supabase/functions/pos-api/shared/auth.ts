@@ -1,9 +1,27 @@
 import type { Ctx } from "./types.ts";
 import { audit, json, str, userStamp } from "./helpers.ts";
 import { JWT_SECRET } from "./env.ts";
+import { verifyStandaloneDeviceLicense } from "./license_proof.ts";
 
 const PBKDF2_ITERATIONS = 210000;
 const SESSION_TTL_SECONDS = 3650 * 24 * 3600; // ~10 years; matches SessionStore.defaultLifetime
+
+// Verification accepts only these cost factors. A malformed or hostile stored
+// value can no longer force an unbounded PBKDF2 run (CPU denial of service) or
+// silently downgrade below the 10k floor. Legacy 210k hashes keep working.
+const PBKDF2_SUPPORTED_ITERATIONS = new Set([10000, 210000, 300000]);
+
+// Request/credential input bounds. These cap the work a single public request
+// can ask for before any hashing or database lookup.
+const MAX_PASSWORD_LENGTH = 256;
+const MAX_USERNAME_LENGTH = 64;
+const MAX_ACTIVATION_CODE_LENGTH = 128;
+const MAX_LICENSE_LENGTH = 8192;
+
+// Actor grants are delegated, device-bound credentials for the sync gateway.
+// 30 days balances a shop till that may be offline for weeks against the value
+// of an eventually stale token; the DB also invalidates on token_version.
+const ACTOR_GRANT_TTL_SECONDS = 30 * 24 * 3600;
 
 const OWNER = "OWNER";
 const CASHIER = "CASHIER";
@@ -115,6 +133,27 @@ const PUBLIC_SOURCE_LIMIT = 240;
 const PUBLIC_GLOBAL_LIMIT = 5000;
 const PUBLIC_WINDOW_SECONDS = 60;
 
+// The global bucket is sharded so every unauthenticated request in the fleet
+// does not contend on one `rate_limit_buckets` row. The total ceiling is still
+// PUBLIC_GLOBAL_LIMIT per window; each shard carries an equal share. Residual:
+// a caller that rotates its source hint spreads across shards, so this bounds
+// a single shard rather than the whole fleet in one counter. The per-source
+// and per-code limits remain the tighter, identity-keyed bounds.
+const PUBLIC_GLOBAL_SHARDS = 8;
+const PUBLIC_GLOBAL_LIMIT_PER_SHARD = Math.ceil(
+  PUBLIC_GLOBAL_LIMIT / PUBLIC_GLOBAL_SHARDS,
+);
+
+/// Stable, non-cryptographic shard pick. Only distributes load; it is not an
+/// identity or a security boundary.
+function shardOf(value: string, shards: number): number {
+  let h = 0;
+  for (let i = 0; i < value.length; i++) {
+    h = (h * 31 + value.charCodeAt(i)) >>> 0;
+  }
+  return h % shards;
+}
+
 async function rateLimitKey(scope: string, subject: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     "raw",
@@ -189,11 +228,12 @@ async function publicSourceAllowed(
     true,
   );
   if (!src.allowed) return tooManyAttempts(src.retryAfter);
+  const shard = shardOf(source ?? "unknown", PUBLIC_GLOBAL_SHARDS);
   const glob = await rateLimitAllow(
     db,
-    "posapi:pubany",
+    `posapi:pubany:${shard}`,
     "*",
-    PUBLIC_GLOBAL_LIMIT,
+    PUBLIC_GLOBAL_LIMIT_PER_SHARD,
     PUBLIC_WINDOW_SECONDS,
     true,
   );
@@ -283,13 +323,34 @@ async function verifyPassword(
   salt: string,
   stored: string,
 ): Promise<boolean> {
-  const [iterStr, b64Hash] = stored.split("$");
-  const iterations = Number(iterStr);
-  if (!Number.isFinite(iterations) || iterations < 1000 || !b64Hash) {
+  // Bound the input before doing any work. A multi-megabyte password would
+  // otherwise be fed straight into PBKDF2.
+  if (typeof password !== "string" || password.length > MAX_PASSWORD_LENGTH) {
     return false;
   }
-  const derived = await derive(password, unB64(salt), iterations);
-  return timingSafeEqualStr(b64(derived), b64Hash);
+  if (typeof salt !== "string" || typeof stored !== "string") return false;
+  // Exact legacy format: `<iterations>$<base64-hash>`. Anything else is a
+  // malformed credential, not a reason to guess an iteration count.
+  const match = /^(\d{1,7})\$([A-Za-z0-9+/]+={0,2})$/.exec(stored);
+  if (!match) return false;
+  const iterations = Number(match[1]);
+  if (!PBKDF2_SUPPORTED_ITERATIONS.has(iterations)) return false;
+  const expected = match[2];
+  if (expected.length > 128) return false;
+  let saltBytes: Uint8Array;
+  try {
+    saltBytes = unB64(salt);
+  } catch {
+    return false;
+  }
+  if (saltBytes.length === 0 || saltBytes.length > 64) return false;
+  let derived: Uint8Array;
+  try {
+    derived = await derive(password, saltBytes, iterations);
+  } catch {
+    return false;
+  }
+  return timingSafeEqualStr(b64(derived), expected);
 }
 
 async function derive(
@@ -528,6 +589,9 @@ async function ensureDemoUser(
 // --- Has users check (unauthenticated) ---------------------------------------
 async function hasUsers(db: any, body: any): Promise<Response> {
   const code = str(body.activation_code);
+  if (code.length > MAX_ACTIVATION_CODE_LENGTH) {
+    return json({ ok: false, error: "Invalid activation code." }, 400);
+  }
   const blocked = await probeAllowed(db, "posapi:hasusers", code);
   if (blocked) return blocked;
   const lic = await licenseForActivationCode(db, code);
@@ -546,6 +610,13 @@ async function login(db: any, body: any): Promise<Response> {
   const password = String(body.password ?? "");
   if (!code || !username || !password) {
     return json({ ok: false, error: "Missing fields" }, 400);
+  }
+  if (
+    code.length > MAX_ACTIVATION_CODE_LENGTH ||
+    username.length > MAX_USERNAME_LENGTH ||
+    password.length > MAX_PASSWORD_LENGTH
+  ) {
+    return json({ ok: false, error: "Invalid credentials." }, 400);
   }
   const blocked = await probeAllowed(db, "posapi:login", code);
   if (blocked) return blocked;
@@ -625,6 +696,141 @@ async function login(db: any, body: any): Promise<Response> {
   });
 }
 
+// --- Actor grants (delegated sync credentials) ------------------------------
+// A device licence proves the DEVICE, never the person. The sync gateway
+// therefore refuses to attribute a staged sale/cash/finance row to a payload
+// `cashier_id`/`created_by`. Instead the native client signs in with a
+// password and asks for an opaque grant bound to (tenant, user, device); only
+// its SHA-256 digest is stored. This action is the sole mint.
+async function issueActorGrant(db: any, body: any): Promise<Response> {
+  const license = String(body.license ?? "");
+  const username = loginIdentifier(str(body.username));
+  const password = String(body.password ?? "");
+  if (!license || !username || !password) {
+    return json({ ok: false, error: "Missing fields" }, 400);
+  }
+  if (
+    license.length > MAX_LICENSE_LENGTH ||
+    username.length > MAX_USERNAME_LENGTH ||
+    password.length > MAX_PASSWORD_LENGTH
+  ) {
+    return json({ ok: false, error: "Invalid credentials." }, 400);
+  }
+
+  // The signed licence is verified end-to-end (signature, expiry, licence row,
+  // active seat). A copied licence is a bearer document, but the PASSWORD is
+  // still required below, so a stolen file alone cannot mint an actor grant.
+  let proof;
+  try {
+    proof = await verifyStandaloneDeviceLicense(db, license);
+  } catch (err) {
+    console.error("grant licence verification error:", err);
+    return json({ ok: false, error: "Internal error." }, 500);
+  }
+  if (!proof.ok) return json({ ok: false, error: proof.error }, proof.status);
+  const customerId = proof.customerId;
+
+  const blocked = await probeAllowed(db, "posapi:grant", proof.activationCode);
+  if (blocked) return blocked;
+
+  const tkey =
+    `${customerId}|${proof.deviceFingerprint}|${username.toLowerCase()}`;
+  const pre = await rateLimitAllow(
+    db,
+    "posapi:grantfail",
+    tkey,
+    LOGIN_MAX_ATTEMPTS,
+    LOGIN_WINDOW_SECONDS,
+    false,
+  );
+  if (!pre.allowed) return tooManyAttempts(pre.retryAfter);
+
+  const needle = username.toLowerCase().replace(/[%_]/g, "");
+  const { data: user } = await db.from("pos_users")
+    .select("*").eq("customer_id", customerId).ilike("username", needle)
+    .eq("active", true).is("deleted_at", null).maybeSingle();
+  if (!user) {
+    // Same constant-work dummy verify as login: a missing account and a wrong
+    // password must not be distinguishable by timing.
+    await verifyPassword(
+      password,
+      "AAAAAAAAAAAAAAAAAAAAAA==",
+      "210000$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    );
+    await rateLimitAllow(
+      db,
+      "posapi:grantfail",
+      tkey,
+      LOGIN_MAX_ATTEMPTS,
+      LOGIN_WINDOW_SECONDS,
+      true,
+    );
+    return json({ ok: false, error: "Invalid credentials." }, 401);
+  }
+
+  const ok = await verifyPassword(password, user.pw_salt, user.pw_hash);
+  if (!ok) {
+    await rateLimitAllow(
+      db,
+      "posapi:grantfail",
+      tkey,
+      LOGIN_MAX_ATTEMPTS,
+      LOGIN_WINDOW_SECONDS,
+      true,
+    );
+    return json({ ok: false, error: "Invalid credentials." }, 401);
+  }
+  await rateLimitClear(db, "posapi:grantfail", tkey);
+
+  const rpc = await db.rpc("pos_issue_actor_grant", {
+    p_customer: customerId,
+    p_user: user.id,
+    p_device_fingerprint: proof.deviceFingerprint,
+    p_ttl_seconds: ACTOR_GRANT_TTL_SECONDS,
+  });
+  if (rpc.error) throw new Error(rpc.error.message);
+  const data = (rpc.data ?? {}) as Record<string, unknown>;
+  if (!data.grant) throw new Error("Grant was not issued.");
+  await audit(
+    db,
+    customerId,
+    user.id,
+    "ACTOR_GRANT_ISSUED",
+    `Sync actor grant issued for device ${
+      proof.deviceFingerprint.slice(0, 8)
+    }…`,
+  );
+  return json({
+    ok: true,
+    grant: data.grant,
+    expires_at: data.expires_at,
+    user_id: user.id,
+    role: user.role,
+    customer_id: customerId,
+  });
+}
+
+/// Best-effort grant revocation. Token-version bumps already invalidate grants
+/// for credential/status changes; this reclaims the rows and covers device
+/// deactivation, which does not change token_version.
+async function revokeActorGrants(
+  db: any,
+  customerId: string,
+  userId: string | null,
+  deviceFingerprint: string | null,
+): Promise<void> {
+  try {
+    const { error } = await db.rpc("pos_revoke_actor_grants", {
+      p_customer: customerId,
+      p_user: userId,
+      p_device_fingerprint: deviceFingerprint,
+    });
+    if (error) console.error("actor grant revoke failed:", error.message);
+  } catch (err) {
+    console.error("actor grant revoke threw:", err);
+  }
+}
+
 // --- Owner bootstrap (unauthenticated) ---------------------------------------
 async function setupOwner(db: any, body: any): Promise<Response> {
   const code = str(body.activation_code);
@@ -632,6 +838,13 @@ async function setupOwner(db: any, body: any): Promise<Response> {
   const password = String(body.password ?? "");
   if (!code || !rawName || !password) {
     return json({ ok: false, error: "Missing fields" }, 400);
+  }
+  if (
+    code.length > MAX_ACTIVATION_CODE_LENGTH ||
+    rawName.length > MAX_USERNAME_LENGTH ||
+    password.length > MAX_PASSWORD_LENGTH
+  ) {
+    return json({ ok: false, error: "Invalid account details." }, 400);
   }
   const username = normalizePhone(rawName);
   if (!username) return json({ ok: false, error: PHONE_INVALID }, 400);
@@ -706,6 +919,11 @@ async function changePassword(db: any, ctx: Ctx, body: any): Promise<Response> {
   if (!user) return json({ ok: false, error: "User not found." }, 404);
   const current = String(body.current_password ?? "");
   const next = String(body.new_password ?? "");
+  if (
+    current.length > MAX_PASSWORD_LENGTH || next.length > MAX_PASSWORD_LENGTH
+  ) {
+    return json({ ok: false, error: "Password is too long." }, 400);
+  }
   if (!(await verifyPassword(current, user.pw_salt, user.pw_hash))) {
     return json({ ok: false, error: "Current password is incorrect." }, 401);
   }
@@ -726,6 +944,9 @@ async function changePassword(db: any, ctx: Ctx, body: any): Promise<Response> {
   )
     .eq("customer_id", ctx.customerId).eq("id", ctx.userId);
   if (up.error) throw new Error(up.error.message);
+  // The token_version bump already makes every outstanding grant fail to
+  // resolve; reclaim the rows as well.
+  await revokeActorGrants(db, ctx.customerId, ctx.userId, null);
   await audit(
     db,
     ctx.customerId,
@@ -753,6 +974,7 @@ export {
   hashPassword,
   hasUsers,
   hmac,
+  issueActorGrant,
   licenseForActivationCode,
   loadActiveUser,
   login,
@@ -762,11 +984,13 @@ export {
   OWNER,
   OWNER_ONLY,
   PBKDF2_ITERATIONS,
+  PBKDF2_SUPPORTED_ITERATIONS,
   publicSourceAllowed,
   randomDemoPassword,
   rateLimitAllow,
   rateLimitClear,
   rateLimitKey,
+  revokeActorGrants,
   SESSION_TTL_SECONDS,
   setupOwner,
   signJwt,

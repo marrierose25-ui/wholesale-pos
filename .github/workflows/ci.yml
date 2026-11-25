@@ -276,3 +276,10 @@ jobs:
           PGUSER: postgres
           PGPASSWORD: postgres
         run: bash backend/supabase/tests/request2_licensing/concurrency.sh
+      - name: Request 3 actor-authorization invariants
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request3_actor_authorization/request3_actor_authorization_test.sql

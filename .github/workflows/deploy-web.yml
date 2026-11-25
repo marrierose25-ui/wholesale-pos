@@ -32,6 +32,23 @@ jobs:
   deploy:
     name: Build PWA + publish to Cloudflare Pages
     runs-on: windows-latest
+    # PRODUCTION GATE — this job builds whatever ref was selected and then
+    # publishes it with `wrangler pages deploy --branch=main`, i.e. straight to
+    # the production domain. Two rules keep feature code off production:
+    #   1. The `push` trigger is already limited to `main`, so an automatic
+    #      run can only ever come from main.
+    #   2. A manual `workflow_dispatch` may select ANY ref; this `if` refuses
+    #      to run the job at all unless the selected ref is refs/heads/main.
+    #      The job is gated, not just hidden in the UI: a feature-branch
+    #      dispatch produces a skipped job and never reaches the build.
+    # `environment: production` additionally routes every run through the
+    # repo's protected environment. REQUIRED SETUP: create the `production`
+    # environment under Settings > Environments and add required reviewers so
+    # a dispatch cannot publish without a second pair of eyes. If the
+    # environment does not exist yet the job still runs unprotected — create
+    # it before relying on this workflow for releases.
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
+    environment: production
     env:
       CLOUDFLARE_ACCOUNT_ID: 649454cb5d6616042f888499d80b51b7
       PAGES_PROJECT: aymen-pos

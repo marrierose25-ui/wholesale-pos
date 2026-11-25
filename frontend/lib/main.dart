@@ -17,6 +17,8 @@ import 'package:pos_cloud_engine/pos_cloud_engine.dart'
 
 import 'core/backend/native_backend.dart';
 
+import 'core/sync/actor_grant_service.dart';
+import 'core/sync/actor_grant_store.dart';
 import 'core/sync/owner_action_reconciler.dart';
 import 'core/sync/sync_runtime.dart';
 import 'core/sync/sync_service.dart';
@@ -85,6 +87,18 @@ Future<void> _startup() async {
   // --dart-define=WHOLESALE_POS_SYNC_FN_URL or derived from the licensing
   // function URL, so the release script's defines enable it automatically.
   // Rows queued before activation stay put and flow on the first drain after.
+  // Actor grants (Request 3): the licence authenticates the DEVICE, never the
+  // person. After a password sign-in the client asks pos-api for an opaque,
+  // device-bound grant and the sync gateway attaches it to each staged row so
+  // pos_sync_apply can resolve the real actor. The store also answers "which
+  // grant does this queued row need" at push time.
+  final actorGrantStore = ActorGrantStore(db);
+  final actorGrantService = ActorGrantService(
+    store: actorGrantStore,
+    apiUrl: const String.fromEnvironment('WHOLESALE_POS_API_URL'),
+    licenseProvider: () =>
+        LocalDatabase.getSetting(db, SyncGatewayBackend.licenseSettingKey),
+  );
   final syncBackend = SyncGatewayBackend.selectBackend(
     gatewayUrl: SyncGatewayBackend.gatewayUrlFromEnvironment(),
     secretUrl: const String.fromEnvironment('SUPABASE_URL'),
@@ -95,6 +109,7 @@ Future<void> _startup() async {
     isMobile: !kIsWeb && Platform.isAndroid || !kIsWeb && Platform.isIOS,
     licenseProvider: () =>
         LocalDatabase.getSetting(db, SyncGatewayBackend.licenseSettingKey),
+    grantProvider: actorGrantStore.grantForEntry,
   );
   final outbox = SqfliteSyncOutboxRepository(db);
   final puller = CloudSyncPuller(backend: syncBackend, db: db);
@@ -127,6 +142,7 @@ Future<void> _startup() async {
       // default to dark on fresh installs / when unset.
       initialDarkMode: themeSetting != 'light',
       syncRuntime: runtime,
+      actorGrantService: actorGrantService,
     ),
   );
 }
@@ -190,6 +206,7 @@ class WholesalePosApp extends StatefulWidget {
   final String deviceId;
   final bool initialDarkMode;
   final SyncRuntime? syncRuntime;
+  final ActorGrantService actorGrantService;
 
   const WholesalePosApp({
     super.key,
@@ -202,6 +219,7 @@ class WholesalePosApp extends StatefulWidget {
     required this.deviceId,
     required this.initialDarkMode,
     this.syncRuntime,
+    required this.actorGrantService,
   });
 
   @override
@@ -253,6 +271,7 @@ class _WholesalePosAppState extends State<WholesalePosApp> {
         isDarkMode: _themeMode == ThemeMode.dark,
         onToggleTheme: () => _toggleTheme(_themeMode == ThemeMode.light),
         syncRuntime: widget.syncRuntime,
+        actorGrantService: widget.actorGrantService,
       ),
     );
   }
@@ -269,6 +288,7 @@ class LicenseWrapper extends StatefulWidget {
   final bool isDarkMode;
   final VoidCallback onToggleTheme;
   final SyncRuntime? syncRuntime;
+  final ActorGrantService? actorGrantService;
 
   const LicenseWrapper({
     super.key,
@@ -282,6 +302,7 @@ class LicenseWrapper extends StatefulWidget {
     required this.isDarkMode,
     required this.onToggleTheme,
     this.syncRuntime,
+    this.actorGrantService,
   });
 
   @override
@@ -422,6 +443,7 @@ class _LicenseWrapperState extends State<LicenseWrapper> {
       isDarkMode: widget.isDarkMode,
       onToggleTheme: widget.onToggleTheme,
       syncRuntime: widget.syncRuntime,
+      actorGrantService: widget.actorGrantService,
     );
   }
 }
@@ -437,6 +459,7 @@ class AuthWrapper extends StatefulWidget {
   final bool isDarkMode;
   final VoidCallback onToggleTheme;
   final SyncRuntime? syncRuntime;
+  final ActorGrantService? actorGrantService;
 
   const AuthWrapper({
     super.key,
@@ -450,6 +473,7 @@ class AuthWrapper extends StatefulWidget {
     required this.isDarkMode,
     required this.onToggleTheme,
     this.syncRuntime,
+    this.actorGrantService,
   });
 
   @override
@@ -508,6 +532,9 @@ class _AuthWrapperState extends State<AuthWrapper> {
                 lifetime: SessionStore.defaultLifetime,
               ),
             );
+            // Rows queued before the restart still attribute to this person;
+            // the grant itself is re-verified server-side on every push.
+            widget.actorGrantService?.store.currentUserId = restored.id;
           }
         }
       }
@@ -666,10 +693,26 @@ class _AuthWrapperState extends State<AuthWrapper> {
     }
   }
 
+  /// Mints the sync actor grant for the person who just signed in. The licence
+  /// proves the device; this delegated credential is what lets the sync
+  /// gateway attribute queued sales/cash/finance rows to a real user.
+  /// Fire-and-forget: offline or a refused grant must never delay the till —
+  /// affected outbox rows simply stay queued server-side until a later push
+  /// carries a valid grant.
+  void _onGrantRequest(User user, String username, String password) {
+    final service = widget.actorGrantService;
+    if (service == null) return;
+    service.store.currentUserId = user.id;
+    unawaited(
+      service.acquire(user: user, username: username, password: password),
+    );
+  }
+
   Future<void> _onLogout() async {
     // Re-arm the owner-authorization prompt: pending void transitions must be
     // recoverable after sign-out, not only once per app launch.
     _ownerAuthPromptShown = false;
+    widget.actorGrantService?.store.currentUserId = null;
     await _sessions.clear();
     if (!mounted) return;
     setState(() => _currentUser = null);
@@ -684,6 +727,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
       return LoginScreen(
         userRepository: widget.userRepository,
         onLoginSuccess: _onLoginSuccess,
+        onGrantRequest: _onGrantRequest,
       );
     }
 

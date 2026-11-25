@@ -8,10 +8,17 @@ class LoginScreen extends StatefulWidget {
   final UserRepository userRepository;
   final Function(User) onLoginSuccess;
 
+  /// Optional hook fired with the just-verified credentials so the shell can
+  /// mint a sync actor grant (Request 3). Implementations must be
+  /// fire-and-forget: a failed grant never blocks or fails the login itself.
+  final void Function(User user, String username, String password)?
+  onGrantRequest;
+
   const LoginScreen({
     super.key,
     required this.userRepository,
     required this.onLoginSuccess,
+    this.onGrantRequest,
   });
 
   @override
@@ -132,6 +139,10 @@ class _LoginScreenState extends State<LoginScreen> {
         if (!mounted) return;
       }
       widget.onLoginSuccess(user);
+      // The grant request re-sends these credentials to pos-api, which
+      // re-verifies both before minting. It runs after login succeeds and is
+      // always safe to ignore — see ActorGrantService.
+      widget.onGrantRequest?.call(user, username, password);
     } catch (e) {
       if (!mounted) return;
       setState(

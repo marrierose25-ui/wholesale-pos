@@ -6,7 +6,11 @@ import 'package:http/http.dart' as http;
 ///
 /// The Edge Function is deployed with "Verify JWT" OFF, so callers authenticate
 /// by presenting a valid (activation_code, device_fingerprint) pair that the
-/// server has already registered — the shared secret IS the device binding.
+/// server has already registered. IMPORTANT: that pair is a bearer identifier,
+/// NOT a device binding — the signed license is a document, not proof of
+/// hardware possession, and a copied license authenticates identically (see
+/// docs/LICENSING.md "Limitations"). What authorizes a PERSON is separate:
+/// password login plus the server-issued actor grant used by sync.
 /// The anon Supabase key is not required and is deliberately not baked into the
 /// app; only the function URL is (via
 /// `--dart-define=WHOLESALE_POS_LICENSE_FN_URL=...`).

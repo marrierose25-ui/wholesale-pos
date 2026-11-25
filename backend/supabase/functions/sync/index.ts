@@ -28,15 +28,33 @@
 //     embedded (activation_code, device_fingerprint) regardless of which
 //     hardware presents it. Tenant isolation still holds because
 //     customer_id comes from the verified payload.
+//   * DEVICE != USER. The license authenticates the device; it never proves
+//     which human is operating the till. Every staged entry therefore carries
+//     an opaque, server-issued ACTOR GRANT (minted by pos-api only after the
+//     user's password was verified for this device). The gateway hashes that
+//     token with SHA-256 before staging it in `sync_mirror.actor_grant_hash`;
+//     `pos_sync_apply` resolves the hash to a live user and uses THAT user for
+//     every actor column. Actor ids in the payload are ignored.
+//   * A missing/expired/revoked grant leaves the mirror row PENDING with an
+//     `ACTOR_AUTH_REQUIRED...` error. The entry is reported as `deferred`, not
+//     `applied`, so the client keeps it in its outbox and retries after the
+//     user signs in again. Nothing is silently discarded or marked synced.
+//   * ABUSE LIMITS: bounded request bodies (8 MB), per-entry payloads (6 MB),
+//     and durable per-device/per-tenant/sharded-global rate limits keyed by a
+//     SHA-256 digest of the VERIFIED license identity — never an unverified
+//     X-Forwarded-For header.
 //
 // Actions (POST /functions/v1/sync):
 //   { action: 'push', license: '<licenseCode>', entries: [outbox entries] }
-//     -> { ok, stored: n, apply: {applied, rejected, pending},
+//     -> { ok, stored: n, deferred: n,
 //          results: [{entryId, entityId, status, error?}] }
+//        status: applied | rejected | stored | deferred | failed
 //   { action: 'pull', license: '<licenseCode>', since: '<iso>',
-//     tables?: [], cursor?: {received_at, id}, limit?: n }
-//     -> { ok, changes: { sales: [...], ... }, server_time, next_cursor,
+//     tables: ['<one table>'], cursor?: {received_at, id}, limit?: n }
+//     -> { ok, changes: { <table>: [...] }, server_time, next_cursor,
 //          has_more }
+//     Exactly ONE table per request: a keyset cursor is ordered within one
+//     table only, so paging several tables together would silently skip rows.
 //   { action: 'ping', license: '<licenseCode>' }
 //     -> { ok, customer_id, seats_active }  (cheap connectivity/auth probe)
 //
@@ -164,6 +182,28 @@ const MUTABLE_ENTITIES = new Set([
 // Max outbox entries accepted in one push batch (abuse guard).
 const MAX_BATCH = 500;
 
+// --- Abuse bounds -----------------------------------------------------------
+// Bodies are read incrementally and refused once they cross the ceiling, so a
+// huge Content-Length cannot make the function buffer an arbitrary amount.
+const MAX_BODY_BYTES = 8 * 1024 * 1024; // 8 MB
+const MAX_ENTRY_PAYLOAD_BYTES = 6 * 1024 * 1024; // 6 MB
+const MAX_LICENSE_LENGTH = 4096;
+const MAX_GRANT_LENGTH = 512;
+
+// Durable rate limits (see `rate_limit_hit`). Per verified device, per tenant,
+// and a sharded global backstop. The shard keeps one row from becoming a
+// cross-tenant contention point; an attacker with a valid license can still
+// spread load across shards, so the global bucket bounds a single shard, not
+// the whole fleet (documented residual risk).
+const RATE_WINDOW_SECONDS = 60;
+const PUSH_DEVICE_LIMIT = 120;
+const PUSH_TENANT_LIMIT = 600;
+const PULL_DEVICE_LIMIT = 240;
+const PULL_TENANT_LIMIT = 1200;
+const GLOBAL_SHARDS = 8;
+const PUSH_GLOBAL_LIMIT_PER_SHARD = 2500;
+const PULL_GLOBAL_LIMIT_PER_SHARD = 5000;
+
 // ---------------------------------------------------------------------------
 // Privileged state transitions are NOT applied here (Stage 4.1 / audit H1).
 // ---------------------------------------------------------------------------
@@ -197,23 +237,24 @@ export async function handleSyncRequest(
   if (req.method !== "POST") {
     return json({ ok: false, error: "POST required" }, 405);
   }
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
-    return json({ ok: false, error: "Invalid JSON" }, 400);
-  }
+  const read = await readJsonBody(req, MAX_BODY_BYTES);
+  if (!read.ok) return json({ ok: false, error: read.error }, read.status);
+  const body: any = read.body;
 
   const db = dbOverride ?? createClient(SUPABASE_URL, SERVICE_KEY, {
     auth: { persistSession: false },
   });
 
   // Every action authenticates the same way: a valid signed license.
+  const licenseCode = String(body.license ?? "");
+  if (licenseCode.length > MAX_LICENSE_LENGTH) {
+    return json({ ok: false, error: "License is too long." }, 400);
+  }
   let auth:
     | { ok: true; customerId: string; code: string; fingerprint: string }
     | { ok: false; status: number; error: string };
   try {
-    auth = await verifyLicense(db, String(body.license ?? ""));
+    auth = await verifyLicense(db, licenseCode);
   } catch (err) {
     console.error("sync auth error:", err);
     auth = { ok: false, status: 500, error: "Internal error." };
@@ -316,7 +357,9 @@ async function push(
   body: any,
 ): Promise<Response> {
   const entries = Array.isArray(body.entries) ? body.entries : [];
-  if (entries.length === 0) return json({ ok: true, stored: 0, results: [] });
+  if (entries.length === 0) {
+    return json({ ok: true, stored: 0, deferred: 0, results: [] });
+  }
   if (entries.length > MAX_BATCH) {
     return json(
       { ok: false, error: `Batch too large (max ${MAX_BATCH}).` },
@@ -324,7 +367,21 @@ async function push(
     );
   }
 
+  // Charged once per request against the VERIFIED device identity. A missing
+  // license never reaches here; an X-Forwarded-For header is never consulted.
+  const limited = await syncRateLimit(
+    db,
+    "sync:push",
+    auth.customerId,
+    auth.fingerprint,
+    PUSH_DEVICE_LIMIT,
+    PUSH_TENANT_LIMIT,
+    PUSH_GLOBAL_LIMIT_PER_SHARD,
+  );
+  if (!limited.allowed) return tooManyRequests(limited.retryAfter);
+
   let stored = 0;
+  let deferred = 0;
   const results: {
     entryId: string;
     entityId: string;
@@ -354,6 +411,47 @@ async function push(
       continue;
     }
 
+    // Per-entry size ceiling. The whole-body limit already bounds the batch;
+    // this stops one oversized payload (a giant base64 photo) from consuming
+    // the entire allowance and starving every other queued row.
+    const payload = entry.payload ?? {};
+    let payloadBytes = 0;
+    try {
+      payloadBytes =
+        new TextEncoder().encode(JSON.stringify(payload)).byteLength;
+    } catch {
+      results.push({
+        entryId,
+        entityId,
+        status: "rejected",
+        error: "payload is not serialisable",
+      });
+      continue;
+    }
+    if (payloadBytes > MAX_ENTRY_PAYLOAD_BYTES) {
+      results.push({
+        entryId,
+        entityId,
+        status: "rejected",
+        error: `payload too large (max ${MAX_ENTRY_PAYLOAD_BYTES} bytes)`,
+      });
+      continue;
+    }
+
+    // The raw grant never reaches Postgres. Only its SHA-256 digest is staged,
+    // matching pos_actor_grant_hash() so pos_sync_apply can resolve it.
+    const grant = String(entry.actorGrant ?? "").trim();
+    if (grant.length > MAX_GRANT_LENGTH) {
+      results.push({
+        entryId,
+        entityId,
+        status: "rejected",
+        error: "actor grant is malformed",
+      });
+      continue;
+    }
+    const actorGrantHash = grant ? await sha256Hex(grant) : null;
+
     // Append-only for the ledger. An entity that is already staged (pending or
     // already applied) is left untouched, so a replay cannot overwrite an applied
     // row with a different payload.
@@ -363,16 +461,18 @@ async function push(
     // otherwise the device would be told 'stored' for a row the cloud had already
     // applied and its edit would be silently dropped.
     const mutable = MUTABLE_ENTITIES.has(entityType);
+    const now = new Date().toISOString();
     const staging: Record<string, unknown> = {
       customer_id: auth.customerId,
       entity_type: entityType,
       entity_id: entityId,
       operation: String(entry.operation ?? "UPSERT").toUpperCase(),
       device_id: auth.fingerprint,
-      payload: entry.payload ?? {},
+      payload,
+      actor_grant_hash: actorGrantHash,
     };
     if (mutable) {
-      staging.received_at = new Date().toISOString();
+      staging.received_at = now;
       staging.apply_status = "PENDING";
       staging.apply_error = null;
       staging.applied_at = null;
@@ -390,17 +490,42 @@ async function push(
       });
       continue;
     }
+    if (!mutable) {
+      // A ledger row staged earlier may still be PENDING because its grant was
+      // missing/expired. Refresh the grant and arrival stamp so a re-push after
+      // re-login can resolve the actor. Applied rows are never touched.
+      const up = await db.from("sync_mirror").update({
+        actor_grant_hash: actorGrantHash,
+        received_at: now,
+      })
+        .eq("customer_id", auth.customerId)
+        .eq("entity_type", entityType)
+        .eq("entity_id", entityId)
+        .eq("apply_status", "PENDING");
+      if (up.error) {
+        results.push({
+          entryId,
+          entityId,
+          status: "failed",
+          error: up.error.message,
+        });
+        continue;
+      }
+    }
     stored++;
     staged.push({ entryId, entityId, entityType });
   }
 
   // Applying is server-owned and idempotent: every staged entry is replayed
   // through pos_create_sale / pos_add_cash_movement, which recompute the money
-  // and enforce the shift and receipt invariants.
+  // and enforce the shift and receipt invariants. The third argument is the
+  // VERIFIED device fingerprint; pos_sync_apply refuses to resolve an actor
+  // for any row whose staged device does not match it.
   if (staged.length > 0) {
     const { data, error } = await db.rpc("pos_sync_apply", {
       p_customer: auth.customerId,
       p_limit: Math.max(staged.length, 200),
+      p_device_fingerprint: auth.fingerprint,
     });
     if (error) {
       // The entries are safely stored; report them retryable so the client
@@ -415,8 +540,9 @@ async function push(
       }
     } else {
       // Read back the verdict per staged entity: APPLIED, REJECTED (permanent,
-      // with the server's reason) or still PENDING (stored, will be applied on
-      // the next push).
+      // with the server's reason), DEFERRED (waiting for a valid actor grant —
+      // the client MUST keep the outbox row) or still PENDING (stored, will be
+      // applied on the next push).
       const { data: rows, error: readErr } = await db.from("sync_mirror")
         .select("entity_type, entity_id, apply_status, apply_error")
         .eq("customer_id", auth.customerId)
@@ -427,19 +553,24 @@ async function push(
       for (const s of staged) {
         const r = byKey[`${s.entityType}:${s.entityId}`];
         const state = String(r?.apply_status ?? "PENDING");
+        const reason = String(r?.apply_error ?? "");
+        let status: string;
+        if (state === "APPLIED") status = "applied";
+        else if (state === "REJECTED") status = "rejected";
+        else if (reason.startsWith("ACTOR_AUTH_REQUIRED")) status = "deferred";
+        else status = "stored";
+        if (status === "deferred") deferred++;
         results.push({
           entryId: s.entryId,
           entityId: s.entityId,
-          status: state === "APPLIED"
-            ? "applied"
-            : state === "REJECTED"
-            ? "rejected"
-            : "stored",
-          error: state === "REJECTED"
-            ? String(r?.apply_error ?? "")
+          status,
+          error: state === "REJECTED" || status === "deferred"
+            ? reason
             : undefined,
         });
       }
+      // `data` is unused beyond its error; kept for parity with the RPC call.
+      void data;
     }
   }
 
@@ -452,6 +583,7 @@ async function push(
   return json({
     ok: !anyFailed,
     stored,
+    deferred,
     results,
     error: anyFailed ? "Some entries failed to store." : undefined,
   });
@@ -464,9 +596,20 @@ async function push(
 // ---------------------------------------------------------------------------
 async function pull(
   db: any,
-  auth: { customerId: string },
+  auth: { customerId: string; fingerprint: string },
   body: any,
 ): Promise<Response> {
+  const limited = await syncRateLimit(
+    db,
+    "sync:pull",
+    auth.customerId,
+    auth.fingerprint,
+    PULL_DEVICE_LIMIT,
+    PULL_TENANT_LIMIT,
+    PULL_GLOBAL_LIMIT_PER_SHARD,
+  );
+  if (!limited.allowed) return tooManyRequests(limited.retryAfter);
+
   // Cursor is either a keyset {received_at, id} (preferred, exact pagination)
   // or a bare `since` ISO timestamp (legacy first page). received_at alone is
   // ambiguous because a push stamps every row it applied with one timestamp, so
@@ -497,15 +640,24 @@ async function pull(
       error: "since must be an ISO timestamp, or pass a cursor.",
     }, 400);
   }
-  const requested: string[] =
-    Array.isArray(body.tables) && body.tables.length > 0
-      ? body.tables.map((t: unknown) => String(t))
-      : TABLES;
-  const wanted = requested.filter((t) => TABLES.includes(t));
-  if (wanted.length === 0) {
+  // Exactly ONE table per request. A keyset cursor is ordered within a single
+  // table; paging several tables together advances one shared cursor past rows
+  // a quieter table has not delivered yet, silently losing them. The client
+  // already walks the tables in dependency order, one at a time.
+  const requested: string[] = Array.isArray(body.tables)
+    ? body.tables.map((t: unknown) => String(t))
+    : [];
+  if (requested.length !== 1) {
     return json({
       ok: false,
-      error: `tables must be a subset of: ${TABLES.join(", ")}`,
+      error: `tables must name exactly one table: ${TABLES.join(", ")}`,
+    }, 400);
+  }
+  const wanted = [requested[0]];
+  if (!TABLES.includes(wanted[0])) {
+    return json({
+      ok: false,
+      error: `tables must be one of: ${TABLES.join(", ")}`,
     }, 400);
   }
   // Rows per table per page. Callers loop on has_more/next_cursor so a busy
@@ -595,6 +747,120 @@ function hexToBytes(hex: string): Uint8Array {
   }
   return out;
 }
+// ---------------------------------------------------------------------------
+// Abuse-control helpers
+// ---------------------------------------------------------------------------
+
+/// Read the request body incrementally, refusing anything over [maxBytes].
+/// `Content-Length` is checked first as a cheap rejection, but the streaming
+/// count is the real bound (a chunked request may omit or lie about it).
+async function readJsonBody(
+  req: Request,
+  maxBytes: number,
+): Promise<
+  { ok: true; body: any } | { ok: false; status: number; error: string }
+> {
+  const declared = Number(req.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    return { ok: false, status: 413, error: "Request body too large." };
+  }
+  if (!req.body) return { ok: false, status: 400, error: "Invalid JSON" };
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        return { ok: false, status: 413, error: "Request body too large." };
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return { ok: false, status: 400, error: "Invalid JSON" };
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return { ok: true, body: JSON.parse(new TextDecoder().decode(bytes)) };
+  } catch {
+    return { ok: false, status: 400, error: "Invalid JSON" };
+  }
+}
+
+/// Lowercase hex SHA-256, matching `pos_actor_grant_hash()` in SQL.
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/// Durable per-device + per-tenant + sharded-global throttle. Identity is the
+/// VERIFIED (customer, device fingerprint) pair from the signed license, never
+/// a client header. Each call charges one hit in every bucket; the first
+/// refusal wins. A global bucket is sharded so a single row is not a
+/// cross-tenant contention point, at the documented cost that a fleet-wide
+/// flood is bounded per shard rather than in one counter.
+async function syncRateLimit(
+  db: any,
+  scope: string,
+  customerId: string,
+  fingerprint: string,
+  deviceLimit: number,
+  tenantLimit: number,
+  globalLimitPerShard: number,
+): Promise<{ allowed: boolean; retryAfter: number }> {
+  const deviceKey = `sync:${scope}:device:${await sha256Hex(
+    `${customerId}|${fingerprint}`,
+  )}`;
+  const tenantKey = `sync:${scope}:tenant:${await sha256Hex(customerId)}`;
+  const shardSeed = await sha256Hex(`${scope}|${customerId}|${fingerprint}`);
+  const shard = parseInt(shardSeed.slice(0, 8), 16) % GLOBAL_SHARDS;
+  const globalKey = `sync:${scope}:global:${shard}`;
+  const buckets: [string, number][] = [
+    [deviceKey, deviceLimit],
+    [tenantKey, tenantLimit],
+    [globalKey, globalLimitPerShard],
+  ];
+  for (const [key, limit] of buckets) {
+    const { data, error } = await db.rpc("rate_limit_hit", {
+      p_key: key,
+      p_limit: limit,
+      p_window_seconds: RATE_WINDOW_SECONDS,
+      p_charge: true,
+    });
+    if (error) throw new Error(error.message);
+    const r = (data ?? {}) as Record<string, unknown>;
+    if (r.allowed === false) {
+      return {
+        allowed: false,
+        retryAfter: Number(r.retry_after_seconds ?? RATE_WINDOW_SECONDS),
+      };
+    }
+  }
+  return { allowed: true, retryAfter: 0 };
+}
+
+function tooManyRequests(retryAfter: number): Response {
+  return json({
+    ok: false,
+    error: `Too many sync requests. Retry in ${retryAfter}s.`,
+    retry_after_seconds: retryAfter,
+  }, 429);
+}
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,

@@ -39,6 +39,7 @@ import { SERVICE_KEY, SUPABASE_URL } from "./shared/env.ts";
 import {
   changePassword,
   hasUsers,
+  issueActorGrant,
   login,
   setupOwner,
   verifyJwt,
@@ -48,6 +49,7 @@ import {
   bestEffortSourceAddress,
   CORS_HEADERS,
   json,
+  readJsonBody,
   str,
 } from "./shared/helpers.ts";
 import { publicSourceAllowed } from "./shared/auth.ts";
@@ -70,7 +72,15 @@ const PUBLIC_ACTIONS: Record<string, PublicHandler> = {
   login,
   setup_owner: setupOwner,
   has_users: hasUsers,
+  // Mint a delegated, device-bound sync credential after verifying the user's
+  // password AND the signed device licence. See shared/auth.ts.
+  issue_actor_grant: issueActorGrant,
 };
+
+// pos-api bodies are small JSON action envelopes. 1 MB is far above any real
+// request (the largest is a base64 proof photo, capped at 300 KB by the
+// product) and stops a single call from buffering an arbitrary payload.
+const MAX_BODY_BYTES = 1024 * 1024;
 
 // The full authenticated action surface. Action names, parameters, response
 // shapes, and error semantics are the production contract — do not rename or
@@ -170,11 +180,9 @@ export async function handleRequest(
     return json({ ok: false, error: "POST required" }, 405);
   }
   let body: any;
-  try {
-    body = await req.json();
-  } catch {
-    return json({ ok: false, error: "Invalid JSON" }, 400);
-  }
+  const read = await readJsonBody(req, MAX_BODY_BYTES);
+  if (!read.ok) return json({ ok: false, error: read.error }, read.status);
+  body = read.body;
 
   const client = db ??
     createClient(SUPABASE_URL, SERVICE_KEY, {

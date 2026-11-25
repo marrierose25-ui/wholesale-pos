@@ -325,6 +325,26 @@ enforced in code and covered by a test.
   mirror table, so *no* writer can forget. Moving later in the ordering is also
   safe for the walk: the worst case is a second delivery, and re-applying a
   known row is a no-op.
+* **Device ≠ user (Request 3 actor grants).** The signed license proves the
+  DEVICE, never which person is at the till, so `pos_sync_apply` no longer
+  trusts actor ids inside pushed payloads (`cashier_id`, `user_id`,
+  `created_by`, `requested_by`). After a password sign-in the native client
+  calls pos-api's public `issue_actor_grant` action — which re-verifies the
+  password AND the signed license — and receives an opaque token bound to
+  (tenant, user, device). The sync gateway stores only its SHA-256 digest in
+  `sync_mirror.actor_grant_hash`; `pos_sync_apply` resolves the digest to a
+  live user and uses THAT user for every actor column, then enforces the
+  user's feature permissions (`pos`/`register`/`finance`/`warehouse`) through
+  permission-wrapped RPCs. A missing/expired/revoked grant leaves the row
+  PENDING (`ACTOR_AUTH_REQUIRED`) and the client reports it `deferred` — the
+  outbox entry stays queued, nothing is discarded or falsely acked. Owner
+  accounts are never mutable through device sync: devices may provision
+  CASHIER accounts under an owner grant, but cannot create/promote owners or
+  change any existing credential — those go through live pos-api only.
+  Grants expire, are bound to the issuing device fingerprint, and die on a
+  `token_version` bump (password/status change) or explicit revocation.
+  Offline tills keep selling; authorization is proven at push time, and a
+  row that cannot yet be verified simply waits in the outbox.
 * **Privileged transitions are never applied from pushed payloads** (Stage
   4.1 / audit H1). A license proves the device, never WHICH USER acted, so
   the gateway stages and applies only data: `pos_create_sale` hardcodes

@@ -1,9 +1,9 @@
 // Server-side verification of the signed device license (the same Ed25519
 // payload the `licensing` function mints at activation and the `sync`
-// gateway already verifies). Used by device-management actions to bind a
-// request to a device identity the CLIENT CANNOT FORGE *in a request
-// field*: the fingerprint is carved out of the verified signature payload,
-// never read from a request field.
+// gateway already verifies). Used by device-management actions and by
+// `issue_actor_grant` to bind a request to a device identity the CLIENT
+// CANNOT FORGE *in a request field*: the fingerprint is carved out of the
+// verified signature payload, never read from a request field.
 //
 // BEARER SEMANTICS — read before relying on this: the license is a signed
 // DOCUMENT, not a hardware-bound credential. There is no device-held
@@ -15,14 +15,14 @@
 // SAME proof. The result means "this request carries a valid license for
 // device X", never "the physical device X is calling". Do not describe
 // this as proof-of-possession; that claim requires a mechanism that does
-// not exist yet (flagged for the Request 3 threat-model review).
+// not exist yet.
 //
 // A valid proof means ALL of:
 //   * the Ed25519 signature verifies against POS_API_LICENSE_PUBLIC_KEY;
 //   * payload is format wholesale-pos-license v2 with the required fields;
 //   * expires_at is still in the future;
-//   * the license row exists, is not revoked, and belongs to the caller's
-//     tenant (customer_id inside the signed payload);
+//   * the license row exists, is not revoked, and its customer_id matches the
+//     customer_id inside the signed payload;
 //   * the (activation_code, device_fingerprint) pair still holds an ACTIVE
 //     device_registrations row — a deactivated device's unexpired license
 //     stops being proof the moment its seat is revoked.
@@ -64,19 +64,17 @@ function hexToBytes(hex: string): Uint8Array {
   return out;
 }
 
-/// Verify `licenseCode` (the `<payload>.<signature>` string activation
-/// returns) end-to-end. `expectedCustomerId` is the tenant carved from the
-/// caller's verified session JWT — a license minted for another shop is
-/// rejected even though its signature is genuine.
-///
-/// Bearer document: a copied license_code from ANY still-active device on
-/// the same tenant verifies identically. See the file header — this is not
-/// hardware-bound proof-of-possession.
-export async function verifyDeviceLicense(
-  db: any,
-  licenseCode: string,
-  expectedCustomerId: string,
-): Promise<DeviceProofResult> {
+interface ParsedPayload {
+  ok: true;
+  code: string;
+  fingerprint: string;
+  customerId: string;
+}
+type ParsedResult = ParsedPayload | DeviceProofFailure;
+
+/// Signature + format + expiry. Does NOT touch the database, so both the
+/// authenticated and standalone entry points share exactly one parser.
+function parseSignedLicense(licenseCode: string): ParsedResult {
   if (!licenseCode) {
     return proofFail(403, "A device license proof is required.");
   }
@@ -85,8 +83,6 @@ export async function verifyDeviceLicense(
     return proofFail(403, "Device license proof is invalid.");
   }
   let payload: any;
-  let code = "";
-  let fingerprint = "";
   try {
     const payloadBytes = base64UrlDecode(licenseCode.slice(0, dot));
     const signature = base64UrlDecode(licenseCode.slice(dot + 1));
@@ -107,27 +103,39 @@ export async function verifyDeviceLicense(
   if (payload.format !== "wholesale-pos-license" || payload.version !== 2) {
     return proofFail(403, "Device license proof is invalid.");
   }
-  code = String(payload.activation_code ?? "");
-  fingerprint = String(payload.device_fingerprint ?? "");
+  const code = String(payload.activation_code ?? "");
+  const fingerprint = String(payload.device_fingerprint ?? "");
   const customerId = String(payload.customer_id ?? "");
   if (!code || !fingerprint || !customerId) {
     return proofFail(403, "Device license proof is invalid.");
   }
-  if (customerId !== expectedCustomerId) {
-    return proofFail(403, "Device license proof is invalid.");
-  }
-
   const expires = Date.parse(String(payload.expires_at ?? ""));
   if (!Number.isFinite(expires) || expires < Date.now()) {
     return proofFail(403, "Device license proof has expired.");
   }
+  return { ok: true, code, fingerprint, customerId };
+}
 
+/// Confirm the database still backs the parsed licence: the activation code
+/// exists, is not revoked, belongs to the customer named in the payload, and
+/// the (code, fingerprint) pair still holds an active seat.
+async function activeSeat(
+  db: any,
+  code: string,
+  fingerprint: string,
+  customerId: string,
+): Promise<DeviceProofResult> {
   const { data: licRow, error: licErr } = await db
-    .from("licenses").select("revoked_at").eq("activation_code", code)
-    .maybeSingle();
+    .from("licenses").select("customer_id, revoked_at")
+    .eq("activation_code", code).maybeSingle();
   if (licErr) throw new Error(licErr.message);
   if (!licRow) return proofFail(403, "Device license proof is invalid.");
   if (licRow.revoked_at) {
+    return proofFail(403, "Device license proof is invalid.");
+  }
+  // The signed payload and the license row must name the same tenant. Without
+  // this, a mis-issued signature could bind a code to the wrong partition.
+  if (String(licRow.customer_id) !== customerId) {
     return proofFail(403, "Device license proof is invalid.");
   }
 
@@ -146,4 +154,48 @@ export async function verifyDeviceLicense(
     deviceFingerprint: fingerprint,
     customerId,
   };
+}
+
+/// Verify `licenseCode` end-to-end. `expectedCustomerId` is the tenant carved
+/// from the caller's verified session JWT — a license minted for another shop
+/// is rejected even though its signature is genuine.
+///
+/// Bearer document: a copied license_code from ANY still-active device on
+/// the same tenant verifies identically. See the file header — this is not
+/// hardware-bound proof-of-possession.
+export async function verifyDeviceLicense(
+  db: any,
+  licenseCode: string,
+  expectedCustomerId: string,
+): Promise<DeviceProofResult> {
+  const parsed = parseSignedLicense(licenseCode);
+  if (!parsed.ok) return parsed;
+  if (parsed.customerId !== expectedCustomerId) {
+    return proofFail(403, "Device license proof is invalid.");
+  }
+  return await activeSeat(
+    db,
+    parsed.code,
+    parsed.fingerprint,
+    parsed.customerId,
+  );
+}
+
+/// Verify a licence presented by an UNAUTHENTICATED caller (grant issuance).
+/// There is no session tenant to compare against, so the tenant is taken from
+/// the signed payload and then checked against the license row and the active
+/// seat. Same bearer caveat: this proves the string is a genuine, active
+/// licence, not that the physical device is present.
+export async function verifyStandaloneDeviceLicense(
+  db: any,
+  licenseCode: string,
+): Promise<DeviceProofResult> {
+  const parsed = parseSignedLicense(licenseCode);
+  if (!parsed.ok) return parsed;
+  return await activeSeat(
+    db,
+    parsed.code,
+    parsed.fingerprint,
+    parsed.customerId,
+  );
 }

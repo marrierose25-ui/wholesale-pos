@@ -21,6 +21,7 @@
 
 import { audit, json, str } from "../../shared/helpers.ts";
 import { verifyDeviceLicense } from "../../shared/license_proof.ts";
+import { revokeActorGrants } from "../../shared/auth.ts";
 import type { Ctx } from "../../shared/types.ts";
 
 const MAX_FIELD_LEN = 256;
@@ -171,6 +172,15 @@ export async function deactivateDevice(
   if (!revoked || revoked.length === 0) {
     return json({ ok: false, error: "Device was already deactivated." }, 409);
   }
+
+  // A deactivated device must not keep a usable actor grant. The gateway also
+  // refuses an inactive seat, but revoking here removes the credential itself.
+  await revokeActorGrants(
+    db,
+    ctx.customerId,
+    null,
+    reg.device_fingerprint,
+  );
 
   // Audit on BOTH trails: license_audit is the licensing-domain record the
   // operator tools read; pos_audit_logs is the tenant-visible activity log.

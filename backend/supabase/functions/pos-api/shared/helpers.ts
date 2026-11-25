@@ -27,6 +27,52 @@ export function str(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
 }
 
+/// Read a JSON request body with a hard byte ceiling. `Content-Length` is a
+/// cheap pre-check; the streamed count is the real bound because a chunked
+/// request may omit or misstate it. Shared by every Edge entry point so a
+/// single huge body cannot be buffered before an action ever runs.
+export async function readJsonBody(
+  req: Request,
+  maxBytes: number,
+): Promise<
+  { ok: true; body: any } | { ok: false; status: number; error: string }
+> {
+  const declared = Number(req.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    return { ok: false, status: 413, error: "Request body too large." };
+  }
+  if (!req.body) return { ok: false, status: 400, error: "Invalid JSON" };
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        return { ok: false, status: 413, error: "Request body too large." };
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return { ok: false, status: 400, error: "Invalid JSON" };
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return { ok: true, body: JSON.parse(new TextDecoder().decode(bytes)) };
+  } catch {
+    return { ok: false, status: 400, error: "Invalid JSON" };
+  }
+}
+
 // Best-effort client-address HINT for rate limiting (Request 2 review).
 //
 // Honesty note: whether Supabase's hosted edge ingress rewrites, appends to,

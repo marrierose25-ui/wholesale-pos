@@ -28,11 +28,20 @@ class SyncGatewayBackend implements SyncBackend {
 
   final String _fnUrl;
   final Future<String?> Function() _licenseProvider;
+
+  /// Supplies the per-entry actor grant. The licence authenticates the device;
+  /// this delegated credential says which signed-in user is responsible for a
+  /// queued sale/cash/finance row. It is looked up per entry so an owner's
+  /// queued edit still resolves after a cashier logs in, and it is never stored
+  /// in the outbox payload itself.
+  final Future<String?> Function(SyncOutboxEntry entry)? _grantProvider;
+
   final http.Client _client;
 
   SyncGatewayBackend({
     required String fnUrl,
     required this._licenseProvider,
+    this._grantProvider,
     http.Client? client,
   }) : _fnUrl = fnUrl.endsWith('/')
            ? fnUrl.substring(0, fnUrl.length - 1)
@@ -77,11 +86,13 @@ class SyncGatewayBackend implements SyncBackend {
     required bool unsafeAllowEmbed,
     required bool isMobile,
     required Future<String?> Function() licenseProvider,
+    Future<String?> Function(SyncOutboxEntry entry)? grantProvider,
   }) {
     if (gatewayUrl.isNotEmpty) {
       return SyncGatewayBackend(
         fnUrl: gatewayUrl,
         licenseProvider: licenseProvider,
+        grantProvider: grantProvider,
       );
     }
     final hasSecret = secretUrl.isNotEmpty && secretKey.isNotEmpty;
@@ -108,24 +119,43 @@ class SyncGatewayBackend implements SyncBackend {
       );
     }
 
+    // Build the wire entries first: the per-entry actor grant is an async
+    // lookup, and a grant failure must only drop that one grant (leaving the
+    // row deferred server-side), never the whole batch.
+    final wireEntries = <Map<String, dynamic>>[];
+    for (final e in entries) {
+      String? grant;
+      final provider = _grantProvider;
+      if (provider != null) {
+        try {
+          grant = await provider(e);
+        } catch (_) {
+          grant = null;
+        }
+      }
+      wireEntries.add({
+        // The outbox row id, echoed back per entry so the ack marks exactly
+        // the rows the server processed — two edits to one entity no longer
+        // share one verdict (audit 2 #21).
+        'entryId': e.id,
+        // Send the LOCAL vocabulary ('sale' etc.); the gateway folds it
+        // onto a staging entity and never writes a cloud table directly.
+        'entityType': e.entityType,
+        'entityId': e.entityId,
+        'operation': e.operation,
+        'payload': e.payload,
+        // The opaque, server-issued delegated credential for the person who
+        // queued this row. The gateway hashes it and never stores the raw
+        // token; the server resolves it to a live user for every actor column.
+        if (grant != null && grant.trim().isNotEmpty)
+          'actorGrant': grant.trim(),
+      });
+    }
+
     final body = jsonEncode({
       'action': 'push',
       'license': license.trim(),
-      'entries': [
-        for (final e in entries)
-          {
-            // The outbox row id, echoed back per entry so the ack marks exactly
-            // the rows the server processed — two edits to one entity no longer
-            // share one verdict (audit 2 #21).
-            'entryId': e.id,
-            // Send the LOCAL vocabulary ('sale' etc.); the gateway folds it
-            // onto a staging entity and never writes a cloud table directly.
-            'entityType': e.entityType,
-            'entityId': e.entityId,
-            'operation': e.operation,
-            'payload': e.payload,
-          },
-      ],
+      'entries': wireEntries,
     });
 
     final res = await _client.post(
@@ -160,13 +190,15 @@ class SyncGatewayBackend implements SyncBackend {
     }
 
     // Per-entry ack (audit #20 / #21): only outbox rows the server actually
-    // processed are marked synced. 'applied' (landed through the till RPC),
-    // 'stored' (safe in the staging table, applied on the next drain) and
-    // 'rejected' (a permanent refusal, never worth retrying) are acked;
-    // 'failed' stays queued. The server echoes the outbox id it saw, so two
-    // queued edits to one sale no longer share a single verdict; a server that
-    // predates entryId falls back to the entityId mapping, and one that sends
-    // no results list leaves every row queued for the next retry.
+    // applied or permanently refused are marked synced. `applied` landed
+    // through the till RPC and `rejected` is a permanent refusal. `stored`
+    // (safe in staging but not yet applied) and `deferred` (waiting for a
+    // valid actor grant) stay QUEUED: acknowledging them would drop a sale the
+    // cloud has not booked, and re-pushing a staged row is idempotent. The
+    // server echoes the outbox id it saw, so two queued edits to one sale no
+    // longer share a single verdict; a server that predates entryId falls back
+    // to the entityId mapping, and one that sends no results list leaves every
+    // row queued for the next retry.
     final results = decoded is Map ? decoded['results'] : null;
     if (results is! List || results.isEmpty) {
       // No per-entry verdict means nothing is confirmed; leave every row
@@ -182,7 +214,7 @@ class SyncGatewayBackend implements SyncBackend {
     final acked = <String>{};
     for (final r in results.whereType<Map>()) {
       final status = '${r['status']}';
-      if (status != 'applied' && status != 'stored' && status != 'rejected') {
+      if (status != 'applied' && status != 'rejected') {
         continue;
       }
       final entryId = '${r['entryId'] ?? ''}';
