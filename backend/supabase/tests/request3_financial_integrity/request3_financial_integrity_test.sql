@@ -35,6 +35,16 @@
 --       (covered by the fe-f7 assertion in F6)
 --   G8-G10 exact-unique match, multi-withdrawal ambiguity and new-format
 --       dedup remain covered by F2/F3/F5/F6 above
+--   H1  late old-format withdrawal after the server reversal exists:
+--       converges on the linked movement, no second unlinked leg
+--   H2  late withdrawal, same reason+amount, conflicting actor: deferred,
+--       preserved, never inserted
+--   H3  late withdrawal matching TWO linked reversals: ambiguous, no pick
+--   H4  staged delete first, old-format movement in a LATER batch: still
+--       exactly one reversal
+--   I1  operator UNRELATED verdict unblocks a plausible-blocked delete;
+--       verdict is per-(movement, collection) and fully audited
+--   I2  the same verdict does NOT unblock a different collection
 --
 -- psql -v ON_ERROR_STOP=1 -f request3_financial_integrity_test.sql
 
@@ -701,5 +711,228 @@ SELECT pg_temp.expect_true('G6 wrong-actor movement never auto-linked',
     WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
       AND source_finance_entry_id = 'fe-g7' AND type = 'WITHDRAWAL') = 0,
   'mismatched actor is not evidence; nothing was guessed or written');
+
+-- ================================================================ H1 ======
+-- Test A — late old-format withdrawal. The collection is deleted through
+-- the server path FIRST (server writes the linked reversal); the legacy
+-- unlinked push arrives afterwards with a different movement id. It must
+-- converge on the existing linked movement, not insert a second leg.
+DO $$
+BEGIN
+  PERFORM pg_temp.mk_collection(
+    'fe-h1', 6100, 'cat-h1', 'Bay', 'fin-cash', 'LateCat');
+  PERFORM public.pos_delete_finance_entry(
+    'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'fin-cash', 'fe-h1');
+END $$;
+SELECT pg_temp.expect_true('H1 late legacy withdrawal returns the linked reversal',
+  (SELECT (public.pos_add_cash_movement(
+      'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'fin-cash',
+      (SELECT id FROM public.shifts
+        WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+          AND status = 'OPEN' LIMIT 1),
+      'WITHDRAWAL', 6100,
+      'Reversal: deleted cash collection from LateCat (Bay)',
+      NULL, 'leg-h1-late', NULL)->>'duplicate')::boolean)
+  AND (SELECT public.pos_add_cash_movement(
+      'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'fin-cash',
+      (SELECT id FROM public.shifts
+        WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+          AND status = 'OPEN' LIMIT 1),
+      'WITHDRAWAL', 6100,
+      'Reversal: deleted cash collection from LateCat (Bay)',
+      NULL, 'leg-h1-late', NULL)->>'id')
+    = (SELECT id FROM public.cash_movements
+       WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+         AND source_finance_entry_id = 'fe-h1' AND type = 'WITHDRAWAL'),
+  'second call is same-id idempotent; both resolve to the server leg');
+SELECT pg_temp.expect_true('H1 exactly one withdrawal exists for the collection',
+  (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND source_finance_entry_id = 'fe-h1' AND type = 'WITHDRAWAL') = 1
+  AND (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'leg-h1-late') = 0
+  AND (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND reason = 'Reversal: deleted cash collection from LateCat (Bay)'
+      AND amount_minor_units = 6100) = 1,
+  'no unlinked duplicate was written');
+
+-- ================================================================ H2 ======
+-- Test B — late withdrawal, same reason and amount, CONFLICTING actor.
+-- It must not attach and must not insert: deferred with the durable marker.
+DO $$
+BEGIN
+  PERFORM pg_temp.mk_collection(
+    'fe-h2', 6200, 'cat-h2', 'Dock', 'fin-cash', 'ActorLate');
+  PERFORM public.pos_delete_finance_entry(
+    'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'fin-cash', 'fe-h2');
+END $$;
+SELECT pg_temp.expect_error('H2 conflicting actor defers the late movement',
+  'SELECT public.pos_add_cash_movement(''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'',''fin-cash2'','
+  '(SELECT id FROM public.shifts WHERE customer_id = ''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'' AND status = ''OPEN'' LIMIT 1),'||
+  '''WITHDRAWAL'', 6200, ''Reversal: deleted cash collection from ActorLate (Dock)'', NULL, ''leg-h2-late'', NULL)',
+  'LEGACY_REVERSAL_AMBIGUOUS');
+SELECT pg_temp.expect_true('H2 conflicting-actor movement preserved, nothing inserted',
+  (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND reason = 'Reversal: deleted cash collection from ActorLate (Dock)'
+      AND amount_minor_units = 6200) = 1
+  AND (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'leg-h2-late') = 0,
+  'only the server reversal stands; the doubtful push left no row');
+
+-- ================================================================ H3 ======
+-- Test C — late withdrawal matching TWO linked reversals (same generated
+-- reason + amount on two collections). Ambiguity must not be resolved by
+-- arrival order.
+DO $$
+BEGIN
+  PERFORM pg_temp.mk_collection(
+    'fe-h3a', 6400, 'cat-h3', 'Route', 'fin-cash', 'PairLate');
+  PERFORM pg_temp.mk_collection(
+    'fe-h3b', 6400, 'cat-h3', 'Route', 'fin-cash', 'PairLate');
+  PERFORM public.pos_delete_finance_entry(
+    'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'fin-cash', 'fe-h3a');
+  PERFORM public.pos_delete_finance_entry(
+    'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'fin-cash', 'fe-h3b');
+END $$;
+SELECT pg_temp.expect_error('H3 doubly-linked match is ambiguous',
+  'SELECT public.pos_add_cash_movement(''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'',''fin-cash'','
+  '(SELECT id FROM public.shifts WHERE customer_id = ''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'' AND status = ''OPEN'' LIMIT 1),'||
+  '''WITHDRAWAL'', 6400, ''Reversal: deleted cash collection from PairLate (Route)'', NULL, ''leg-h3-late'', NULL)',
+  'LEGACY_REVERSAL_AMBIGUOUS');
+SELECT pg_temp.expect_true('H3 both reversals preserved, nothing added',
+  (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND reason = 'Reversal: deleted cash collection from PairLate (Route)'
+      AND amount_minor_units = 6400
+      AND source_finance_entry_id IN ('fe-h3a','fe-h3b')) = 2
+  AND (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'leg-h3-late') = 0,
+  'one reversal per collection stands; the ambiguous push wrote nothing');
+
+-- ================================================================ H4 ======
+-- Test D — separate push batches. The staged DELETED entry applies first
+-- and earns its server reversal; the old-format movement arrives in a
+-- LATER sync_apply call and must still dedup to it.
+SELECT pg_temp.stage(
+  'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'finance_category', 'cat-h4',
+  jsonb_build_object('finance_category', jsonb_build_object(
+    'name', 'StagedLate', 'created_at', now(), 'updated_at', now())),
+  pg_temp.fgrant('cash'));
+SELECT pg_temp.stage(
+  'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'finance_entry', 'fe-h4',
+  jsonb_build_object('finance_entry', jsonb_build_object(
+    'category_id', 'cat-h4', 'source', 'Pier',
+    'amount_minor_units', 6600, 'description', 'late batch delete',
+    'status', 'DELETED', 'payment_method', 'CASH',
+    'created_by', 'fin-cash', 'completed_by', 'fin-cash',
+    'deleted_by', 'fin-cash',
+    'entry_date', now(), 'created_at', now(), 'updated_at', now())),
+  pg_temp.fgrant('cash'),
+  jsonb_build_object('fin-cash', pg_temp.fhash('cash')));
+SELECT public.pos_sync_apply('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 600, 'fp-fin1');
+SELECT pg_temp.expect_true('H4 server reversal exists after first batch',
+  (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND source_finance_entry_id = 'fe-h4' AND type = 'WITHDRAWAL') = 1,
+  'delete applied with its own linked reversal');
+-- Second, separate batch: the old-format unlinked push.
+SELECT pg_temp.stage(
+  'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'cash_movement', 'cm-h4-late',
+  jsonb_build_object('cash_movement', jsonb_build_object(
+    'type', 'WITHDRAWAL', 'amount_minor_units', 6600,
+    'reason', 'Reversal: deleted cash collection from StagedLate (Pier)',
+    'user_id', 'fin-cash')),
+  pg_temp.fgrant('cash'));
+SELECT public.pos_sync_apply('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 601, 'fp-fin1');
+SELECT pg_temp.expect_true('H4 late staged movement dedups across batches',
+  (SELECT apply_status FROM public.sync_mirror
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND entity_type = 'cash_movement' AND entity_id = 'cm-h4-late') = 'APPLIED'
+  AND (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND source_finance_entry_id = 'fe-h4' AND type = 'WITHDRAWAL') = 1
+  AND (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND reason = 'Reversal: deleted cash collection from StagedLate (Pier)'
+      AND amount_minor_units = 6600) = 1,
+  'exactly one reversal stands across both push batches');
+
+-- ================================================================ I1 ======
+-- Operator resolution. fe-i1 has a plausible unlinked reversal (same
+-- amount, reversal-shaped reason, DIFFERENT actor) that blocks the delete.
+-- An explicit UNRELATED verdict for THIS collection unblocks it — the
+-- movement row itself is never touched.
+DO $$
+BEGIN
+  PERFORM pg_temp.mk_collection(
+    'fe-i1', 7500, 'cat-i1', 'Floor', 'fin-cash', 'OpsCat');
+  PERFORM pg_temp.mk_legacy_reversal(
+    'leg-i1', 7500, 'OpsCat', 'Floor', 'fin-cash2',
+    (SELECT id FROM public.shifts
+      WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        AND status = 'OPEN' LIMIT 1));
+END $$;
+SELECT pg_temp.expect_error('I1 plausible reversal blocks the delete first',
+  'SELECT public.pos_delete_finance_entry(''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'',''fin-cash'',''fe-i1'')',
+  'LEGACY_REVERSAL_AMBIGUOUS');
+SELECT public.pos_mark_movement_unrelated(
+  'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'leg-i1', 'fe-i1',
+  'fin-owner', 'belongs to a different till''s collection');
+SELECT pg_temp.expect_true('I1 UNRELATED verdict is recorded and audited',
+  (SELECT resolution FROM public.cash_movement_reconciliations
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND movement_id = 'leg-i1' AND finance_entry_id = 'fe-i1')
+      = 'UNRELATED'
+  AND (SELECT resolved_by FROM public.cash_movement_reconciliations
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND movement_id = 'leg-i1' AND finance_entry_id = 'fe-i1')
+      = 'fin-owner'
+  AND (SELECT count(*) FROM public.pos_audit_logs
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND action = 'LEGACY_REVERSAL_MARKED_UNRELATED') >= 1,
+  'durable verdict + audit row, movement untouched');
+SELECT public.pos_delete_finance_entry(
+  'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'fin-cash', 'fe-i1');
+SELECT pg_temp.expect_true('I1 delete proceeds after explicit resolution',
+  (SELECT status FROM public.pos_finance_entries
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'fe-i1') = 'DELETED'
+  AND (SELECT source_finance_entry_id FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'leg-i1') IS NULL
+  AND (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND source_finance_entry_id = 'fe-i1' AND type = 'WITHDRAWAL') = 1,
+  'server wrote its own reversal; leg-i1 preserved unlinked for review');
+
+-- ================================================================ I2 ======
+-- The verdict is scoped to (movement, collection): the SAME movement still
+-- blocks a DIFFERENT collection that generates the same plausible match.
+DO $$
+BEGIN
+  PERFORM pg_temp.mk_collection(
+    'fe-i2', 7500, 'cat-i1', 'Floor', 'fin-cash', 'OpsCat');
+END $$;
+SELECT pg_temp.expect_error('I2 verdict for fe-i1 does not unblock fe-i2',
+  'SELECT public.pos_delete_finance_entry(''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'',''fin-cash'',''fe-i2'')',
+  'LEGACY_REVERSAL_AMBIGUOUS');
+SELECT public.pos_mark_movement_unrelated(
+  'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'leg-i1', 'fe-i2',
+  'fin-owner', 'confirmed unrelated to this collection too');
+SELECT public.pos_delete_finance_entry(
+  'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'fin-cash', 'fe-i2');
+SELECT pg_temp.expect_true('I2 per-collection resolution converges',
+  (SELECT status FROM public.pos_finance_entries
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'fe-i2') = 'DELETED'
+  AND (SELECT source_finance_entry_id FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'leg-i1') IS NULL,
+  'each collection needed its own verdict; leg-i1 still untouched');
 
 SELECT 'request3_financial_integrity: ALL PASSED' AS result;

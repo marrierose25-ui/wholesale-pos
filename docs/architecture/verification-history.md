@@ -725,3 +725,28 @@ Corrections in this commit:
   reversal: plausible unlinked reversals (same amount, reversal-shaped
   reason) defer the delete with `LEGACY_REVERSAL_AMBIGUOUS` instead of
   risking a duplicate server-written leg.
+
+### Late legacy reversal dedup + operator resolution (same branch)
+
+| Check | Command | Result |
+| --- | --- | --- |
+| PG cold replay | `replay_migrations.sh` | **exit 0 — 12 migrations applied** (incl. `20261206000000_request3_late_reversal_dedup`) |
+| Request 3 financial integrity | `psql -f request3_financial_integrity_test.sql` | **ALL PASSED** — 34 assertions (F/G/H/I sections) |
+| All four concurrency scripts | as in CI | **ALL PASSED** |
+| H1 / Request 2 / actor-auth / acceptance SQL | as in CI | **ALL PASSED** |
+| Deno fmt/check/tests | as in CI | fmt clean, **81 passed, 0 failed** |
+| Flutter analyze / test / web build | as in CI | **0 issues**, **768 passed, 1 skipped**, web build PASS |
+
+Corrections in this commit:
+
+- **Late-arrival dedup.** `pos_add_cash_movement_unchecked` now checks
+  LINKED reversals before inserting an unlinked legacy withdrawal: same
+  reason text + amount + actor evidence, strong AND weak counts both one
+  returns the existing movement as `duplicate: true`; anything weaker
+  raises `LEGACY_REVERSAL_AMBIGUOUS` so `pos_sync_apply` defers the row
+  PENDING instead of acknowledging an uncertain outcome.
+- **Operator resolution.** New `cash_movement_reconciliations` table +
+  `pos_mark_movement_unrelated` record an audited per-(movement,
+  collection) `UNRELATED` verdict; the plausible-reversal blocker honours
+  it, the movement row is never modified, and manual source-linking
+  remains for genuine matches.

@@ -421,17 +421,41 @@ enforced in code and covered by a test.
   while a plausible old reversal (same amount, reversal-shaped reason)
   might already exist. A genuinely absent reversal still produces exactly
   one server-written leg.
+  **Late arrivals** (`20261206000000_request3_late_reversal_dedup`). An
+  old-format unlinked withdrawal can reach the cloud AFTER the collection's
+  reversal already exists — server-written, or device-written and adopted
+  at delete time — in a later batch or after the entry reached DELETED.
+  Before inserting an unlinked legacy withdrawal, the insert path checks
+  the recorded linked reversals: same reason text + amount + actor
+  evidence. Exactly one strong AND one weak candidate means it is the same
+  money already in the drawer — the existing movement id is returned as
+  `duplicate: true` and nothing new is written. Conflicting or ambiguous
+  evidence raises `LEGACY_REVERSAL_AMBIGUOUS`, which `pos_sync_apply`
+  defers as PENDING with the durable marker — the push is never
+  acknowledged and the payload stays in `sync_mirror` for review.
   **Operator resolution:** there is no dedicated UI — resolution is a
-  deliberate database action. Inspect the unlinked `cash_movements` rows
-  (`source_finance_entry_id IS NULL`, `type = 'WITHDRAWAL'`) against the
-  pending `sync_mirror`/`pos_finance_entries` rows, then set the correct
-  movement's `source_finance_entry_id` to the collection id (or leave it
-  unlinked to let the server write the reversal). Re-run sync apply; the
-  deferred entry converges. Devices with older pending outbox records do
-  NOT need a special upgrade step for the common case — uniquely
-  attributable records reconcile automatically on the next push — but
-  records that land in the ambiguous states above wait for manual
-  resolution rather than being silently reconciled.
+  deliberate database action. Two cases:
+  - The movement DOES belong to the collection: set its
+    `source_finance_entry_id` to the collection id
+    (`UPDATE cash_movements SET source_finance_entry_id = '<entry>' WHERE
+    customer_id = '<tenant>' AND id = '<movement>';`), then re-run sync
+    apply — the deferred entry converges.
+  - The movement does NOT belong to that collection (e.g. an unrelated
+    same-amount reversal from another till): record an explicit, audited
+    verdict — `SELECT pos_mark_movement_unrelated('<tenant>',
+    '<movement>', '<entry>', '<operator>', '<note>');`. This writes a
+    `cash_movement_reconciliations` row (`resolution = 'UNRELATED'`,
+    operator, timestamp, note) plus a `LEGACY_REVERSAL_MARKED_UNRELATED`
+    audit entry. The movement itself is NEVER modified or deleted. The
+    verdict is scoped to the (movement, collection) pair: it unblocks only
+    that collection's delete, which then writes its own server reversal.
+    To reverse a mistaken verdict, delete the reconciliation row.
+  Devices with older pending outbox records do NOT need a special upgrade
+  step for the common case — uniquely attributable records reconcile
+  automatically on the next push, and late duplicates converge on the
+  existing linked reversal — but records that land in the ambiguous
+  states above wait for one of the two manual resolutions rather than
+  being silently reconciled.
 * **First-owner bootstrap** (Request 3 acceptance). A native install creates
   its OWNER offline and reconciles through pos-api's `setup_owner` (activation
   code + one-owner policy + rate limits), passing the local user id and its
