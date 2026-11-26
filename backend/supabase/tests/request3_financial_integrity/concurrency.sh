@@ -115,4 +115,105 @@ if [ "$ID1" != "$ID2" ]; then
 fi
 echo "PASS D: one deposit survived; both callers converged on $ID1"
 
-echo "== Request-3 cash-leg concurrency: ALL PASSED =="
+echo "== C: two deletes competing for ONE shared legacy reversal =="
+# fe-c1 and fe-c2 generate the IDENTICAL reversal reason (same category,
+# source, amount, actor) — leg-c1 fits both, so bidirectional uniqueness
+# must refuse BOTH deletes instead of letting arrival order pick a winner.
+$PSQL <<SQL
+INSERT INTO pos_finance_categories (id, customer_id, name, created_at)
+VALUES ('cat-race-c', '$CUST', 'SharedCat', now())
+ON CONFLICT (customer_id, id) DO NOTHING;
+INSERT INTO pos_finance_entries (id, customer_id, category_id, source,
+  amount_minor_units, description, status, entry_date, created_at,
+  created_by, completed_at, completed_by, updated_at, payment_method)
+VALUES ('fe-c1', '$CUST', 'cat-race-c', 'Route', 9000, 'race c1', 'COMPLETED',
+        now(), now(), 'race-cash', now(), 'race-cash', now(), 'CASH'),
+       ('fe-c2', '$CUST', 'cat-race-c', 'Route', 9000, 'race c2', 'COMPLETED',
+        now(), now(), 'race-cash', now(), 'race-cash', now(), 'CASH');
+INSERT INTO cash_movements (id, customer_id, shift_id, user_id, type,
+  amount_minor_units, reason, created_at, source_finance_entry_id)
+VALUES ('dep-fe-c1', '$CUST', '$SHIFT', 'race-cash', 'DEPOSIT', 9000,
+        'Collected from SharedCat', now(), 'fe-c1'),
+       ('dep-fe-c2', '$CUST', '$SHIFT', 'race-cash', 'DEPOSIT', 9000,
+        'Collected from SharedCat', now(), 'fe-c2'),
+       ('leg-c1', '$CUST', '$SHIFT', 'race-cash', 'WITHDRAWAL', 9000,
+        'Reversal: deleted cash collection from SharedCat (Route)', now(), NULL);
+SQL
+( $PSQL -c "SELECT pos_delete_finance_entry('$CUST','race-cash','fe-c1')" ) \
+  > /tmp/r3fin_c1.out 2>/tmp/r3fin_c1.err &
+P1=$!
+( $PSQL -c "SELECT pos_delete_finance_entry('$CUST','race-cash','fe-c2')" ) \
+  > /tmp/r3fin_c2.out 2>/tmp/r3fin_c2.err &
+P2=$!
+RC1=0; RC2=0
+wait $P1 || RC1=$?
+wait $P2 || RC2=$?
+if [ $RC1 -eq 0 ] || [ $RC2 -eq 0 ]; then
+  echo "FAIL C: a shared-reversal delete succeeded — order picked a winner" >&2
+  cat /tmp/r3fin_c1.out /tmp/r3fin_c2.out >&2
+  exit 1
+fi
+grep -q "LEGACY_REVERSAL_AMBIGUOUS" /tmp/r3fin_c1.err || {
+  echo "FAIL C: fe-c1 failed for the wrong reason: $(cat /tmp/r3fin_c1.err)" >&2; exit 1; }
+grep -q "LEGACY_REVERSAL_AMBIGUOUS" /tmp/r3fin_c2.err || {
+  echo "FAIL C: fe-c2 failed for the wrong reason: $(cat /tmp/r3fin_c2.err)" >&2; exit 1; }
+N=$($PSQL -c "SELECT count(*) FROM pos_finance_entries WHERE customer_id='$CUST' AND id IN ('fe-c1','fe-c2') AND status='DELETED'")
+if [ "$N" != "0" ]; then
+  echo "FAIL C: $N shared-reversal entries were deleted" >&2
+  exit 1
+fi
+L=$($PSQL -c "SELECT count(*) FROM cash_movements WHERE customer_id='$CUST' AND id='leg-c1' AND source_finance_entry_id IS NULL")
+W=$($PSQL -c "SELECT count(*) FROM cash_movements WHERE customer_id='$CUST' AND source_finance_entry_id IN ('fe-c1','fe-c2') AND type='WITHDRAWAL'")
+if [ "$L" != "1" ] || [ "$W" != "0" ]; then
+  echo "FAIL C: movement state corrupted (unlinked=$L withdrawals=$W)" >&2
+  exit 1
+fi
+echo "PASS C: both deletes refused; movement preserved unlinked; no reversal written"
+
+echo "== D: movement claimed by another transaction before the link UPDATE =="
+# fe-d1 has exactly one matching legacy reversal leg-d1. Transaction A
+# claims leg-d1 for 'fe-other' and holds the row lock; delete(fe-d1) must
+# lose the UPDATE race, re-read the real association, recompute, and write
+# its OWN server reversal — never adopt a movement that belongs elsewhere.
+$PSQL <<SQL
+INSERT INTO pos_finance_categories (id, customer_id, name, created_at)
+VALUES ('cat-race-d', '$CUST', 'SoloCat', now())
+ON CONFLICT (customer_id, id) DO NOTHING;
+INSERT INTO pos_finance_entries (id, customer_id, category_id, source,
+  amount_minor_units, description, status, entry_date, created_at,
+  created_by, completed_at, completed_by, updated_at, payment_method)
+VALUES ('fe-d1', '$CUST', 'cat-race-d', 'Alone', 9500, 'race d1', 'COMPLETED',
+        now(), now(), 'race-cash', now(), 'race-cash', now(), 'CASH');
+INSERT INTO cash_movements (id, customer_id, shift_id, user_id, type,
+  amount_minor_units, reason, created_at, source_finance_entry_id)
+VALUES ('dep-fe-d1', '$CUST', '$SHIFT', 'race-cash', 'DEPOSIT', 9500,
+        'Collected from SoloCat', now(), 'fe-d1'),
+       ('leg-d1', '$CUST', '$SHIFT', 'race-cash', 'WITHDRAWAL', 9500,
+        'Reversal: deleted cash collection from SoloCat (Alone)', now(), NULL);
+SQL
+# Session A: claim leg-d1 inside an open transaction, hold ~4s.
+( printf 'BEGIN;\nUPDATE cash_movements SET source_finance_entry_id='"'"'fe-other'"'"' WHERE customer_id='"'"'%s'"'"' AND id='"'"'leg-d1'"'"';\nSELECT pg_sleep(4);\nCOMMIT;\n' "$CUST" \
+  | $PSQL > /tmp/r3fin_dA.out 2>/tmp/r3fin_dA.err ) &
+PA=$!
+sleep 1
+# Session B: delete fe-d1 while A holds the movement lock.
+( $PSQL -c "SELECT pos_delete_finance_entry('$CUST','race-cash','fe-d1')" ) \
+  > /tmp/r3fin_dB.out 2>/tmp/r3fin_dB.err &
+PB=$!
+RCB=0
+wait $PB || RCB=$?
+wait $PA || true
+if [ $RCB -ne 0 ]; then
+  echo "FAIL D: delete errored instead of recovering: $(cat /tmp/r3fin_dB.err)" >&2
+  exit 1
+fi
+ST=$($PSQL -c "SELECT status FROM pos_finance_entries WHERE customer_id='$CUST' AND id='fe-d1'")
+SRC=$($PSQL -c "SELECT source_finance_entry_id FROM cash_movements WHERE customer_id='$CUST' AND id='leg-d1'")
+OWN=$($PSQL -c "SELECT count(*) FROM cash_movements WHERE customer_id='$CUST' AND source_finance_entry_id='fe-d1' AND type='WITHDRAWAL' AND id <> 'leg-d1'")
+if [ "$ST" != "DELETED" ] || [ "$SRC" != "fe-other" ] || [ "$OWN" != "1" ]; then
+  echo "FAIL D: status=$ST leg-d1.source=$SRC own-reversals=$OWN" >&2
+  exit 1
+fi
+echo "PASS D: lost claim race recovered — fe-d1 deleted with its own reversal, leg-d1 stayed with fe-other"
+
+echo "== Request-3 financial-integrity concurrency: ALL PASSED =="

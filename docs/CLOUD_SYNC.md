@@ -397,23 +397,41 @@ enforced in code and covered by a test.
   `ON CONFLICT DO NOTHING`, so two devices racing different movement ids for
   the same leg converge on one row — the loser is handed the existing
   movement, never a financial failure.
-* **Legacy unlinked reversals** (Request 3 financial integrity). Tills that
-  queued a cash reversal before `source_finance_entry_id` existed send a
-  WITHDRAWAL with no collection link. The server never matches on amount
-  alone: a legacy leg is adopted only when its EXACT generated reason
-  (`Reversal: deleted cash collection from <category> (<source>)`), amount,
-  and actor evidence identify exactly ONE collection — either at movement
-  insert (`pos_legacy_reversal_entry_candidates`) or at delete time
-  (`pos_legacy_reversal_candidates`, which then links the movement and
-  audits `LEGACY_REVERSAL_LINKED`). Two or more matching unlinked reversals
-  are ambiguous: the delete refuses with `LEGACY_REVERSAL_AMBIGUOUS`, the
-  staged `finance_entry` stays PENDING with that durable marker (payload and
-  movements preserved, nothing acknowledged), and an operator links the
-  correct movement before retry. A missing reversal still gets exactly one
-  server-written leg; a uniquely identifiable one is never duplicated.
-  Devices with older pending outbox records need no special upgrade step:
-  the next sync push carries the same payload and the server reconciles it
-  under the rules above.
+* **Legacy unlinked reversals** (Request 3 financial integrity, hardened by
+  `20261205000000_request3_legacy_reversal_safety`). Tills that queued a cash
+  reversal before `source_finance_entry_id` existed send a WITHDRAWAL with
+  no collection link. The server never matches on amount alone, and exact
+  reason text is not proof of uniqueness either. A legacy leg is adopted
+  only when ALL of these hold: the EXACT generated reason
+  (`Reversal: deleted cash collection from <category> (<source>)`), the
+  amount, AND actor evidence (movement user equals the entry's
+  `deleted_by`/`completed_by` or the delete-time actor — a missing
+  `deleted_by` no longer bypasses actor checking) point at exactly ONE
+  collection, AND the bidirectional check proves that movement could not
+  belong to any OTHER collection (strong and weak candidate counts both
+  equal one). Adoption is atomic (`UPDATE ... RETURNING`); a movement
+  claimed by a concurrent delete is re-read and candidates recomputed —
+  processing order never assigns the leg.
+  Everything less stays unresolved: two or more matching movements, one
+  movement matching multiple collections, a category rename that broke the
+  stored reason, a reason/source mismatch, or insufficient actor evidence
+  all leave the staged `finance_entry` PENDING with a durable
+  `LEGACY_REVERSAL_AMBIGUOUS` marker — the payload and every movement are
+  preserved, nothing is acknowledged, and NO server reversal is written
+  while a plausible old reversal (same amount, reversal-shaped reason)
+  might already exist. A genuinely absent reversal still produces exactly
+  one server-written leg.
+  **Operator resolution:** there is no dedicated UI — resolution is a
+  deliberate database action. Inspect the unlinked `cash_movements` rows
+  (`source_finance_entry_id IS NULL`, `type = 'WITHDRAWAL'`) against the
+  pending `sync_mirror`/`pos_finance_entries` rows, then set the correct
+  movement's `source_finance_entry_id` to the collection id (or leave it
+  unlinked to let the server write the reversal). Re-run sync apply; the
+  deferred entry converges. Devices with older pending outbox records do
+  NOT need a special upgrade step for the common case — uniquely
+  attributable records reconcile automatically on the next push — but
+  records that land in the ambiguous states above wait for manual
+  resolution rather than being silently reconciled.
 * **First-owner bootstrap** (Request 3 acceptance). A native install creates
   its OWNER offline and reconciles through pos-api's `setup_owner` (activation
   code + one-owner policy + rate limits), passing the local user id and its

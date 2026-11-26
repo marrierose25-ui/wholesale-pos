@@ -698,3 +698,30 @@ Corrections in this commit:
 - **CI.** The `supabase-replay` PostgreSQL 17 job now also runs the Request
   3 owner-bootstrap concurrency script, the new financial-integrity SQL
   suite, and the cash-movement concurrency script — previously local-only.
+
+### Legacy reversal safety follow-up (same branch)
+
+| Check | Command | Result |
+| --- | --- | --- |
+| PG cold replay | `replay_migrations.sh` | **exit 0 — 11 migrations applied** (incl. `20261205000000_request3_legacy_reversal_safety`) |
+| Request 3 financial integrity | `psql -f request3_financial_integrity_test.sql` | **ALL PASSED** — 23 assertions (F1–F6 + G1/G4/G5/G6) |
+| Financial-integrity concurrency | `concurrency.sh` | **ALL PASSED** — incl. competing deletes (C) and claim-before-update race (D) |
+| H1 / Request 2 / actor-auth / acceptance SQL + all four concurrency scripts | as in CI | **ALL PASSED** |
+| Deno fmt/check/tests | as in CI | fmt clean, **81 passed, 0 failed** |
+| Flutter analyze / test / web build | as in CI | **0 issues**, **768 passed, 1 skipped**, web build PASS |
+
+Corrections in this commit:
+
+- **Bidirectional uniqueness.** A legacy reversal is adopted only when it
+  strongly matches one collection AND that collection is the movement's
+  only possible owner (strong and weak entry-candidate counts both one).
+- **Actor evidence enforced.** `pos_legacy_actor_ok` requires the movement
+  user to equal a non-null `deleted_by`, `completed_by`, or delete-time
+  actor; the `deleted_by IS NULL` bypass is removed — missing evidence is
+  ambiguity, not a match.
+- **Safe link adoption.** `UPDATE ... RETURNING` detects lost races; the
+  real association is re-read and candidates recomputed (bounded loop).
+- **Fail-safe text matching.** Zero exact candidates no longer implies no
+  reversal: plausible unlinked reversals (same amount, reversal-shaped
+  reason) defer the delete with `LEGACY_REVERSAL_AMBIGUOUS` instead of
+  risking a duplicate server-written leg.

@@ -21,6 +21,20 @@
 --       then converge after the operator links the right movement
 --   F6  new-format dedup through sync: two staged WITHDRAWALs and one
 --       staged DEPOSIT for the same collection each land exactly once
+--   G1  bidirectional uniqueness: one unlinked reversal matching TWO
+--       collections is claimed by NEITHER — both deletes defer
+--   G4  category rename: exact reason no longer matches, but a plausible
+--       unlinked reversal blocks the server fallback — delete deferred,
+--       no duplicate drawer movement (direct RPC + staged path)
+--   G5  reason/source mismatch: a reversal-shaped unlinked withdrawal of
+--       the same amount is still "possible old reversal" evidence — the
+--       delete defers instead of writing a second reversal
+--   G6  actor mismatch: exact reason + amount but wrong actor — no
+--       automatic association, delete deferred
+--   G7  genuinely missing reversal: exactly one server-written leg
+--       (covered by the fe-f7 assertion in F6)
+--   G8-G10 exact-unique match, multi-withdrawal ambiguity and new-format
+--       dedup remain covered by F2/F3/F5/F6 above
 --
 -- psql -v ON_ERROR_STOP=1 -f request3_financial_integrity_test.sql
 
@@ -165,7 +179,9 @@ VALUES
   ('fin-owner', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'fin-owner', 'OWNER',
    's', 'h-o', true, '[]'::jsonb),
   ('fin-cash', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'fin-cash', 'CASHIER',
-   's', 'h-c', true, '["pos","register","finance"]'::jsonb);
+   's', 'h-c', true, '["pos","register","finance"]'::jsonb),
+  ('fin-cash2', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'fin-cash2', 'CASHIER',
+   's', 'h-c2', true, '["pos","register","finance"]'::jsonb);
 
 CREATE TEMP TABLE fin_grants (label text PRIMARY KEY, token text NOT NULL);
 INSERT INTO fin_grants (label, token) VALUES
@@ -520,5 +536,170 @@ SELECT pg_temp.expect_true('F6 missing reversal produces exactly one leg',
     WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
       AND source_finance_entry_id = 'fe-f7' AND type = 'DEPOSIT') = 1,
   'server fallback wrote the single reversal for fe-f7');
+
+-- ================================================================ G1 ======
+-- Bidirectional uniqueness: ONE unlinked reversal whose reason+amount fit
+-- TWO different collections (same category name, source and amount). It
+-- must be claimed by NEITHER — processing order cannot pick a winner.
+DO $$
+BEGIN
+  -- Same category id/name, same source, same amount: both entries generate
+  -- the identical reversal reason, so leg-g1 fits both of them.
+  PERFORM pg_temp.mk_collection(
+    'fe-g1', 5000, 'cat-g', 'Route', 'fin-cash', 'SharedCat');
+  PERFORM pg_temp.mk_collection(
+    'fe-g2', 5000, 'cat-g', 'Route', 'fin-cash', 'SharedCat');
+  PERFORM pg_temp.mk_legacy_reversal(
+    'leg-g1', 5000, 'SharedCat', 'Route', 'fin-cash',
+    (SELECT id FROM public.shifts
+      WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        AND status = 'OPEN' LIMIT 1));
+END $$;
+SELECT pg_temp.expect_error('G1 shared reversal cannot be claimed by fe-g1',
+  'SELECT public.pos_delete_finance_entry(''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'',''fin-cash'',''fe-g1'')',
+  'LEGACY_REVERSAL_AMBIGUOUS');
+SELECT pg_temp.expect_error('G1 shared reversal cannot be claimed by fe-g2',
+  'SELECT public.pos_delete_finance_entry(''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'',''fin-cash'',''fe-g2'')',
+  'LEGACY_REVERSAL_AMBIGUOUS');
+SELECT pg_temp.expect_true('G1 neither collection claimed the movement',
+  (SELECT count(*) FROM public.pos_finance_entries
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id IN ('fe-g1','fe-g2') AND status = 'COMPLETED') = 2
+  AND (SELECT source_finance_entry_id FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'leg-g1') IS NULL
+  AND (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND source_finance_entry_id IN ('fe-g1','fe-g2')
+      AND type = 'WITHDRAWAL') = 0,
+  'both entries still COMPLETED, movement unlinked, no reversal written');
+
+-- ================================================================ G4 ======
+-- Category rename while a device is offline: the stored reversal reason
+-- still names the OLD category, so exact matching finds nothing — but the
+-- plausible-reversal check must stop the server fallback from writing a
+-- second drawer movement.
+DO $$
+BEGIN
+  PERFORM pg_temp.mk_collection(
+    'fe-g4', 7000, 'cat-g4', 'Shop', 'fin-cash', 'OldCatName');
+  UPDATE public.pos_finance_categories SET name = 'NewCatName'
+  WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+    AND id = 'cat-g4';
+  PERFORM pg_temp.mk_legacy_reversal(
+    'leg-g4', 7000, 'OldCatName', 'Shop', 'fin-cash',
+    (SELECT id FROM public.shifts
+      WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        AND status = 'OPEN' LIMIT 1));
+END $$;
+SELECT pg_temp.expect_error('G4 renamed category defers instead of duplicating',
+  'SELECT public.pos_delete_finance_entry(''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'',''fin-cash'',''fe-g4'')',
+  'LEGACY_REVERSAL_AMBIGUOUS');
+SELECT pg_temp.expect_true('G4 no server reversal was written',
+  (SELECT status FROM public.pos_finance_entries
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'fe-g4') = 'COMPLETED'
+  AND (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND source_finance_entry_id = 'fe-g4' AND type = 'WITHDRAWAL') = 0
+  AND (SELECT source_finance_entry_id FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'leg-g4') IS NULL,
+  'entry preserved, old reversal preserved unlinked, zero new legs');
+-- Same scenario through the staged offline path: the delete must stay
+-- PENDING with the durable marker, payload intact.
+SELECT pg_temp.stage(
+  'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'finance_category', 'cat-g6',
+  jsonb_build_object('finance_category', jsonb_build_object(
+    'name', 'RenamedNow', 'created_at', now(), 'updated_at', now())),
+  pg_temp.fgrant('cash'));
+SELECT pg_temp.stage(
+  'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'cash_movement', 'cm-g6',
+  jsonb_build_object('cash_movement', jsonb_build_object(
+    'type', 'WITHDRAWAL', 'amount_minor_units', 4500,
+    'reason', 'Reversal: deleted cash collection from RenamedBefore (Yard)',
+    'user_id', 'fin-cash')),
+  pg_temp.fgrant('cash'));
+SELECT pg_temp.stage(
+  'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'finance_entry', 'fe-g6',
+  jsonb_build_object('finance_entry', jsonb_build_object(
+    'category_id', 'cat-g6', 'source', 'Yard',
+    'amount_minor_units', 4500, 'description', 'renamed category staged',
+    'status', 'DELETED', 'payment_method', 'CASH',
+    'created_by', 'fin-cash', 'completed_by', 'fin-cash',
+    'deleted_by', 'fin-cash',
+    'entry_date', now(), 'created_at', now(), 'updated_at', now())),
+  pg_temp.fgrant('cash'),
+  jsonb_build_object('fin-cash', pg_temp.fhash('cash')));
+SELECT public.pos_sync_apply('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 500, 'fp-fin1');
+SELECT pg_temp.expect_true('G4 staged rename stays PENDING with marker',
+  (SELECT apply_status FROM public.sync_mirror
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND entity_type = 'finance_entry' AND entity_id = 'fe-g6') = 'PENDING'
+  AND (SELECT apply_error FROM public.sync_mirror
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND entity_type = 'finance_entry' AND entity_id = 'fe-g6')
+    LIKE 'LEGACY_REVERSAL_AMBIGUOUS%'
+  AND (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND source_finance_entry_id = 'fe-g6' AND type = 'WITHDRAWAL') = 0,
+  'staged delete deferred; no duplicate server withdrawal');
+
+-- ================================================================ G5 ======
+-- Reason/source mismatch: an unlinked reversal-shaped withdrawal of the
+-- same amount exists but names a DIFFERENT collection. It is still possible
+-- old-reversal evidence — the delete must defer, not write a second leg.
+DO $$
+BEGIN
+  PERFORM pg_temp.mk_collection(
+    'fe-g5', 5500, 'cat-g5', 'Dock', 'fin-cash', 'RealCat');
+  PERFORM pg_temp.mk_legacy_reversal(
+    'leg-g5', 5500, 'WrongCat', 'Elsewhere', 'fin-cash',
+    (SELECT id FROM public.shifts
+      WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        AND status = 'OPEN' LIMIT 1));
+END $$;
+SELECT pg_temp.expect_error('G5 mismatched reason defers the delete',
+  'SELECT public.pos_delete_finance_entry(''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'',''fin-cash'',''fe-g5'')',
+  'LEGACY_REVERSAL_AMBIGUOUS');
+SELECT pg_temp.expect_true('G5 plausible movement preserved, no new leg',
+  (SELECT status FROM public.pos_finance_entries
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'fe-g5') = 'COMPLETED'
+  AND (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND source_finance_entry_id = 'fe-g5' AND type = 'WITHDRAWAL') = 0
+  AND (SELECT source_finance_entry_id FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'leg-g5') IS NULL,
+  'possible old reversal kept for operator review; nothing duplicated');
+
+-- ================================================================ G6 ======
+-- Actor mismatch: reason and amount match EXACTLY but the movement belongs
+-- to a different user. No automatic association — the delete defers.
+DO $$
+BEGIN
+  PERFORM pg_temp.mk_collection(
+    'fe-g7', 6500, 'cat-g7', 'Bay', 'fin-cash', 'ActorCat');
+  PERFORM pg_temp.mk_legacy_reversal(
+    'leg-g7', 6500, 'ActorCat', 'Bay', 'fin-cash2',
+    (SELECT id FROM public.shifts
+      WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        AND status = 'OPEN' LIMIT 1));
+END $$;
+SELECT pg_temp.expect_error('G6 actor mismatch defers the delete',
+  'SELECT public.pos_delete_finance_entry(''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'',''fin-cash'',''fe-g7'')',
+  'LEGACY_REVERSAL_AMBIGUOUS');
+SELECT pg_temp.expect_true('G6 wrong-actor movement never auto-linked',
+  (SELECT status FROM public.pos_finance_entries
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'fe-g7') = 'COMPLETED'
+  AND (SELECT source_finance_entry_id FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'leg-g7') IS NULL
+  AND (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND source_finance_entry_id = 'fe-g7' AND type = 'WITHDRAWAL') = 0,
+  'mismatched actor is not evidence; nothing was guessed or written');
 
 SELECT 'request3_financial_integrity: ALL PASSED' AS result;
