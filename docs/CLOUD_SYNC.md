@@ -373,7 +373,7 @@ enforced in code and covered by a test.
   pretending the requeue did anything. Unchecked `*_unchecked` money RPCs
   are not executable by `service_role` — only the permission-checked
   wrappers are.
-* **Per-actor finance attribution** (Request 3 acceptance). 
+* **Per-actor finance attribution** (Request 3 acceptance).
   `sync_mirror.actor_grant_hashes` carries one grant digest per actor the
   payload names (`created_by`, `completed_by`, `deleted_by`), so a finance
   entry created by cashier A and completed by cashier B lands with
