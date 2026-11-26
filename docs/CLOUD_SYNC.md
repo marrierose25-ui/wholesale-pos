@@ -435,12 +435,12 @@ enforced in code and covered by a test.
   acknowledged and the payload stays in `sync_mirror` for review.
   **Operator resolution:** there is no dedicated UI — resolution is a
   deliberate database action. Two cases:
-  - The movement DOES belong to the collection: set its
+  * The movement DOES belong to the collection: set its
     `source_finance_entry_id` to the collection id
     (`UPDATE cash_movements SET source_finance_entry_id = '<entry>' WHERE
     customer_id = '<tenant>' AND id = '<movement>';`), then re-run sync
     apply — the deferred entry converges.
-  - The movement does NOT belong to that collection (e.g. an unrelated
+  * The movement does NOT belong to that collection (e.g. an unrelated
     same-amount reversal from another till): record an explicit, audited
     verdict — `SELECT pos_mark_movement_unrelated('<tenant>',
     '<movement>', '<entry>', '<operator>', '<note>');`. This writes a
