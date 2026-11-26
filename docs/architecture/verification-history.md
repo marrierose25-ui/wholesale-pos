@@ -780,3 +780,18 @@ Corrections in this commit:
   "delete the reconciliation row": removes the verdict AND writes
   `LEGACY_REVERSAL_UNRELATED_REVOKED`, preserving the original
   `MARKED_UNRELATED` audit event.
+
+### Manual-link amount integrity (same branch)
+
+| Check | Command | Result |
+| --- | --- | --- |
+| PG cold replay | `replay_migrations.sh` | **exit 0 — 14 migrations applied** (incl. `20261208000000_request3_manual_link_amount`) |
+| Request 3 financial integrity | `psql -f request3_financial_integrity_test.sql` | **ALL PASSED** — 51 assertions (incl. J3–J5) |
+| All four concurrency scripts | as in CI | **ALL PASSED** |
+| H1 / Request 2 / actor-auth / acceptance SQL | as in CI | **ALL PASSED** |
+| Deno fmt/check/tests | as in CI | fmt clean, **81 passed, 0 failed** |
+| Flutter analyze / test / web build | as in CI | **0 issues**, **768 passed, 1 skipped**, web build PASS |
+
+Correction: `pos_link_legacy_reversal` now requires exact amount equality
+between the withdrawal and the COMPLETED CASH collection before linking —
+mismatch refuses with no link, no audit, both records untouched (J3–J5).

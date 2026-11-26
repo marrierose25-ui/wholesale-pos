@@ -56,6 +56,11 @@
 --       identical retry is a no-op; conflicting link refused
 --   J2  audited UNRELATED revocation: verdict removed, revocation audited,
 --       original MARKED_UNRELATED event preserved
+--   J3  amount mismatch refused: 5,000 withdrawal cannot link to a
+--       7,000 collection — no link, no audit, both records untouched
+--   J4  exact amount accepted through pos_link_legacy_reversal
+--   J5  existing safety intact: idempotent retry, cross-collection link
+--       refused, second reversal refused
 --
 -- psql -v ON_ERROR_STOP=1 -f request3_financial_integrity_test.sql
 
@@ -1155,5 +1160,113 @@ SELECT pg_temp.expect_true('J2 revocation audited, original preserved',
 SELECT pg_temp.expect_error('J2 revoking a non-existent verdict fails',
   'SELECT public.pos_revoke_unrelated_verdict(''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'',''leg-j6'',''fe-j6'',''fin-owner'',''again'')',
   'No UNRELATED verdict exists');
+
+-- ================================================================ J3 ======
+-- Amount integrity: a 5,000 withdrawal must NOT link to a 7,000 collection.
+DO $$
+BEGIN
+  PERFORM pg_temp.mk_collection(
+    'fe-j7', 7000, 'cat-j7', 'Cliff', 'fin-cash', 'AmountCat');
+  PERFORM pg_temp.mk_legacy_reversal(
+    'leg-j7', 5000, 'AmountCat', 'Cliff', 'fin-cash',
+    (SELECT id FROM public.shifts
+      WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        AND status = 'OPEN' LIMIT 1));
+END $$;
+SELECT pg_temp.expect_error('J3 amount mismatch refused',
+  'SELECT public.pos_link_legacy_reversal(''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'',''leg-j7'',''fe-j7'',''fin-owner'',''wrong amount'')',
+  'Amount mismatch');
+SELECT pg_temp.expect_true('J3 nothing changed, no audit written',
+  (SELECT source_finance_entry_id FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'leg-j7') IS NULL
+  AND (SELECT status FROM public.pos_finance_entries
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'fe-j7') = 'COMPLETED'
+  AND (SELECT count(*) FROM public.pos_audit_logs
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND action = 'LEGACY_REVERSAL_LINKED'
+      AND details LIKE '%leg-j7%') = 0,
+  'movement unlinked, entry untouched, zero link audits');
+
+-- ================================================================ J4 ======
+-- Exact amount accepted: 7,000 withdrawal links to the 7,000 collection.
+DO $$
+BEGIN
+  PERFORM pg_temp.mk_legacy_reversal(
+    'leg-j8', 7000, 'AmountCat', 'Cliff', 'fin-cash',
+    (SELECT id FROM public.shifts
+      WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        AND status = 'OPEN' LIMIT 1));
+END $$;
+SELECT public.pos_link_legacy_reversal(
+  'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'leg-j8', 'fe-j7',
+  'fin-owner', 'amounts verified equal');
+SELECT pg_temp.expect_true('J4 exact-amount link applied and audited',
+  (SELECT source_finance_entry_id FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'leg-j8') = 'fe-j7'
+  AND (SELECT count(*) FROM public.pos_audit_logs
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND action = 'LEGACY_REVERSAL_LINKED'
+      AND details LIKE '%leg-j8%'
+      AND details LIKE '%fe-j7%') = 1,
+  'link + audit recorded for the matching amounts');
+
+-- ================================================================ J5 ======
+-- Existing safety intact on the new code path.
+-- (a) identical retry on the J4 link is a no-op;
+SELECT public.pos_link_legacy_reversal(
+  'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'leg-j8', 'fe-j7',
+  'fin-owner', 'idempotent retry');
+SELECT pg_temp.expect_true('J5a identical retry stays a single transition',
+  (SELECT count(*) FROM public.pos_audit_logs
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND action = 'LEGACY_REVERSAL_LINKED'
+      AND details LIKE '%leg-j8%') = 1
+  AND (SELECT source_finance_entry_id FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'leg-j8') = 'fe-j7',
+  'retry linked to same collection: no new audit, link unchanged');
+-- (b) a movement already linked elsewhere cannot be re-linked;
+DO $$
+BEGIN
+  PERFORM pg_temp.mk_collection(
+    'fe-j9', 7200, 'cat-j9', 'Mere', 'fin-cash', 'OtherCat');
+  PERFORM pg_temp.mk_legacy_reversal(
+    'leg-j9', 7200, 'OtherCat', 'Mere', 'fin-cash',
+    (SELECT id FROM public.shifts
+      WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        AND status = 'OPEN' LIMIT 1));
+  UPDATE public.cash_movements SET source_finance_entry_id = 'fe-j9'
+  WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+    AND id = 'leg-j9';
+END $$;
+SELECT pg_temp.expect_error('J5b cross-collection relink refused',
+  'SELECT public.pos_link_legacy_reversal(''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'',''leg-j9'',''fe-j7'',''fin-owner'',''attempt'')',
+  'already linked to a different collection');
+-- (c) an entry that already has a reversal cannot acquire another;
+DO $$
+BEGIN
+  PERFORM pg_temp.mk_legacy_reversal(
+    'leg-j10', 7000, 'AmountCat', 'Cliff', 'fin-cash',
+    (SELECT id FROM public.shifts
+      WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        AND status = 'OPEN' LIMIT 1));
+END $$;
+SELECT pg_temp.expect_error('J5c second reversal refused',
+  'SELECT public.pos_link_legacy_reversal(''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'',''leg-j10'',''fe-j7'',''fin-owner'',''attempt'')',
+  'already has a reversal leg');
+SELECT pg_temp.expect_true('J5 refused attempts changed nothing',
+  (SELECT source_finance_entry_id FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'leg-j9') = 'fe-j9'
+  AND (SELECT source_finance_entry_id FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'leg-j10') IS NULL
+  AND (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND source_finance_entry_id = 'fe-j7' AND type = 'WITHDRAWAL') = 1,
+  'each record kept its original state; fe-j7 still has exactly one leg');
 
 SELECT 'request3_financial_integrity: ALL PASSED' AS result;
