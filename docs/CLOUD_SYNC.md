@@ -434,12 +434,18 @@ enforced in code and covered by a test.
   defers as PENDING with the durable marker — the push is never
   acknowledged and the payload stays in `sync_mirror` for review.
   **Operator resolution:** there is no dedicated UI — resolution is a
-  deliberate database action. Two cases:
-  * The movement DOES belong to the collection: set its
-    `source_finance_entry_id` to the collection id
-    (`UPDATE cash_movements SET source_finance_entry_id = '<entry>' WHERE
-    customer_id = '<tenant>' AND id = '<movement>';`), then re-run sync
-    apply — the deferred entry converges.
+  deliberate database action via audited functions (never bare UPDATEs).
+  Two cases:
+  * The movement DOES belong to the collection: call
+    `SELECT pos_link_legacy_reversal('<tenant>', '<movement>',
+    '<entry>', '<operator>', '<note>');`. It validates the unlinked
+    WITHDRAWAL and the COMPLETED CASH collection, refuses a conflicting
+    existing leg, links atomically, and writes a `LEGACY_REVERSAL_LINKED`
+    audit row with the operator identity, both ids, timestamp and note.
+    An identical retry is a safe no-op. Then re-run sync apply — the
+    deferred entry converges. NOTE: `<operator>` is a SQL parameter —
+    operator-ATTESTED identity recorded for accountability, not
+    independently authenticated.
   * The movement does NOT belong to that collection (e.g. an unrelated
     same-amount reversal from another till): record an explicit, audited
     verdict — `SELECT pos_mark_movement_unrelated('<tenant>',
@@ -449,7 +455,11 @@ enforced in code and covered by a test.
     audit entry. The movement itself is NEVER modified or deleted. The
     verdict is scoped to the (movement, collection) pair: it unblocks only
     that collection's delete, which then writes its own server reversal.
-    To reverse a mistaken verdict, delete the reconciliation row.
+    To reverse a mistaken verdict call
+    `SELECT pos_revoke_unrelated_verdict('<tenant>', '<movement>',
+    '<entry>', '<operator>', '<note>');` — it removes the verdict row AND
+    writes a `LEGACY_REVERSAL_UNRELATED_REVOKED` audit entry; the original
+    `MARKED_UNRELATED` audit event is preserved, never erased.
   Devices with older pending outbox records do NOT need a special upgrade
   step for the common case — uniquely attributable records reconcile
   automatically on the next push, and late duplicates converge on the

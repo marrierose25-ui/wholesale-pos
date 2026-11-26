@@ -750,3 +750,33 @@ Corrections in this commit:
   collection) `UNRELATED` verdict; the plausible-reversal blocker honours
   it, the movement row is never modified, and manual source-linking
   remains for genuine matches.
+
+### Reason-drift late dedup + audited manual link (same branch)
+
+| Check | Command | Result |
+| --- | --- | --- |
+| PG cold replay | `replay_migrations.sh` | **exit 0 — 13 migrations applied** (incl. `20261207000000_request3_reason_drift_audited_link`) |
+| Request 3 financial integrity | `psql -f request3_financial_integrity_test.sql` | **ALL PASSED** — 45 assertions (F/G/H/I/J sections) |
+| All four concurrency scripts | as in CI | **ALL PASSED** |
+| H1 / Request 2 / actor-auth / acceptance SQL | as in CI | **ALL PASSED** |
+| Deno fmt/check/tests | as in CI | fmt clean, **81 passed, 0 failed** |
+| Flutter analyze / test / web build | as in CI | **0 issues**, **768 passed, 1 skipped**, web build PASS |
+
+Corrections in this commit:
+
+- **Reason-drift deferral.** When exact reason-text candidates fail, the
+  insert path now checks plausible LINKED reversals (same amount,
+  reversal-shaped reason, verified actor via `pos_legacy_actor_ok`). Any
+  hit raises `LEGACY_REVERSAL_AMBIGUOUS` so `pos_sync_apply` defers the
+  row PENDING — a category rename can no longer produce a second drawer
+  withdrawal. Actor-conflicting movements are not plausible and record
+  normally.
+- **Audited manual link.** `pos_link_legacy_reversal` replaces the
+  documented bare `UPDATE`: validates unlinked WITHDRAWAL + COMPLETED
+  CASH collection + deposit leg, refuses conflicting legs, links
+  atomically, writes `LEGACY_REVERSAL_LINKED` with operator-attested
+  identity. Idempotent identical retry writes no second audit.
+- **Audited verdict revocation.** `pos_revoke_unrelated_verdict` replaces
+  "delete the reconciliation row": removes the verdict AND writes
+  `LEGACY_REVERSAL_UNRELATED_REVOKED`, preserving the original
+  `MARKED_UNRELATED` audit event.

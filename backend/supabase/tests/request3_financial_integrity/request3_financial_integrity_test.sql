@@ -45,6 +45,17 @@
 --   I1  operator UNRELATED verdict unblocks a plausible-blocked delete;
 --       verdict is per-(movement, collection) and fully audited
 --   I2  the same verdict does NOT unblock a different collection
+--   H5  reason drift: category renamed AFTER the device wrote its reversal
+--       but BEFORE the cloud delete — late old-reason push must defer,
+--       never insert a second withdrawal
+--   H6  ambiguous reason drift: multiple plausible linked reversals with
+--       the same amount — deferred, nothing attached or inserted
+--   H7  actor conflict WITH reason drift: cannot be auto-deduplicated —
+--       the movement records normally as its own unlinked row
+--   J1  audited manual link: LEGACY_REVERSAL_LINKED with operator + ids;
+--       identical retry is a no-op; conflicting link refused
+--   J2  audited UNRELATED revocation: verdict removed, revocation audited,
+--       original MARKED_UNRELATED event preserved
 --
 -- psql -v ON_ERROR_STOP=1 -f request3_financial_integrity_test.sql
 
@@ -150,6 +161,8 @@ WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 DELETE FROM sync_mirror
 WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 DELETE FROM void_requests
+WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+DELETE FROM cash_movement_reconciliations
 WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 DELETE FROM cash_movements
 WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
@@ -934,5 +947,213 @@ SELECT pg_temp.expect_true('I2 per-collection resolution converges',
     WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
       AND id = 'leg-i1') IS NULL,
   'each collection needed its own verdict; leg-i1 still untouched');
+
+-- ================================================================ H5 ======
+-- Reason drift. The device wrote its reversal against 'DriftOld'; the
+-- category was renamed to 'DriftNew' before the cloud delete, so the
+-- server reversal carries the NEW reason. The late old-reason push must
+-- NOT insert a second withdrawal — it defers for operator review.
+DO $$
+BEGIN
+  PERFORM pg_temp.mk_collection(
+    'fe-j1', 8100, 'cat-j1', 'Pier', 'fin-cash', 'DriftOld');
+  UPDATE public.pos_finance_categories SET name = 'DriftNew'
+  WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+    AND id = 'cat-j1';
+  PERFORM public.pos_delete_finance_entry(
+    'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'fin-cash', 'fe-j1');
+END $$;
+SELECT pg_temp.expect_error('H5 drifted late reversal defers, not duplicates',
+  'SELECT public.pos_add_cash_movement(''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'',''fin-cash'','
+  '(SELECT id FROM public.shifts WHERE customer_id = ''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'' AND status = ''OPEN'' LIMIT 1),'||
+  '''WITHDRAWAL'', 8100, ''Reversal: deleted cash collection from DriftOld (Pier)'', NULL, ''leg-j1-late'', NULL)',
+  'LEGACY_REVERSAL_AMBIGUOUS');
+SELECT pg_temp.expect_true('H5 no second withdrawal was written',
+  (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND source_finance_entry_id = 'fe-j1' AND type = 'WITHDRAWAL') = 1
+  AND (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'leg-j1-late') = 0
+  AND (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND amount_minor_units = 8100
+      AND btrim(reason) LIKE 'Reversal: deleted cash collection from%') = 1,
+  'only the server reversal stands; drifted push preserved nowhere as money');
+
+-- ================================================================ H6 ======
+-- Ambiguous reason drift: TWO linked reversals share the amount and the
+-- reversal-shaped prefix. The incoming movement cannot be attributed —
+-- defer, attach nothing, insert nothing.
+DO $$
+BEGIN
+  PERFORM pg_temp.mk_collection(
+    'fe-j2a', 8200, 'cat-j2a', 'A1', 'fin-cash', 'MultiCat');
+  PERFORM pg_temp.mk_collection(
+    'fe-j2b', 8200, 'cat-j2b', 'B2', 'fin-cash', 'MultiCat');
+  PERFORM public.pos_delete_finance_entry(
+    'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'fin-cash', 'fe-j2a');
+  PERFORM public.pos_delete_finance_entry(
+    'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'fin-cash', 'fe-j2b');
+END $$;
+SELECT pg_temp.expect_error('H6 ambiguous drift defers the movement',
+  'SELECT public.pos_add_cash_movement(''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'',''fin-cash'','
+  '(SELECT id FROM public.shifts WHERE customer_id = ''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'' AND status = ''OPEN'' LIMIT 1),'||
+  '''WITHDRAWAL'', 8200, ''Reversal: deleted cash collection from DriftedName (Nowhere)'', NULL, ''leg-j2-late'', NULL)',
+  'LEGACY_REVERSAL_AMBIGUOUS');
+SELECT pg_temp.expect_true('H6 both reversals intact, nothing inserted',
+  (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND source_finance_entry_id IN ('fe-j2a','fe-j2b')
+      AND type = 'WITHDRAWAL') = 2
+  AND (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'leg-j2-late') = 0,
+  'no arrival-order pick; payload stays recoverable in sync_mirror');
+
+-- ================================================================ H7 ======
+-- Actor conflict WITH reason drift: a different actor''s same-amount
+-- reversal-shaped withdrawal is NOT plausible evidence — it records as its
+-- own unlinked movement, never auto-deduplicated onto the linked reversal.
+DO $$
+BEGIN
+  PERFORM pg_temp.mk_collection(
+    'fe-j3', 8300, 'cat-j3', 'Zed', 'fin-cash', 'ActorDrift');
+  PERFORM public.pos_delete_finance_entry(
+    'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'fin-cash', 'fe-j3');
+END $$;
+SELECT pg_temp.expect_true('H7 conflicting-actor drift records as its own row',
+  (SELECT (public.pos_add_cash_movement(
+      'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'fin-cash2',
+      (SELECT id FROM public.shifts
+        WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+          AND status = 'OPEN' LIMIT 1),
+      'WITHDRAWAL', 8300,
+      'Reversal: deleted cash collection from OldActorName (OldSource)',
+      NULL, 'leg-j3-late', NULL)->>'id') = 'leg-j3-late')
+  AND (SELECT source_finance_entry_id FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'leg-j3-late') IS NULL
+  AND (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND source_finance_entry_id = 'fe-j3' AND type = 'WITHDRAWAL') = 1,
+  'different actor = different money; recorded unlinked, not deduped');
+
+-- ================================================================ J1 ======
+-- Audited manual link. fe-j4 is a live COMPLETED CASH collection with an
+-- unlinked legacy reversal leg-j4. pos_link_legacy_reversal performs the
+-- link atomically and writes LEGACY_REVERSAL_LINKED with the operator.
+DO $$
+BEGIN
+  PERFORM pg_temp.mk_collection(
+    'fe-j4', 8400, 'cat-j4', 'Harbor', 'fin-cash', 'LinkCat');
+  PERFORM pg_temp.mk_legacy_reversal(
+    'leg-j4', 8400, 'LinkCat', 'Harbor', 'fin-cash',
+    (SELECT id FROM public.shifts
+      WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        AND status = 'OPEN' LIMIT 1));
+END $$;
+SELECT public.pos_link_legacy_reversal(
+  'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'leg-j4', 'fe-j4',
+  'fin-owner', 'verified against physical till roll');
+SELECT pg_temp.expect_true('J1 manual link applied and audited',
+  (SELECT source_finance_entry_id FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'leg-j4') = 'fe-j4'
+  AND (SELECT count(*) FROM public.pos_audit_logs
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND action = 'LEGACY_REVERSAL_LINKED'
+      AND user_id = 'fin-owner'
+      AND details LIKE '%leg-j4%'
+      AND details LIKE '%fe-j4%') = 1,
+  'link + exactly one audit row naming operator and both ids');
+-- Identical retry: safe no-op, no misleading second audit.
+SELECT public.pos_link_legacy_reversal(
+  'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'leg-j4', 'fe-j4',
+  'fin-owner', 'retry after lost response');
+SELECT pg_temp.expect_true('J1 identical retry adds no second audit',
+  (SELECT count(*) FROM public.pos_audit_logs
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND action = 'LEGACY_REVERSAL_LINKED'
+      AND details LIKE '%leg-j4%') = 1
+  AND (SELECT source_finance_entry_id FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'leg-j4') = 'fe-j4',
+  'idempotent: same link, no duplicate transition');
+-- Conflicting link refused: fe-j5 already has a reversal leg.
+DO $$
+BEGIN
+  PERFORM pg_temp.mk_collection(
+    'fe-j5', 8500, 'cat-j5', 'Quay', 'fin-cash', 'ConflictCat');
+  PERFORM pg_temp.mk_legacy_reversal(
+    'leg-j5', 8500, 'ConflictCat', 'Quay', 'fin-cash',
+    (SELECT id FROM public.shifts
+      WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        AND status = 'OPEN' LIMIT 1));
+  -- Pretend a reversal already exists for fe-j5.
+  UPDATE public.cash_movements SET source_finance_entry_id = 'fe-j5'
+  WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+    AND id = 'leg-j5';
+END $$;
+SELECT pg_temp.expect_error('J1 missing movement refused',
+  'SELECT public.pos_link_legacy_reversal(''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'',''leg-ghost'',''fe-j5'',''fin-owner'',''x'')',
+  'Movement not found');
+-- Real conflict: fe-j5 has linked leg-j5; try linking another unlinked
+-- withdrawal leg-j5c to it.
+INSERT INTO public.cash_movements (id, customer_id, shift_id, user_id, type,
+  amount_minor_units, reason, created_at, source_finance_entry_id)
+SELECT 'leg-j5c', customer_id, shift_id, 'fin-cash', 'WITHDRAWAL', 8500,
+  'Reversal: deleted cash collection from ConflictCat (Quay)', now(), NULL
+FROM public.cash_movements
+WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+  AND id = 'leg-j5';
+SELECT pg_temp.expect_error('J1 conflicting link refused (entry has reversal)',
+  'SELECT public.pos_link_legacy_reversal(''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'',''leg-j5c'',''fe-j5'',''fin-owner'',''attempt'')',
+  'already has a reversal leg');
+SELECT pg_temp.expect_true('J1 refused link changed nothing',
+  (SELECT source_finance_entry_id FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'leg-j5c') IS NULL
+  AND (SELECT source_finance_entry_id FROM public.cash_movements
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND id = 'leg-j5') = 'fe-j5',
+  'both movements keep their original association state');
+
+-- ================================================================ J2 ======
+-- Audited UNRELATED revocation: verdict removed, revocation audited, and
+-- the original MARKED_UNRELATED audit event is preserved.
+DO $$
+BEGIN
+  PERFORM pg_temp.mk_collection(
+    'fe-j6', 8600, 'cat-j6', 'Marsh', 'fin-cash', 'RevokeCat');
+  PERFORM pg_temp.mk_legacy_reversal(
+    'leg-j6', 8600, 'RevokeCat', 'Marsh', 'fin-cash2',
+    (SELECT id FROM public.shifts
+      WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        AND status = 'OPEN' LIMIT 1));
+END $$;
+SELECT public.pos_mark_movement_unrelated(
+  'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'leg-j6', 'fe-j6',
+  'fin-owner', 'initial unrelated verdict');
+SELECT public.pos_revoke_unrelated_verdict(
+  'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'leg-j6', 'fe-j6',
+  'fin-owner', 'verdict was mistaken');
+SELECT pg_temp.expect_true('J2 revocation audited, original preserved',
+  (SELECT count(*) FROM public.cash_movement_reconciliations
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND movement_id = 'leg-j6' AND finance_entry_id = 'fe-j6') = 0
+  AND (SELECT count(*) FROM public.pos_audit_logs
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND action = 'LEGACY_REVERSAL_MARKED_UNRELATED'
+      AND details LIKE '%leg-j6%') = 1
+  AND (SELECT count(*) FROM public.pos_audit_logs
+    WHERE customer_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+      AND action = 'LEGACY_REVERSAL_UNRELATED_REVOKED'
+      AND user_id = 'fin-owner'
+      AND details LIKE '%leg-j6%') = 1,
+  'verdict gone, both audit events intact, movement untouched');
+SELECT pg_temp.expect_error('J2 revoking a non-existent verdict fails',
+  'SELECT public.pos_revoke_unrelated_verdict(''aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'',''leg-j6'',''fe-j6'',''fin-owner'',''again'')',
+  'No UNRELATED verdict exists');
 
 SELECT 'request3_financial_integrity: ALL PASSED' AS result;
