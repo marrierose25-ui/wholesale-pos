@@ -23,18 +23,23 @@ void main() {
     );
   });
 
-  test('deploy job is gated to refs/heads/main for manual dispatch', () {
+  test('deploy job is gated to refs/heads/main for every event', () {
+    // The ref check must be the WHOLE condition: an `||` escape hatch for
+    // push events would let a widened push trigger deploy a feature branch.
     expect(
-      workflow.contains("github.ref == 'refs/heads/main'"),
+      workflow.contains("if: github.ref == 'refs/heads/main'"),
       isTrue,
       reason:
-          'the deploy job must refuse to run for a workflow_dispatch on any '
-          'ref other than refs/heads/main',
+          'the deploy job must require refs/heads/main unconditionally so a '
+          'workflow_dispatch (or a future widened push trigger) on any other '
+          'ref is skipped',
     );
     expect(
       workflow.contains("github.event_name == 'push'"),
-      isTrue,
-      reason: 'automatic push deployments must remain allowed',
+      isFalse,
+      reason:
+          'no OR-condition may bypass the main-only ref check — a push from '
+          'a non-main branch must never reach the production Pages deploy',
     );
   });
 

@@ -47,7 +47,11 @@ jobs:
     # a dispatch cannot publish without a second pair of eyes. If the
     # environment does not exist yet the job still runs unprotected — create
     # it before relying on this workflow for releases.
-    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
+    # EVERY deployment event must come from refs/heads/main — including a
+    # manual dispatch, which may select any ref. There is deliberately no
+    # event-name escape hatch: if the push trigger is ever widened to feature
+    # branches, this condition still refuses them.
+    if: github.ref == 'refs/heads/main'
     environment:
       name: 'production'
     env:

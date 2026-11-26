@@ -43,7 +43,7 @@ class UnsupportedDatabaseVersionException implements Exception {
 
 class LocalDatabase {
   static const String databaseName = 'wholesale_pos.db';
-  static const int schemaVersion = 23;
+  static const int schemaVersion = 24;
   static const String deviceIdFileName = 'device_id.txt';
   static const String themeSettingKey = 'theme_mode';
 
@@ -690,6 +690,35 @@ class LocalDatabase {
         'ON picklist_items(picklist_id)',
       );
     }
+    if (oldVersion < 24) {
+      // Request 3 acceptance — durable quarantine for rejected sync rows and
+      // independent deleter attribution on finance entries. Additive and
+      // guarded so a re-run is a no-op.
+      final outboxCols = await db.rawQuery('PRAGMA table_info(sync_outbox)');
+      if (!outboxCols.any((column) => column['name'] == 'status')) {
+        await db.execute(
+          "ALTER TABLE sync_outbox ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'",
+        );
+      }
+      if (!outboxCols.any((column) => column['name'] == 'last_error')) {
+        await db.execute('ALTER TABLE sync_outbox ADD COLUMN last_error TEXT');
+      }
+      if (!outboxCols.any((column) => column['name'] == 'quarantined_at')) {
+        await db.execute(
+          'ALTER TABLE sync_outbox ADD COLUMN quarantined_at TEXT',
+        );
+      }
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS sync_outbox_quarantined '
+        "ON sync_outbox(status) WHERE status = 'quarantined'",
+      );
+      final entryCols = await db.rawQuery(
+        'PRAGMA table_info(finance_entries)',
+      );
+      if (!entryCols.any((column) => column['name'] == 'deleted_by')) {
+        await db.execute('ALTER TABLE finance_entries ADD COLUMN deleted_by TEXT');
+      }
+    }
     if (pause != null) await pause('late');
   }
 
@@ -875,6 +904,18 @@ class LocalDatabase {
       'CREATE INDEX IF NOT EXISTS sync_outbox_pending '
       'ON sync_outbox(synced_at)',
     );
+    // The quarantine index needs the v24 `status` column, which does not
+    // exist yet on mid-upgrade calls — only create it once the column is
+    // there (fresh installs have it in the CREATE TABLE; upgrades get it in
+    // the <24 block, which also creates this index itself).
+    final outboxCols = await db.rawQuery('PRAGMA table_info(sync_outbox)');
+    if (outboxCols.any((column) => column['name'] == 'status')) {
+      await indexOn(
+        'sync_outbox',
+        'CREATE INDEX IF NOT EXISTS sync_outbox_quarantined '
+        "ON sync_outbox(status) WHERE status = 'quarantined'",
+      );
+    }
     await indexOn(
       'picklist_items',
       'CREATE INDEX IF NOT EXISTS picklist_items_picklist_id '
@@ -1067,6 +1108,7 @@ class LocalDatabase {
         completed_by TEXT,
         updated_at TEXT NOT NULL,
         payment_method TEXT,
+        deleted_by TEXT,
         FOREIGN KEY(category_id) REFERENCES finance_categories(id),
         FOREIGN KEY(created_by) REFERENCES users(id),
         FOREIGN KEY(completed_by) REFERENCES users(id)
@@ -1165,7 +1207,10 @@ class LocalDatabase {
         operation TEXT NOT NULL,
         payload TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        synced_at TEXT
+        synced_at TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        last_error TEXT,
+        quarantined_at TEXT
       )
     ''');
 

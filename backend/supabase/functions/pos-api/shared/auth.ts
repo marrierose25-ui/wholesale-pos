@@ -848,18 +848,61 @@ async function setupOwner(db: any, body: any): Promise<Response> {
   }
   const username = normalizePhone(rawName);
   if (!username) return json({ ok: false, error: PHONE_INVALID }, 400);
+  // A native till bootstraps its first owner OFFLINE and reconciles later: it
+  // already minted a local user id and a cloud-format credential, so it sends
+  // `user_id` + `pw_salt`/`pw_hash` instead of a plaintext password. The id
+  // keeps local SQLite and cloud identity identical; the hash path is no
+  // weaker than the password path (a caller who can supply a hash can supply
+  // the password it was derived from). Everything is still gated by the
+  // activation code + the one-owner policy inside pos_setup_owner.
+  const requestedId = str(body.user_id);
+  if (requestedId && !/^[0-9a-fA-F-]{16,64}$/.test(requestedId)) {
+    return json({ ok: false, error: "Invalid account details." }, 400);
+  }
+  const preSalt = str(body.pw_salt);
+  const preHash = str(body.pw_hash);
+  const hasPreHashed = preSalt !== "" && preHash !== "";
+  if (!hasPreHashed && !password) {
+    return json({ ok: false, error: "Missing fields" }, 400);
+  }
   const blocked = await probeAllowed(db, "posapi:setup", code);
   if (blocked) return blocked;
   const lic = await licenseForActivationCode(db, code);
   if (!lic.ok) return json({ ok: false, error: lic.error }, 403);
   const customerId = lic.customerId;
 
-  const minLen = 12;
-  if (password.length < minLen) {
-    return json({
-      ok: false,
-      error: `Password must be at least ${minLen} characters.`,
-    }, 400);
+  let salt: string;
+  let hash: string;
+  if (hasPreHashed) {
+    // Accept only the exact `<iterations>$<base64>` cloud credential format
+    // pos-api itself issues, with a supported cost factor and a decodable
+    // salt — anything else is refused rather than stored verbatim.
+    const m = /^(\d{1,7})\$([A-Za-z0-9+/]+={0,2})$/.exec(preHash);
+    const iterations = m ? Number(m[1]) : 0;
+    let saltBytes: Uint8Array | null = null;
+    try {
+      saltBytes = unB64(preSalt);
+    } catch { /* fall through to refusal */ }
+    if (
+      !m || !PBKDF2_SUPPORTED_ITERATIONS.has(iterations) ||
+      m[2].length > 128 || !saltBytes || saltBytes.length === 0 ||
+      saltBytes.length > 64
+    ) {
+      return json({ ok: false, error: "Invalid account details." }, 400);
+    }
+    salt = preSalt;
+    hash = preHash;
+  } else {
+    const minLen = 12;
+    if (password.length < minLen) {
+      return json({
+        ok: false,
+        error: `Password must be at least ${minLen} characters.`,
+      }, 400);
+    }
+    const hashed = await hashPassword(password);
+    salt = hashed.salt;
+    hash = hashed.hash;
   }
   // Owner bootstrap is the highest-value public action: a tight per-code
   // ceiling on top of the generic probe bound.
@@ -872,8 +915,7 @@ async function setupOwner(db: any, body: any): Promise<Response> {
     true,
   );
   if (!setupChk.allowed) return tooManyAttempts(setupChk.retryAfter);
-  const { salt, hash } = await hashPassword(password);
-  const id = crypto.randomUUID();
+  const id = requestedId || crypto.randomUUID();
   const rpc = await db.rpc("pos_setup_owner", {
     p_customer: customerId,
     p_id: id,
@@ -883,7 +925,19 @@ async function setupOwner(db: any, body: any): Promise<Response> {
   });
   if (rpc.error) {
     if (/already exists/i.test(rpc.error.message)) {
-      return json({ ok: false, error: "Owner already exists." }, 409);
+      // Tell the caller WHO the existing owner is so a native till can tell
+      // "my own bootstrap already landed" (same id -> done) apart from a real
+      // second-owner conflict. The activation code is already a tenant-wide
+      // credential, so this reveals nothing a code-holder could not pull.
+      const { data: existing } = await db.from("pos_users")
+        .select("id, username").eq("customer_id", customerId)
+        .eq("role", OWNER).is("deleted_at", null).maybeSingle();
+      return json({
+        ok: false,
+        error: "Owner already exists.",
+        owner_id: existing?.id ?? null,
+        owner_username: existing?.username ?? null,
+      }, 409);
     }
     throw new Error(rpc.error.message);
   }

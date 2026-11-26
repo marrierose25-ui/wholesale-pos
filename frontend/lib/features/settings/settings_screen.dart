@@ -9,6 +9,7 @@ import '../../core/backend/native_backend.dart';
 import '../../core/theme/app_design.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/sync/sync_runtime.dart';
+import '../../core/sync/sync_service.dart';
 import '../../core/sync/sync_status.dart';
 import 'devices_screen.dart';
 
@@ -372,6 +373,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  /// Operator surface for quarantined sync records (Request 3): the cloud
+  /// permanently refused these rows, so they are kept — payload, identity,
+  /// error and timestamps intact — until the operator retries or discards
+  /// each one deliberately. Nothing here ever deletes automatically.
+  Future<void> _reviewQuarantined() async {
+    final service = widget.syncRuntime?.service;
+    if (service == null) return;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => _QuarantineReviewDialog(service: service),
+    );
+  }
+
   Widget _syncCard(SyncStatus status) {
     final failing = status.isFailing;
     final IconData icon;
@@ -386,6 +400,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
 
     final queued = status.queued;
+    final quarantined = status.quarantined;
     final subtitle = queued > 0
         ? '${status.summary}\n$queued change${queued == 1 ? '' : 's'} waiting to upload.'
         : status.summary;
@@ -401,7 +416,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             title: const Text('Cloud Sync'),
             subtitle: Text(subtitle),
-            isThreeLine: queued > 0,
+            isThreeLine: queued > 0 || quarantined > 0,
             trailing: _isSyncing
                 ? const SizedBox(
                     width: 24,
@@ -414,6 +429,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onPressed: status.configured ? _syncNow : null,
                   ),
           ),
+          if (quarantined > 0) ...[
+            const Divider(height: 1, indent: 56),
+            ListTile(
+              leading: const Icon(
+                CupertinoIcons.exclamationmark_triangle,
+                color: AppDesign.warning,
+              ),
+              title: const Text('Rejected sync records'),
+              subtitle: Text(
+                '$quarantined record${quarantined == 1 ? '' : 's'} the cloud '
+                'refused permanently. They are kept safely on this device — '
+                'review, retry, or discard them here.',
+              ),
+              isThreeLine: true,
+              trailing: const Icon(CupertinoIcons.chevron_right),
+              onTap: _reviewQuarantined,
+            ),
+          ],
           if (_isOwner && status.authenticationFailed) ...[
             const Divider(height: 1, indent: 56),
             ListTile(
@@ -941,6 +974,134 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               : const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Lists quarantined sync records with deliberate retry / discard actions.
+/// Export is preserved: each row's full payload stays in the outbox table and
+/// can be inspected; discarding is a separate, confirmed operator choice.
+class _QuarantineReviewDialog extends StatefulWidget {
+  final SyncService service;
+
+  const _QuarantineReviewDialog({required this.service});
+
+  @override
+  State<_QuarantineReviewDialog> createState() =>
+      _QuarantineReviewDialogState();
+}
+
+class _QuarantineReviewDialogState extends State<_QuarantineReviewDialog> {
+  List<SyncOutboxEntry> _entries = const [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  Future<void> _reload() async {
+    final entries = await widget.service.quarantinedEntries();
+    if (mounted) {
+      setState(() {
+        _entries = entries;
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _retry(SyncOutboxEntry entry) async {
+    await widget.service.retryQuarantined([entry.id]);
+    await _reload();
+  }
+
+  Future<void> _discard(SyncOutboxEntry entry) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Discard rejected record?'),
+        content: Text(
+          'This permanently removes the ${entry.entityType} record '
+          '${entry.entityId} and its saved payload from this device. '
+          'The cloud never accepted it, so it will not appear anywhere '
+          'else either.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Keep it'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Discard'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await widget.service.discardQuarantined([entry.id]);
+    await _reload();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Rejected sync records'),
+      content: SizedBox(
+        width: 420,
+        child: _loading
+            ? const Padding(
+                padding: EdgeInsets.all(24),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            : _entries.isEmpty
+            ? const Text('No rejected records are being held.')
+            : ListView.separated(
+                shrinkWrap: true,
+                itemCount: _entries.length,
+                separatorBuilder: (_, _) => const Divider(height: 1),
+                itemBuilder: (context, i) {
+                  final e = _entries[i];
+                  return ListTile(
+                    dense: true,
+                    leading: const Icon(
+                      CupertinoIcons.exclamationmark_triangle,
+                      color: AppDesign.warning,
+                    ),
+                    title: Text('${e.entityType} · ${e.entityId}'),
+                    subtitle: Text(
+                      '${e.lastError ?? 'rejected by server'}\n'
+                      'queued ${e.createdAt.toLocal().toString().substring(0, 16)}',
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    isThreeLine: true,
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(CupertinoIcons.arrow_clockwise),
+                          tooltip: 'Retry upload',
+                          onPressed: () => _retry(e),
+                        ),
+                        IconButton(
+                          icon: const Icon(CupertinoIcons.trash),
+                          tooltip: 'Discard record',
+                          onPressed: () => _discard(e),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
         ),
       ],
     );

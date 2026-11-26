@@ -183,7 +183,21 @@ VALUES ('11111111-1111-1111-1111-111111111111', 'void_request', 'req-s6',
     'reason', 'offline request', 'created_at', now())),
   'PENDING');
 
-SELECT pos_sync_apply('11111111-1111-1111-1111-111111111111', 50);
+-- Request 3: pos_sync_apply only processes a row for the VERIFIED device
+-- holding a live actor grant. Give the staged row a real grant for cash1 on
+-- dev1 so it reaches the void_request branch — where the VOIDED sale check
+-- still refuses it, which is the invariant under test.
+INSERT INTO licenses (activation_code, customer_id, seat_limit)
+VALUES ('H1-CODE-AAAA-BBBB-CCCC-DDDD', '11111111-1111-1111-1111-111111111111', 1);
+INSERT INTO device_registrations
+  (activation_code, device_fingerprint, device_name)
+VALUES ('H1-CODE-AAAA-BBBB-CCCC-DDDD', 'dev1', 'h1 till');
+UPDATE sync_mirror SET actor_grant_hash = public.pos_actor_grant_hash(
+  public.pos_issue_actor_grant(
+    '11111111-1111-1111-1111-111111111111', 'cash1', 'dev1', 3600)->>'grant')
+WHERE entity_id = 'req-s6';
+
+SELECT pos_sync_apply('11111111-1111-1111-1111-111111111111', 50, 'dev1');
 
 SELECT pg_temp.expect_true('S6a sync_apply rejected',
   (SELECT apply_status FROM sync_mirror WHERE entity_id='req-s6') = 'REJECTED'

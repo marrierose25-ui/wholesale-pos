@@ -16,6 +16,14 @@ class SyncOutboxEntry {
   final DateTime createdAt;
   final DateTime? syncedAt;
 
+  /// 'pending' while queued for push; 'quarantined' after the server
+  /// permanently refused it. Null on rows written before schema v24.
+  final String? status;
+
+  /// The server's refusal reason while quarantined.
+  final String? lastError;
+  final DateTime? quarantinedAt;
+
   const SyncOutboxEntry({
     required this.id,
     required this.entityType,
@@ -24,9 +32,13 @@ class SyncOutboxEntry {
     required this.payloadJson,
     required this.createdAt,
     this.syncedAt,
+    this.status,
+    this.lastError,
+    this.quarantinedAt,
   });
 
   bool get isSynced => syncedAt != null;
+  bool get isQuarantined => status == 'quarantined';
 
   Map<String, dynamic> get payload =>
       jsonDecode(payloadJson) as Map<String, dynamic>;
@@ -42,6 +54,11 @@ class SyncOutboxEntry {
       syncedAt: map['synced_at'] == null
           ? null
           : DateTime.parse(map['synced_at'] as String),
+      status: map['status'] as String?,
+      lastError: map['last_error'] as String?,
+      quarantinedAt: map['quarantined_at'] == null
+          ? null
+          : DateTime.parse(map['quarantined_at'] as String),
     );
   }
 }

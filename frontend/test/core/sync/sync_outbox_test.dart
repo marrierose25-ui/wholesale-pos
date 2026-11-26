@@ -12,17 +12,35 @@ import 'package:wholesale_pos_app/core/sync/sync_service.dart';
 class RecordingBackend implements SyncBackend {
   final List<SyncOutboxEntry> received = [];
   final bool shouldThrow;
+
+  /// Outbox id -> server refusal reason, reported as permanent rejections.
+  Map<String, String> rejections = {};
   RecordingBackend({this.shouldThrow = false});
 
   @override
   bool get isConfigured => true;
 
   @override
-  Future<Set<String>> push(List<SyncOutboxEntry> entries) async {
+  Future<SyncPushOutcome> push(List<SyncOutboxEntry> entries) async {
     if (shouldThrow) throw Exception('network down');
     received.addAll(entries);
-    // Confirm every entry so the service marks the whole batch synced.
-    return entries.map((e) => e.id).toSet();
+    // Confirm every entry so the service marks the whole batch synced —
+    // except those reported as permanently rejected, which must quarantine.
+    return SyncPushOutcome(
+      acked: entries
+          .where((e) => !rejections.containsKey(e.id))
+          .map((e) => e.id)
+          .toSet(),
+      rejected: [
+        for (final e in entries)
+          if (rejections.containsKey(e.id))
+            SyncPushRejection(
+              entryId: e.id,
+              entityId: e.entityId,
+              error: rejections[e.id]!,
+            ),
+      ],
+    );
   }
 
   @override
@@ -273,6 +291,37 @@ void main() {
       expect(await outbox.pendingCount(), 0);
     },
   );
+
+  test('rejected entries quarantine durably and never prune', () async {
+    // Request 3 acceptance: a permanent server refusal must keep the row —
+    // payload, entity identity, error and timestamps — out of the pending
+    // queue and out of pruneSynced's reach until an operator acts.
+    final backend = RecordingBackend();
+    backend.rejections = {'e1': 'permission denied'};
+    await saleRepository.saveSale(buildSale('sale-q'));
+
+    // Find the staged outbox id and drive a push that reports it rejected.
+    final pendingBefore = await outbox.pending();
+    expect(pendingBefore, hasLength(1));
+    backend.rejections = {pendingBefore.single.id: 'rejected by server'};
+
+    await SyncService(outbox, backend).syncNow();
+
+    expect(await outbox.pendingCount(), 0);
+    expect(await outbox.quarantinedCount(), 1);
+    final held = await outbox.quarantined();
+    expect(held.single.entityId, 'sale-q');
+    expect(held.single.lastError, 'rejected by server');
+    expect(held.single.payloadJson, isNotEmpty);
+    expect(held.single.quarantinedAt, isNotNull);
+
+    // Pruning must not touch it; only an explicit operator retry re-queues.
+    expect(await outbox.pruneSynced(), 0);
+    expect(await outbox.quarantinedCount(), 1);
+    await outbox.retryQuarantined([held.single.id]);
+    expect(await outbox.quarantinedCount(), 0);
+    expect(await outbox.pendingCount(), 1);
+  });
 
   test('pruneSynced removes only synced rows', () async {
     final backend = RecordingBackend();

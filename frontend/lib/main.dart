@@ -20,6 +20,7 @@ import 'core/backend/native_backend.dart';
 import 'core/sync/actor_grant_service.dart';
 import 'core/sync/actor_grant_store.dart';
 import 'core/sync/owner_action_reconciler.dart';
+import 'core/sync/owner_bootstrap_service.dart';
 import 'core/sync/sync_runtime.dart';
 import 'core/sync/sync_service.dart';
 import 'core/sync/sync_status.dart';
@@ -109,7 +110,7 @@ Future<void> _startup() async {
     isMobile: !kIsWeb && Platform.isAndroid || !kIsWeb && Platform.isIOS,
     licenseProvider: () =>
         LocalDatabase.getSetting(db, SyncGatewayBackend.licenseSettingKey),
-    grantProvider: actorGrantStore.grantForEntry,
+    grantProvider: actorGrantStore.grantsForEntry,
   );
   final outbox = SqfliteSyncOutboxRepository(db);
   final puller = CloudSyncPuller(backend: syncBackend, db: db);
@@ -488,6 +489,19 @@ class _AuthWrapperState extends State<AuthWrapper> {
   Timer? _ownerActionTimer;
   late final SessionStore _sessions = SettingsSessionStore(widget.db);
 
+  /// First-owner cloud reconciliation (Request 3 P0): a native install can
+  /// create its OWNER fully offline, but the cloud only learns that owner
+  /// through the secure `setup_owner` bootstrap — never through device sync.
+  late final OwnerBootstrapService _ownerBootstrap = OwnerBootstrapService(
+    db: widget.db,
+    apiUrl: const String.fromEnvironment('WHOLESALE_POS_API_URL'),
+    activationCodeProvider: () =>
+        LocalDatabase.getSetting(widget.db, DeviceActivation.activationCodeKey),
+  );
+
+  bool _grantPromptShown = false;
+  DateTime _lastGrantPromptAt = DateTime.fromMillisecondsSinceEpoch(0);
+
   @override
   void initState() {
     super.initState();
@@ -499,6 +513,8 @@ class _AuthWrapperState extends State<AuthWrapper> {
     // sees the prompt (authorization itself is still enforced server-side).
     _ownerActionTimer = Timer.periodic(const Duration(minutes: 2), (_) {
       _maybePromptOwnerAuthorization();
+      _maybePromptGrantRenewal();
+      unawaited(_ownerBootstrap.reconcile());
     });
   }
 
@@ -549,6 +565,84 @@ class _AuthWrapperState extends State<AuthWrapper> {
       _restoring = false;
     });
     _maybePromptOwnerAuthorization();
+    _maybePromptGrantRenewal();
+    unawaited(_ownerBootstrap.reconcile());
+  }
+
+  /// Grant recovery after offline login / session restore (Request 3 P1):
+  /// a user who signed in while offline holds no server-issued actor grant,
+  /// so their queued rows would defer forever. When connectivity is back the
+  /// only missing piece is proof of identity — ask for the password ONCE per
+  /// cooldown and mint a fresh grant. The register stays usable meanwhile and
+  /// no password is ever stored.
+  Future<void> _maybePromptGrantRenewal() async {
+    final service = widget.actorGrantService;
+    final user = _currentUser;
+    if (service == null || user == null || _grantPromptShown) return;
+    if (DateTime.now().difference(_lastGrantPromptAt) <
+        const Duration(minutes: 10)) {
+      return;
+    }
+    String? existing;
+    try {
+      existing = await service.store.grantFor(user.id);
+    } catch (_) {
+      existing = null;
+    }
+    if (existing != null) return;
+    if (!mounted) return;
+    _grantPromptShown = true;
+    _lastGrantPromptAt = DateTime.now();
+    await _showGrantRenewalDialog(service, user);
+    if (mounted) _grantPromptShown = false;
+  }
+
+  Future<void> _showGrantRenewalDialog(
+    ActorGrantService service,
+    User user,
+  ) async {
+    final passwordController = TextEditingController();
+    final renewed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Reconnect cloud sync'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'This account has no active cloud-sync grant (it may have '
+              'expired or been issued while offline). Enter the account '
+              'password once to renew it — selling is not affected.',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: passwordController,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'Password'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Later'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Renew'),
+          ),
+        ],
+      ),
+    );
+    if (renewed != true || !mounted) return;
+    final password = passwordController.text;
+    passwordController.dispose();
+    await service.acquire(
+      user: user,
+      username: user.username,
+      password: password,
+    );
   }
 
   /// Stage 4.1: voids/decisions recorded while offline await authoritative
@@ -660,6 +754,8 @@ class _AuthWrapperState extends State<AuthWrapper> {
   Future<void> _onLoginSuccess(User user) async {
     setState(() => _currentUser = user);
     _maybePromptOwnerAuthorization();
+    _maybePromptGrantRenewal();
+    unawaited(_ownerBootstrap.reconcile());
     // "Sign in and see the whole shop": refresh immediately instead of waiting
     // for the next cycle. Fire-and-forget so a dead network can never hold
     // up a cashier who is standing at the till ready to sell.

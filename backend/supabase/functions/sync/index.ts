@@ -452,6 +452,35 @@ async function push(
     }
     const actorGrantHash = grant ? await sha256Hex(grant) : null;
 
+    // Per-actor grants (Request 3 acceptance): a finance entry can name a
+    // creator AND a completer/deleter who are different people. The client
+    // sends `actorGrants` as a map of claimed-actor-id -> raw grant token;
+    // only SHA-256 digests are staged, keyed the same way, so
+    // pos_sync_apply can resolve each actor independently. The key only
+    // selects which digest to resolve — the resolved user id is what lands.
+    const actorGrantHashes: Record<string, string> = {};
+    const rawGrants = entry.actorGrants;
+    if (
+      rawGrants && typeof rawGrants === "object" && !Array.isArray(rawGrants)
+    ) {
+      const keys = Object.keys(rawGrants as Record<string, unknown>);
+      if (keys.length > 16) {
+        results.push({
+          entryId,
+          entityId,
+          status: "rejected",
+          error: "too many actor grants",
+        });
+        continue;
+      }
+      for (const k of keys) {
+        const v = String((rawGrants as Record<string, unknown>)[k] ?? "")
+          .trim();
+        if (!v || v.length > MAX_GRANT_LENGTH) continue;
+        actorGrantHashes[k.slice(0, 128)] = await sha256Hex(v);
+      }
+    }
+
     // Append-only for the ledger. An entity that is already staged (pending or
     // already applied) is left untouched, so a replay cannot overwrite an applied
     // row with a different payload.
@@ -470,6 +499,9 @@ async function push(
       device_id: auth.fingerprint,
       payload,
       actor_grant_hash: actorGrantHash,
+      actor_grant_hashes: Object.keys(actorGrantHashes).length > 0
+        ? actorGrantHashes
+        : null,
     };
     if (mutable) {
       staging.received_at = now;
@@ -496,6 +528,9 @@ async function push(
       // re-login can resolve the actor. Applied rows are never touched.
       const up = await db.from("sync_mirror").update({
         actor_grant_hash: actorGrantHash,
+        actor_grant_hashes: Object.keys(actorGrantHashes).length > 0
+          ? actorGrantHashes
+          : null,
         received_at: now,
       })
         .eq("customer_id", auth.customerId)
@@ -558,6 +593,8 @@ async function push(
         if (state === "APPLIED") status = "applied";
         else if (state === "REJECTED") status = "rejected";
         else if (reason.startsWith("ACTOR_AUTH_REQUIRED")) status = "deferred";
+        else if (reason.startsWith("RETRYABLE:")) status = "retryable";
+        else if (reason.startsWith("DEFERRED:")) status = "deferred";
         else status = "stored";
         if (status === "deferred") deferred++;
         results.push({

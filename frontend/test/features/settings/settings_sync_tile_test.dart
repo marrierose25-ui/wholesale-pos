@@ -19,7 +19,7 @@ class _RefusedBackend implements SyncBackend {
   bool get isConfigured => true;
 
   @override
-  Future<Set<String>> push(List<SyncOutboxEntry> entries) async =>
+  Future<SyncPushOutcome> push(List<SyncOutboxEntry> entries) async =>
       throw const SyncAuthException('License format not supported by sync.');
 
   @override
@@ -36,7 +36,7 @@ class _HealthyBackend implements SyncBackend {
   bool get isConfigured => true;
 
   @override
-  Future<Set<String>> push(List<SyncOutboxEntry> entries) async => const {};
+  Future<SyncPushOutcome> push(List<SyncOutboxEntry> entries) async => SyncPushOutcome.empty;
 
   @override
   Future<SyncPullResult> pull({

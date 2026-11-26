@@ -7,7 +7,7 @@ name: CI
 # gate: analyze, test, then build the artefact we actually ship.
 on:
   push:
-    branches: [main, 'stage0/**', 'stage5/**']
+    branches: [main, 'stage0/**', 'stage5/**', 'stage6/**']
   pull_request:
   workflow_dispatch:
 
@@ -283,3 +283,14 @@ jobs:
           PGUSER: postgres
           PGPASSWORD: postgres
         run: psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request3_actor_authorization/request3_actor_authorization_test.sql
+
+      # Request 3 acceptance: unchecked-RPC ACL closure, retryable-vs-
+      # permanent sync classification, two-actor finance attribution, and
+      # first-owner bootstrap invariants on the same replayed schema.
+      - name: Request 3 acceptance SQL tests
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request3_acceptance/request3_acceptance_test.sql

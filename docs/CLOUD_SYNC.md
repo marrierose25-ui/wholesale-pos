@@ -345,6 +345,34 @@ enforced in code and covered by a test.
   `token_version` bump (password/status change) or explicit revocation.
   Offline tills keep selling; authorization is proven at push time, and a
   row that cannot yet be verified simply waits in the outbox.
+* **Explicit sync outcomes and durable quarantine** (Request 3 acceptance).
+  Every staged row resolves to `APPLIED`, `DEFERRED` (actor grant or
+  prerequisite missing — stays PENDING), `RETRYABLE` (transient
+  infrastructure failure — deadlock, serialization, connection loss — stays
+  PENDING with a `RETRYABLE:` marker and is never a verdict on the record),
+  or `REJECTED` (permanent validation/authorization refusal). The client
+  acks ONLY `applied`; deferred/retryable/stored rows stay queued. A
+  rejected row moves to a durable quarantine on the device (original
+  payload, entity identity, server error, timestamps — schema v24) that is
+  never auto-retried and never pruned; the operator reviews it under
+  Settings → Cloud Sync → Rejected sync records with deliberate retry or
+  confirmed discard. Unchecked `*_unchecked` money RPCs are not executable
+  by `service_role` — only the permission-checked wrappers are.
+* **Per-actor finance attribution** (Request 3 acceptance).
+  `sync_mirror.actor_grant_hashes` carries one grant digest per actor the
+  payload names (`created_by`, `completed_by`, `deleted_by`), so a finance
+  entry created by cashier A and completed by cashier B lands with
+  `created_by = A`, `completed_by = B`, and the cash deposit attributed to
+  the completer through the locked `pos_complete_finance` RPC. Payload actor
+  ids only SELECT which staged grant to resolve — the resolved user is what
+  is recorded, so a forged id cannot re-attribute the entry.
+* **First-owner bootstrap** (Request 3 acceptance). A native install creates
+  its OWNER offline and reconciles through pos-api's `setup_owner` (activation
+  code + one-owner policy + rate limits), passing the local user id and its
+  cloud-format credential so local and cloud identities match.
+  `pos_setup_owner` is idempotent for the same id and serializes concurrent
+  attempts per tenant; a different existing owner yields a conflict, never a
+  silent overwrite.
 * **Privileged transitions are never applied from pushed payloads** (Stage
   4.1 / audit H1). A license proves the device, never WHICH USER acted, so
   the gateway stages and applies only data: `pos_create_sale` hardcodes

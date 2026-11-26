@@ -95,6 +95,80 @@ class ActorGrantStore {
     return actor == null ? null : grantFor(actor);
   }
 
+  /// Every grant [entry] needs, as the sync gateway expects them (Request 3
+  /// acceptance): [SyncActorGrantSet.primary] for the row's main actor plus
+  /// [SyncActorGrantSet.byActor] for EACH actor id the payload references.
+  ///
+  /// A finance entry can be created by cashier A and completed by cashier B
+  /// while both are offline; the payload's `created_by`/`completed_by`/
+  /// `deleted_by` ids each get their own grant so the server resolves every
+  /// actor independently. The payload ids only SELECT which stored grant to
+  /// send — the server re-derives the real user from the grant itself.
+  Future<SyncActorGrantSet?> grantsForEntry(SyncOutboxEntry entry) async {
+    final actorIds = actorIdsOf(entry);
+    final wanted = <String>{...actorIds, ?currentUserId};
+    final byActor = <String, String>{};
+    for (final id in wanted) {
+      final grant = await grantFor(id);
+      if (grant != null) byActor[id] = grant;
+    }
+    if (byActor.isEmpty) return null;
+    final primaryActor = actorIdOf(entry) ?? currentUserId;
+    return SyncActorGrantSet(
+      primary: (primaryActor == null ? null : byActor[primaryActor]) ??
+          byActor.values.first,
+      byActor: byActor,
+    );
+  }
+
+  /// Actor ids a queued row's payload claims, used ONLY to choose which
+  /// locally stored grants to attach. The server never trusts these fields;
+  /// it resolves each grant to a live user and uses THAT user for the column.
+  static Set<String> actorIdsOf(SyncOutboxEntry entry) {
+    Map<String, dynamic> payload;
+    try {
+      payload = entry.payload;
+    } catch (_) {
+      return const {};
+    }
+    String? read(String objectKey, String field) {
+      final object = payload[objectKey];
+      if (object is Map) {
+        final value = object[field];
+        if (value is String && value.isNotEmpty) return value;
+      }
+      return null;
+    }
+
+    String? single(String objectKey, String field) => read(objectKey, field);
+
+    switch (entry.entityType) {
+      case SyncEntities.sale:
+        return {single('sale', 'cashier_id')}.nonNulls.toSet();
+      case SyncEntities.shift:
+        return {single('shift', 'cashier_id')}.nonNulls.toSet();
+      case SyncEntities.cashMovement:
+        return {single('cash_movement', 'user_id')}.nonNulls.toSet();
+      case SyncEntities.voidRequest:
+        return {single('void_request', 'requested_by')}.nonNulls.toSet();
+      case SyncEntities.financeEntry:
+        // Creation, completion and deletion are three independent
+        // authorized acts — collect every actor the row names.
+        return {
+          single('finance_entry', 'created_by'),
+          single('finance_entry', 'completed_by'),
+          single('finance_entry', 'deleted_by'),
+        }.nonNulls.toSet();
+      case SyncEntities.picklist:
+        return {single('picklist', 'created_by')}.nonNulls.toSet();
+      // `user` is deliberately absent: the payload id is the ACCOUNT being
+      // edited, not the person editing it. Falling through to the signed-in
+      // user is what attributes an owner's offline cashier edit correctly.
+      default:
+        return const {};
+    }
+  }
+
   /// Actor id a queued row claims, used ONLY to choose which locally stored
   /// grant to attach. The server never trusts this field; it resolves the
   /// grant to a live user and uses that user for every actor column.
@@ -124,8 +198,13 @@ class ActorGrantStore {
       case SyncEntities.voidRequest:
         return read('void_request', 'requested_by');
       case SyncEntities.financeEntry:
-        return read('finance_entry', 'created_by') ??
-            read('finance_entry', 'completed_by');
+        // The MOST RECENT actor is the better primary: whoever completed or
+        // deleted the entry is the person whose grant best explains the
+        // row's current state. created_by stays available via actorIdsOf for
+        // its own slot.
+        return read('finance_entry', 'completed_by') ??
+            read('finance_entry', 'deleted_by') ??
+            read('finance_entry', 'created_by');
       case SyncEntities.picklist:
         return read('picklist', 'created_by');
       // `user` is deliberately absent: the payload id is the ACCOUNT being

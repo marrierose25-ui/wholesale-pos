@@ -232,6 +232,7 @@ class SyncService {
         authenticationFailed: failure is SyncAuthException,
         applied: applied,
         queued: remaining,
+        quarantined: await _quarantinedSafely(),
       );
     }
 
@@ -291,14 +292,19 @@ class SyncService {
       return (0, await _outbox.pendingCount());
     }
 
-    // A backend failure propagates: everything stays queued, and [syncNow]
-    // records why so the operator is not left guessing.
-    final Set<String> acked = await _backend.push(pending);
-
-    // Mark synced only what the server confirmed; a partially-acked batch
-    // leaves its retryable rows queued (audit #20).
-    await _outbox.markSynced(acked.toList());
-    return (acked.length, await _outbox.pendingCount());
+    // Mark synced only what the server confirmed APPLIED; deferred,
+    // retryable and still-stored rows stay queued, and permanent refusals
+    // move to durable quarantine with their payload and server reason —
+    // a rejected financial record is never acked, never pruned, never lost
+    // (Request 3 acceptance).
+    final outcome = await _backend.push(pending);
+    await _outbox.markSynced(outcome.acked.toList());
+    if (outcome.rejected.isNotEmpty) {
+      await _outbox.markQuarantined({
+        for (final r in outcome.rejected) r.entryId: r.error,
+      });
+    }
+    return (outcome.acked.length, await _outbox.pendingCount());
   }
 
   /// Applies every cloud page this device has not seen yet. Returns the number
@@ -321,6 +327,30 @@ class SyncService {
     final report = await puller.pullNow();
     _lastPull = _now();
     return report.inserted;
+  }
+
+  /// Quarantined entries for the operator review surface. Empty when the
+  /// repository cannot answer — the sync loop must never break over it.
+  Future<List<SyncOutboxEntry>> quarantinedEntries() async {
+    try {
+      return await _outbox.quarantined();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Deliberate operator actions on quarantined records.
+  Future<void> retryQuarantined(List<String> ids) =>
+      _outbox.retryQuarantined(ids);
+  Future<int> discardQuarantined(List<String> ids) =>
+      _outbox.discardQuarantined(ids);
+
+  Future<int> _quarantinedSafely() async {
+    try {
+      return await _outbox.quarantinedCount();
+    } catch (_) {
+      return 0;
+    }
   }
 
   Future<int> _queuedSafely() async {

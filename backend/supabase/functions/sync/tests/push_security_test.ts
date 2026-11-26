@@ -48,6 +48,14 @@ class MockDb {
       }
       return Promise.resolve({ data: this.applyResult, error: null });
     }
+    if (fn === "rate_limit_hit") {
+      // The durable limiter is covered by its own suite; here it must simply
+      // allow so the push path under test is reached.
+      return Promise.resolve({
+        data: { allowed: true, retry_after_seconds: 0 },
+        error: null,
+      });
+    }
     return Promise.resolve({
       data: null,
       error: { message: `unexpected rpc ${fn}` },
@@ -64,6 +72,11 @@ class MockDb {
       select(_cols?: string, opts?: { count?: string; head?: boolean }) {
         op = "select";
         head = opts?.head === true;
+        return api;
+      },
+      update(row: Row) {
+        op = "update";
+        payload = row;
         return api;
       },
       upsert(row: Row, _opts?: unknown) {
@@ -111,7 +124,13 @@ class MockDb {
         return api._exec(false).then(resolve, reject);
       },
       _exec(single: boolean) {
-        if (op === "upsert") {
+        if (op === "upsert" || op === "update") {
+          if (op === "update" && payload && !Array.isArray(payload)) {
+            const matched = self.mirrorRows.filter((r) =>
+              filters.every((f) => f(r))
+            );
+            for (const r of matched) Object.assign(r, payload);
+          }
           return Promise.resolve({ data: null, error: null });
         }
         let rows: Row[] = [];
@@ -284,8 +303,11 @@ Deno.test("push: forged APPROVED/REJECTED void_request never reaches decide RPCs
   if (privileged.length !== 0) {
     throw new Error(`privileged RPC called: ${JSON.stringify(privileged)}`);
   }
-  // Only pos_sync_apply may run — the data path.
-  const other = db.rpcCalls.filter((c) => c.fn !== "pos_sync_apply");
+  // Only pos_sync_apply may write — the data path. rate_limit_hit is the
+  // abuse bound that guards every push and is expected to run first.
+  const other = db.rpcCalls.filter((c) =>
+    c.fn !== "pos_sync_apply" && c.fn !== "rate_limit_hit"
+  );
   if (other.length !== 0) {
     throw new Error(`unexpected rpc: ${JSON.stringify(other)}`);
   }

@@ -29,12 +29,13 @@ class SyncGatewayBackend implements SyncBackend {
   final String _fnUrl;
   final Future<String?> Function() _licenseProvider;
 
-  /// Supplies the per-entry actor grant. The licence authenticates the device;
-  /// this delegated credential says which signed-in user is responsible for a
-  /// queued sale/cash/finance row. It is looked up per entry so an owner's
-  /// queued edit still resolves after a cashier logs in, and it is never stored
-  /// in the outbox payload itself.
-  final Future<String?> Function(SyncOutboxEntry entry)? _grantProvider;
+  /// Supplies the per-entry actor grants. The licence authenticates the device;
+  /// these delegated credentials say which signed-in users are responsible for
+  /// a queued row — one primary grant plus one per actor the payload names
+  /// (a finance entry's creator and completer can differ). Looked up per entry
+  /// so an owner's queued edit still resolves after a cashier logs in, and
+  /// never stored in the outbox payload itself.
+  final SyncGrantProvider? _grantProvider;
 
   final http.Client _client;
 
@@ -86,7 +87,7 @@ class SyncGatewayBackend implements SyncBackend {
     required bool unsafeAllowEmbed,
     required bool isMobile,
     required Future<String?> Function() licenseProvider,
-    Future<String?> Function(SyncOutboxEntry entry)? grantProvider,
+    SyncGrantProvider? grantProvider,
   }) {
     if (gatewayUrl.isNotEmpty) {
       return SyncGatewayBackend(
@@ -109,7 +110,7 @@ class SyncGatewayBackend implements SyncBackend {
   bool get isConfigured => _fnUrl.isNotEmpty;
 
   @override
-  Future<Set<String>> push(List<SyncOutboxEntry> entries) async {
+  Future<SyncPushOutcome> push(List<SyncOutboxEntry> entries) async {
     final license = await _licenseProvider();
     if (license == null || license.trim().isEmpty) {
       // Not activated yet: throw so SyncService leaves rows queued. Selling
@@ -124,15 +125,17 @@ class SyncGatewayBackend implements SyncBackend {
     // row deferred server-side), never the whole batch.
     final wireEntries = <Map<String, dynamic>>[];
     for (final e in entries) {
-      String? grant;
+      SyncActorGrantSet? grants;
       final provider = _grantProvider;
       if (provider != null) {
         try {
-          grant = await provider(e);
+          grants = await provider(e);
         } catch (_) {
-          grant = null;
+          grants = null;
         }
       }
+      final primary = grants?.primary?.trim() ?? '';
+      final byActor = grants?.byActor ?? const <String, String>{};
       wireEntries.add({
         // The outbox row id, echoed back per entry so the ack marks exactly
         // the rows the server processed — two edits to one entity no longer
@@ -147,8 +150,15 @@ class SyncGatewayBackend implements SyncBackend {
         // The opaque, server-issued delegated credential for the person who
         // queued this row. The gateway hashes it and never stores the raw
         // token; the server resolves it to a live user for every actor column.
-        if (grant != null && grant.trim().isNotEmpty)
-          'actorGrant': grant.trim(),
+        if (primary.isNotEmpty) 'actorGrant': primary,
+        // Every actor the payload names gets its own grant slot, so the
+        // server resolves creator/completer/deleter independently (a forged
+        // payload id can only select WHICH grant to use, never who it is).
+        if (byActor.isNotEmpty)
+          'actorGrants': {
+            for (final a in byActor.entries)
+              if (a.value.trim().isNotEmpty) a.key: a.value.trim(),
+          },
       });
     }
 
@@ -204,27 +214,40 @@ class SyncGatewayBackend implements SyncBackend {
       // No per-entry verdict means nothing is confirmed; leave every row
       // queued and retry. Returning empty (vs ack-all) is fail-safe:
       // retries are cheap, losing a sale is not.
-      return const <String>{};
+      return SyncPushOutcome.empty;
     }
     final idsByEntity = <String, List<String>>{};
     for (final e in entries) {
       (idsByEntity[e.entityId] ??= <String>[]).add(e.id);
     }
     final known = entries.map((e) => e.id).toSet();
+    final entityOf = {for (final e in entries) e.id: e.entityId};
     final acked = <String>{};
+    final rejected = <SyncPushRejection>[];
+    var deferred = 0;
     for (final r in results.whereType<Map>()) {
       final status = '${r['status']}';
-      if (status != 'applied' && status != 'rejected') {
-        continue;
-      }
       final entryId = '${r['entryId'] ?? ''}';
-      if (entryId.isNotEmpty && known.contains(entryId)) {
-        acked.add(entryId);
-      } else {
-        acked.addAll(idsByEntity['${r['entityId']}'] ?? const <String>[]);
+      final resolvedId = entryId.isNotEmpty && known.contains(entryId)
+          ? entryId
+          : (idsByEntity['${r['entityId']}'] ?? const <String>[]).firstOrNull;
+      if (status == 'deferred') deferred++;
+      if (resolvedId == null) continue;
+      if (status == 'applied') {
+        // Only a confirmed application is acked — 'stored'/'retryable'/
+        // 'deferred' rows stay queued until the server actually books them.
+        acked.add(resolvedId);
+      } else if (status == 'rejected') {
+        // A permanent refusal is quarantined by the caller with the payload
+        // intact — never acked, never pruned.
+        rejected.add(SyncPushRejection(
+          entryId: resolvedId,
+          entityId: entityOf[resolvedId] ?? '${r['entityId'] ?? ''}',
+          error: '${r['error'] ?? 'rejected by server'}',
+        ));
       }
     }
-    return acked;
+    return SyncPushOutcome(acked: acked, rejected: rejected, deferred: deferred);
   }
 
   /// Fetches every transaction recorded after [cursor] — including the ones

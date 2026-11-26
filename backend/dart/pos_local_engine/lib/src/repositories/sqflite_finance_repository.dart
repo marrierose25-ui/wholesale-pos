@@ -685,6 +685,10 @@ class SqfliteFinanceRepository implements FinanceRepository {
         'finance_entries',
         {
           'status': FinanceEntry.statusDeleted,
+          // Who deleted it is ledger data, not a UI hint: the cloud resolves
+          // this actor through its own grant so a forged payload id cannot
+          // re-attribute the deletion.
+          'deleted_by': ownerId,
           'updated_at': now.toIso8601String(),
         },
         where: 'id = ? AND status != ?',
