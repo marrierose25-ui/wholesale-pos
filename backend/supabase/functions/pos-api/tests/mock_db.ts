@@ -366,7 +366,28 @@ const DEFAULT_RPC: Record<string, RpcHandler> = {
   pos_product_summary: () => [],
   pos_cashier_performance: () => [],
   pos_setup_owner: (p, db) => {
-    db.table("pos_users").push({
+    const users = db.table("pos_users");
+    const sameId = users.find((r) =>
+      r.customer_id === p.p_customer && r.id === p.p_id &&
+      r.role === "OWNER" && r.deleted_at == null
+    );
+    if (sameId) {
+      // Mirrors the hardened SQL: a same-id retry is a no-op ONLY when the
+      // username and credential pair match the stored owner row.
+      if (
+        sameId.username === p.p_username &&
+        sameId.pw_salt === p.p_pw_salt && sameId.pw_hash === p.p_pw_hash
+      ) {
+        return null;
+      }
+      return { __error: "Owner already exists." };
+    }
+    if (
+      users.some((r) => r.customer_id === p.p_customer && r.deleted_at == null)
+    ) {
+      return { __error: "Owner already exists." };
+    }
+    users.push({
       id: p.p_id,
       customer_id: p.p_customer,
       username: p.p_username,

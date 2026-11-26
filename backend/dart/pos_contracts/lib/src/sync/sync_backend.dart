@@ -96,6 +96,43 @@ class SyncPushOutcome {
   static const SyncPushOutcome empty = SyncPushOutcome();
 }
 
+/// Per-entry verdicts from a quarantine-recovery pass (Request 3 P1).
+///
+/// [applied] rows are confirmed landed — mark the outbox row synced.
+/// [rejected] rows were refused AGAIN — they stay quarantined with the new
+/// server reason. [retryable] rows are deferred or still staged — they go
+/// back to the normal pending queue. [missing] rows have no staged copy
+/// server-side at all — they stay quarantined with the explanation.
+class SyncRecoveryOutcome {
+  final Set<String> applied;
+  final List<SyncPushRejection> rejected;
+  final Set<String> retryable;
+  final List<SyncPushRejection> missing;
+
+  const SyncRecoveryOutcome({
+    this.applied = const {},
+    this.rejected = const [],
+    this.retryable = const {},
+    this.missing = const [],
+  });
+
+  static const SyncRecoveryOutcome empty = SyncRecoveryOutcome();
+}
+
+/// A [SyncBackend] that can ask the cloud to re-validate quarantined records.
+///
+/// Re-queueing a quarantined outbox row locally is NOT recovery: the staged
+/// server row is still REJECTED and refuses identically forever. Only a
+/// backend that implements this can honour an operator "retry" — anything
+/// else must tell the operator recovery is unsupported instead of pretending
+/// the requeue did something.
+abstract class SyncRecoveryBackend {
+  /// Asks the server to re-queue each entry's still-REJECTED staged row and
+  /// re-run it through the normal apply path. The entries are the quarantined
+  /// outbox rows; the payload is NOT re-sent — the server already holds it.
+  Future<SyncRecoveryOutcome> recover(List<SyncOutboxEntry> entries);
+}
+
 /// Seam between the offline POS and whatever remote store is used later
 /// (Supabase/PostgREST, a REST API, etc.). The app never talks to the network
 /// directly — it hands batches of queued changes to a [SyncBackend].

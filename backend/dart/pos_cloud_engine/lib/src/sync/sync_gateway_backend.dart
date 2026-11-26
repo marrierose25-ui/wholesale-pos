@@ -21,7 +21,7 @@ import 'supabase_sync_backend.dart';
 ///   * a device activated AFTER app start begins syncing without a restart;
 ///   * an un-activated device keeps rows queued (push throws, SyncService
 ///     swallows and retries) — nothing is ever lost or sent unauthenticated.
-class SyncGatewayBackend implements SyncBackend {
+class SyncGatewayBackend implements SyncBackend, SyncRecoveryBackend {
   /// Settings key holding the signed license — must match `_licenseCodeKey`
   /// in main.dart's LicenseWrapper (the activation flow writes it there).
   static const String licenseSettingKey = 'license_code';
@@ -248,6 +248,105 @@ class SyncGatewayBackend implements SyncBackend {
       }
     }
     return SyncPushOutcome(acked: acked, rejected: rejected, deferred: deferred);
+  }
+
+  /// Quarantine recovery (Request 3 P1): asks the gateway to re-queue each
+  /// entry's still-REJECTED staged row and re-run it through pos_sync_apply.
+  /// The payload is NOT re-sent — the server already holds it; only the
+  /// entity identity is needed to find the staged row.
+  @override
+  Future<SyncRecoveryOutcome> recover(List<SyncOutboxEntry> entries) async {
+    if (entries.isEmpty) return SyncRecoveryOutcome.empty;
+    final license = await _licenseProvider();
+    if (license == null || license.trim().isEmpty) {
+      throw const SyncAuthException(
+        'This device has no activation code yet, so it cannot reach the cloud.',
+      );
+    }
+
+    final res = await _client.post(
+      Uri.parse(_fnUrl),
+      headers: const {
+        'Content-Type': 'application/json',
+        'User-Agent': 'WholesalePOS-Sync/1.0',
+      },
+      body: jsonEncode({
+        'action': 'recover',
+        'license': license.trim(),
+        'entries': [
+          for (final e in entries)
+            {'entryId': e.id, 'entityType': e.entityType, 'entityId': e.entityId},
+        ],
+      }),
+    );
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw SyncAuthException(
+        _errorOf(res.body) ??
+            'The cloud refused this device (HTTP ${res.statusCode}).',
+      );
+    }
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception(
+        'Sync gateway recover failed (HTTP ${res.statusCode}): ${res.body}',
+      );
+    }
+    final decoded = jsonDecode(res.body);
+    if (decoded is! Map || decoded['ok'] == false) {
+      throw Exception(
+        'Sync gateway rejected recover: ${decoded is Map ? decoded['error'] : 'bad response'}',
+      );
+    }
+    final results = decoded['results'];
+    if (results is! List) return SyncRecoveryOutcome.empty;
+
+    final known = entries.map((e) => e.id).toSet();
+    final idsByEntity = <String, List<String>>{};
+    for (final e in entries) {
+      (idsByEntity[e.entityId] ??= <String>[]).add(e.id);
+    }
+    final entityOf = {for (final e in entries) e.id: e.entityId};
+    String resolveId(Map r) {
+      final entryId = '${r['entryId'] ?? ''}';
+      if (entryId.isNotEmpty && known.contains(entryId)) return entryId;
+      return (idsByEntity['${r['entityId']}'] ?? const <String>[]).firstOrNull ??
+          '';
+    }
+
+    final applied = <String>{};
+    final rejected = <SyncPushRejection>[];
+    final retryable = <String>{};
+    final missing = <SyncPushRejection>[];
+    for (final r in results.whereType<Map>()) {
+      final id = resolveId(r);
+      if (id.isEmpty) continue;
+      switch ('${r['status']}') {
+        case 'applied':
+          applied.add(id);
+        case 'rejected':
+          rejected.add(SyncPushRejection(
+            entryId: id,
+            entityId: entityOf[id] ?? '${r['entityId'] ?? ''}',
+            error: '${r['error'] ?? 'rejected by server'}',
+          ));
+        case 'missing':
+          missing.add(SyncPushRejection(
+            entryId: id,
+            entityId: entityOf[id] ?? '${r['entityId'] ?? ''}',
+            error: '${r['error'] ?? 'no staged record on the server'}',
+          ));
+        default:
+          // deferred / stored: the staged row is alive again — hand it back
+          // to the normal pending queue so the next drain retries it with
+          // whatever grants are available then.
+          retryable.add(id);
+      }
+    }
+    return SyncRecoveryOutcome(
+      applied: applied,
+      rejected: rejected,
+      retryable: retryable,
+      missing: missing,
+    );
   }
 
   /// Fetches every transaction recorded after [cursor] — including the ones

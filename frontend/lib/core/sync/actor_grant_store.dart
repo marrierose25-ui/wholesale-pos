@@ -114,9 +114,13 @@ class ActorGrantStore {
     }
     if (byActor.isEmpty) return null;
     final primaryActor = actorIdOf(entry) ?? currentUserId;
+    // The primary grant must belong to the entry's OWN actor. Falling back to
+    // any available grant would let the currently signed-in user stand in for
+    // a missing actor — e.g. B's grant becoming the primary actor for A's
+    // sale. A null primary leaves the row deferred server-side until the real
+    // actor's grant can be attached; that is the correct outcome.
     return SyncActorGrantSet(
-      primary: (primaryActor == null ? null : byActor[primaryActor]) ??
-          byActor.values.first,
+      primary: primaryActor == null ? null : byActor[primaryActor],
       byActor: byActor,
     );
   }

@@ -337,7 +337,10 @@ enforced in code and covered by a test.
   user's feature permissions (`pos`/`register`/`finance`/`warehouse`) through
   permission-wrapped RPCs. A missing/expired/revoked grant leaves the row
   PENDING (`ACTOR_AUTH_REQUIRED`) and the client reports it `deferred` — the
-  outbox entry stays queued, nothing is discarded or falsely acked. Owner
+  outbox entry stays queued, nothing is discarded or falsely acked. The
+  primary grant is always the entry's OWN actor: when the payload names an
+  actor whose grant is absent, the row defers rather than borrowing the
+  signed-in user's grant (Request 3 final corrections). Owner
   accounts are never mutable through device sync: devices may provision
   CASHIER accounts under an owner grant, but cannot create/promote owners or
   change any existing credential — those go through live pos-api only.
@@ -356,23 +359,48 @@ enforced in code and covered by a test.
   payload, entity identity, server error, timestamps — schema v24) that is
   never auto-retried and never pruned; the operator reviews it under
   Settings → Cloud Sync → Rejected sync records with deliberate retry or
-  confirmed discard. Unchecked `*_unchecked` money RPCs are not executable
-  by `service_role` — only the permission-checked wrappers are.
-* **Per-actor finance attribution** (Request 3 acceptance).
+  confirmed discard. Retry is a real server-side recovery, not a local
+  requeue: the client calls the sync gateway's `recover` action, which runs
+  `pos_sync_recover` — it re-queues ONLY rows still marked `REJECTED` back to
+  `PENDING` (never `APPLIED`, never an already-`PENDING` row), writes a
+  `SYNC_RECOVERY` audit entry preserving the previous refusal, then re-runs
+  `pos_sync_apply` so grants, permissions and payloads are genuinely
+  re-validated. The apply RPCs' own idempotency (sale/movement ids, the
+  one-deposit/one-reversal-per-collection guards) means recovery cannot
+  duplicate an already-applied financial transaction. A record the gateway
+  refused before staging reports `missing` and stays quarantined; a backend
+  without recovery support tells the operator so honestly instead of
+  pretending the requeue did anything. Unchecked `*_unchecked` money RPCs
+  are not executable by `service_role` — only the permission-checked
+  wrappers are.
+* **Per-actor finance attribution** (Request 3 acceptance). 
   `sync_mirror.actor_grant_hashes` carries one grant digest per actor the
   payload names (`created_by`, `completed_by`, `deleted_by`), so a finance
   entry created by cashier A and completed by cashier B lands with
   `created_by = A`, `completed_by = B`, and the cash deposit attributed to
   the completer through the locked `pos_complete_finance` RPC. Payload actor
   ids only SELECT which staged grant to resolve — the resolved user is what
-  is recorded, so a forged id cannot re-attribute the entry.
+  is recorded, so a forged id cannot re-attribute the entry. The final
+  `DELETED` status is not treated as the whole history: `pos_sync_apply`
+  replays each independently authorized transition in order — insert PENDING
+  under the creator, `pos_complete_finance` under the completer (its own
+  audit row and cash deposit), `pos_delete_finance_entry` under the deleter
+  (its own audit row and reversal) — so a create+complete+delete that all
+  happened offline before first sync keeps every actor, and CASH
+  collections get exactly one deposit and one reversal because the device's
+  cash legs carry `source_finance_entry_id` and the server-side reversal
+  skips legs the device already posted.
 * **First-owner bootstrap** (Request 3 acceptance). A native install creates
   its OWNER offline and reconciles through pos-api's `setup_owner` (activation
   code + one-owner policy + rate limits), passing the local user id and its
   cloud-format credential so local and cloud identities match.
   `pos_setup_owner` is idempotent for the same id and serializes concurrent
   attempts per tenant; a different existing owner yields a conflict, never a
-  silent overwrite.
+  silent overwrite. A same-id retry is idempotent ONLY when the submitted
+  username and credential (`pw_salt` + `pw_hash`) match the stored owner row
+  exactly — pos-api also verifies the credential itself before issuing any
+  OWNER JWT, so knowing the owner id and formatting a replacement hash can
+  never mint a session (Request 3 final corrections).
 * **Privileged transitions are never applied from pushed payloads** (Stage
   4.1 / audit H1). A license proves the device, never WHICH USER acted, so
   the gateway stages and applies only data: `pos_create_sale` hardcodes

@@ -17,8 +17,15 @@
 --   B5  deferred completion: a COMPLETED payload with no completer grant
 --       stays PENDING (ACTOR_AUTH_REQUIRED), never half-applies
 --   B6  first-owner bootstrap: pos_setup_owner is idempotent for the same
---       id, refuses a second owner, and keeps owner provisioning off the
---       device-sync path
+--       id ONLY with identical credentials, refuses a second owner and any
+--       same-id credential/username mismatch, and keeps owner provisioning
+--       off the device-sync path
+--   B7  offline finance lifecycle: create(A) -> complete(B) -> delete(C)
+--       replayed from ONE staged row preserves every actor, the completion
+--       audit, and exactly one deposit + one reversal per CASH collection
+--   B8  quarantine recovery: pos_sync_recover re-queues only REJECTED rows,
+--       audits the previous refusal, re-validates through pos_sync_apply,
+--       never touches APPLIED rows, and reports missing staging honestly
 --
 -- psql -v ON_ERROR_STOP=1 -f request3_acceptance_test.sql
 
@@ -387,6 +394,202 @@ SELECT pg_temp.expect_true('B6 owner still not sync-creatable',
     WHERE customer_id = '77777777-7777-7777-7777-777777777777'
       AND id = 'own-2') = 0,
   'no second owner row exists');
+
+-- Same-id retry is idempotent ONLY for the identical credential. A caller
+-- who knows the owner id and supplies a differently-formatted hash must hit
+-- the same conflict a second owner gets — never a silent success.
+SELECT pg_temp.expect_error('B6 same-id different hash refused',
+  'SELECT public.pos_setup_owner(''77777777-7777-7777-7777-777777777777'',''own-1'',''boss'',''s'',''h-DIFFERENT'')',
+  'Owner already exists');
+SELECT pg_temp.expect_error('B6 same-id different salt refused',
+  'SELECT public.pos_setup_owner(''77777777-7777-7777-7777-777777777777'',''own-1'',''boss'',''s2'',''h'')',
+  'Owner already exists');
+SELECT pg_temp.expect_error('B6 same-id different username refused',
+  'SELECT public.pos_setup_owner(''77777777-7777-7777-7777-777777777777'',''own-1'',''othername'',''s'',''h'')',
+  'Owner already exists');
+SELECT pg_temp.expect_true('B6 mismatched retries changed nothing',
+  (SELECT pw_hash FROM public.pos_users
+    WHERE customer_id = '77777777-7777-7777-7777-777777777777'
+      AND id = 'own-1') = 'h'
+  AND (SELECT count(*) FROM public.pos_users
+    WHERE customer_id = '77777777-7777-7777-7777-777777777777') = 1,
+  'stored credential untouched, still exactly one user');
+
+-- ================================================================ B7 ======
+-- Offline lifecycle replay: A creates, B completes, C deletes — all before
+-- the first sync. The staged row's final status is DELETED but the payload
+-- still carries completed_by/deleted_by, so every transition replays with
+-- its own actor. CASH gets the full deposit+reversal leg check; BANK proves
+-- the same attribution without cash side-effects.
+SELECT pg_temp.stage(
+  '66666666-6666-6666-6666-666666666666', 'finance_category', 'catB',
+  jsonb_build_object('finance_category', jsonb_build_object(
+    'name', 'Reconcile', 'created_at', now(), 'updated_at', now())),
+  pg_temp.grant('cashA'));
+-- CASH entry: final status DELETED, completion AND deletion both offline.
+SELECT pg_temp.stage(
+  '66666666-6666-6666-6666-666666666666', 'finance_entry', 'fe-life-cash',
+  jsonb_build_object('finance_entry', jsonb_build_object(
+    'category_id', 'catB', 'source', 'CASH',
+    'amount_minor_units', 7000, 'description', 'full lifecycle',
+    'status', 'DELETED', 'payment_method', 'CASH',
+    'created_by', 'cashA', 'completed_by', 'cashB', 'deleted_by', 'ownerA',
+    'entry_date', now(), 'created_at', now(), 'updated_at', now())),
+  pg_temp.grant('cashB'),
+  jsonb_build_object(
+    'cashA', pg_temp.hash('cashA'),
+    'cashB', pg_temp.hash('cashB'),
+    'ownerA', pg_temp.hash('owner')));
+-- The device-pushed cash legs travel as their own entries, exactly as the
+-- local outbox writes them: DEPOSIT by the completer, WITHDRAWAL by the
+-- deleter, both linked to the collection.
+SELECT pg_temp.stage(
+  '66666666-6666-6666-6666-666666666666', 'cash_movement', 'cm-dep-life',
+  jsonb_build_object('cash_movement', jsonb_build_object(
+    'type', 'DEPOSIT', 'amount_minor_units', 7000,
+    'reason', 'Collected from Reconcile', 'user_id', 'cashB',
+    'source_finance_entry_id', 'fe-life-cash')),
+  pg_temp.grant('cashB'));
+SELECT pg_temp.stage(
+  '66666666-6666-6666-6666-666666666666', 'cash_movement', 'cm-wdr-life',
+  jsonb_build_object('cash_movement', jsonb_build_object(
+    'type', 'WITHDRAWAL', 'amount_minor_units', 7000,
+    'reason', 'Reversal: deleted cash collection from Reconcile (CASH)',
+    'user_id', 'ownerA',
+    'source_finance_entry_id', 'fe-life-cash')),
+  pg_temp.grant('owner'));
+-- BANK entry: same three-actor lifecycle, no cash legs at all.
+SELECT pg_temp.stage(
+  '66666666-6666-6666-6666-666666666666', 'finance_entry', 'fe-life-bank',
+  jsonb_build_object('finance_entry', jsonb_build_object(
+    'category_id', 'catB', 'source', 'BANK',
+    'amount_minor_units', 9000, 'description', 'bank lifecycle',
+    'status', 'DELETED', 'payment_method', 'BANK',
+    'created_by', 'cashA', 'completed_by', 'cashB', 'deleted_by', 'ownerA',
+    'entry_date', now(), 'created_at', now(), 'updated_at', now())),
+  pg_temp.grant('cashB'),
+  jsonb_build_object(
+    'cashA', pg_temp.hash('cashA'),
+    'cashB', pg_temp.hash('cashB'),
+    'ownerA', pg_temp.hash('owner')));
+SELECT public.pos_sync_apply('66666666-6666-6666-6666-666666666666', 500, 'fp-dev1');
+SELECT pg_temp.expect_true('B7 CASH lifecycle actors preserved',
+  (SELECT created_by FROM public.pos_finance_entries
+    WHERE customer_id = '66666666-6666-6666-6666-666666666666'
+      AND id = 'fe-life-cash') = 'cashA'
+  AND (SELECT completed_by FROM public.pos_finance_entries
+    WHERE customer_id = '66666666-6666-6666-6666-666666666666'
+      AND id = 'fe-life-cash') = 'cashB'
+  AND (SELECT completed_at FROM public.pos_finance_entries
+    WHERE customer_id = '66666666-6666-6666-6666-666666666666'
+      AND id = 'fe-life-cash') IS NOT NULL
+  AND (SELECT status FROM public.pos_finance_entries
+    WHERE customer_id = '66666666-6666-6666-6666-666666666666'
+      AND id = 'fe-life-cash') = 'DELETED',
+  'creator/completer/deleter chain: cashA -> cashB -> ownerA, final DELETED');
+SELECT pg_temp.expect_true('B7 completion and deletion audits kept',
+  EXISTS (SELECT 1 FROM public.pos_audit_logs
+    WHERE customer_id = '66666666-6666-6666-6666-666666666666'
+      AND action = 'FINANCE_COMPLETED' AND user_id = 'cashB'
+      AND details LIKE '%fe-life-cash%')
+  AND EXISTS (SELECT 1 FROM public.pos_audit_logs
+    WHERE customer_id = '66666666-6666-6666-6666-666666666666'
+      AND action = 'FINANCE_ENTRY_DELETED' AND user_id = 'ownerA'
+      AND details LIKE '%fe-life-cash%'),
+  'FINANCE_COMPLETED by cashB and FINANCE_ENTRY_DELETED by ownerA both audited');
+SELECT pg_temp.expect_true('B7 CASH legs not duplicated',
+  (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = '66666666-6666-6666-6666-666666666666'
+      AND source_finance_entry_id = 'fe-life-cash'
+      AND type = 'DEPOSIT') = 1
+  AND (SELECT count(*) FROM public.cash_movements
+    WHERE customer_id = '66666666-6666-6666-6666-666666666666'
+      AND source_finance_entry_id = 'fe-life-cash'
+      AND type = 'WITHDRAWAL') = 1,
+  'exactly one deposit and one reversal for the collection');
+SELECT pg_temp.expect_true('B7 BANK lifecycle actors preserved',
+  (SELECT created_by FROM public.pos_finance_entries
+    WHERE customer_id = '66666666-6666-6666-6666-666666666666'
+      AND id = 'fe-life-bank') = 'cashA'
+  AND (SELECT completed_by FROM public.pos_finance_entries
+    WHERE customer_id = '66666666-6666-6666-6666-666666666666'
+      AND id = 'fe-life-bank') = 'cashB'
+  AND (SELECT status FROM public.pos_finance_entries
+    WHERE customer_id = '66666666-6666-6666-6666-666666666666'
+      AND id = 'fe-life-bank') = 'DELETED'
+  AND NOT EXISTS (SELECT 1 FROM public.cash_movements
+    WHERE customer_id = '66666666-6666-6666-6666-666666666666'
+      AND source_finance_entry_id = 'fe-life-bank'),
+  'bank entry: same actor chain, no cash legs created');
+SELECT pg_temp.expect_true('B7 mirror rows applied',
+  (SELECT count(*) FROM public.sync_mirror
+    WHERE customer_id = '66666666-6666-6666-6666-666666666666'
+      AND entity_id IN ('fe-life-cash','fe-life-bank','cm-dep-life','cm-wdr-life')
+      AND apply_status = 'APPLIED') = 4,
+  'all four staged rows reached APPLIED');
+
+-- ================================================================ B8 ======
+-- Quarantine recovery lifecycle. cat-badperm is already REJECTED from B3:
+-- recover must re-queue ONLY that row, audit the previous refusal, re-run
+-- pos_sync_apply, and report the fresh verdict — never touch APPLIED rows.
+SELECT pg_temp.expect_true('B8 rejected row staged for recovery',
+  (SELECT apply_status FROM public.sync_mirror
+    WHERE customer_id = '66666666-6666-6666-6666-666666666666'
+      AND entity_type = 'finance_category' AND entity_id = 'cat-badperm')
+    = 'REJECTED',
+  'precondition: cat-badperm is REJECTED');
+-- Grant cashNoFin the finance feature, then recover: the SAME staged payload
+-- must now apply — proving recovery re-validates rather than replaying a
+-- cached verdict.
+UPDATE public.pos_users SET permissions = '["pos","register","finance"]'::jsonb
+WHERE customer_id = '66666666-6666-6666-6666-666666666666'
+  AND id = 'cashNoFin';
+SELECT public.pos_sync_recover(
+  '66666666-6666-6666-6666-666666666666', 'fp-dev1',
+  jsonb_build_array(jsonb_build_object(
+    'entry_id', 'outbox-1',
+    'entity_type', 'finance_category',
+    'entity_id', 'cat-badperm')));
+SELECT pg_temp.expect_true('B8 recovered row applied after re-validation',
+  (SELECT apply_status FROM public.sync_mirror
+    WHERE customer_id = '66666666-6666-6666-6666-666666666666'
+      AND entity_type = 'finance_category' AND entity_id = 'cat-badperm')
+    = 'APPLIED'
+  AND EXISTS (SELECT 1 FROM public.pos_finance_categories
+    WHERE customer_id = '66666666-6666-6666-6666-666666666666'
+      AND id = 'cat-badperm'),
+  're-queued row re-validated and landed');
+SELECT pg_temp.expect_true('B8 recovery audited with previous refusal',
+  EXISTS (SELECT 1 FROM public.pos_audit_logs
+    WHERE customer_id = '66666666-6666-6666-6666-666666666666'
+      AND action = 'SYNC_RECOVERY'
+      AND details LIKE '%cat-badperm%'
+      AND details LIKE '%permission%'),
+  'SYNC_RECOVERY audit row preserves the original refusal');
+-- An APPLIED row must never be re-queued or duplicated by recovery.
+SELECT public.pos_sync_recover(
+  '66666666-6666-6666-6666-666666666666', 'fp-dev1',
+  jsonb_build_array(jsonb_build_object(
+    'entry_id', 'outbox-2',
+    'entity_type', 'finance_category',
+    'entity_id', 'cat-badperm')));
+SELECT pg_temp.expect_true('B8 applied row untouched by recovery',
+  (SELECT count(*) FROM public.pos_finance_categories
+    WHERE customer_id = '66666666-6666-6666-6666-666666666666'
+      AND id = 'cat-badperm') = 1
+  AND (SELECT count(*) FROM public.pos_audit_logs
+    WHERE customer_id = '66666666-6666-6666-6666-666666666666'
+      AND action = 'SYNC_RECOVERY') = 1,
+  'second recovery of an APPLIED row is a no-op, no duplicate audit');
+-- A never-staged entity reports 'missing', not a fake verdict.
+SELECT pg_temp.expect_true('B8 missing staging reported honestly',
+  (public.pos_sync_recover(
+    '66666666-6666-6666-6666-666666666666', 'fp-dev1',
+    jsonb_build_array(jsonb_build_object(
+      'entry_id', 'outbox-3',
+      'entity_type', 'sale',
+      'entity_id', 'never-staged')))->'results'->0->>'status') = 'missing',
+  'gateway-level rejection with no staged row stays quarantined');
 
 -- ================================================================ final ====
 SELECT 'ALL REQUEST-3 ACCEPTANCE CHECKS PASSED' AS result;

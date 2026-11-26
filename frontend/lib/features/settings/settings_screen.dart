@@ -1014,7 +1014,27 @@ class _QuarantineReviewDialogState extends State<_QuarantineReviewDialog> {
   }
 
   Future<void> _retry(SyncOutboxEntry entry) async {
-    await widget.service.retryQuarantined([entry.id]);
+    final report = await widget.service.retryQuarantined([entry.id]);
+    if (!mounted) return;
+    final String message;
+    if (!report.supported) {
+      message =
+          'This build cannot ask the cloud to re-check refused records. '
+          'The record stays quarantined — keep it for review or discard it.';
+    } else if (report.applied > 0) {
+      message = 'The cloud accepted the record.';
+    } else if (report.requeued > 0) {
+      message = 'Sent back to the upload queue for another attempt.';
+    } else if (report.missing > 0) {
+      message =
+          'The cloud has no staged copy of this record, so it stays '
+          'quarantined. Discard it if it is no longer needed.';
+    } else {
+      message = 'The cloud refused it again — see the reason below.';
+    }
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
     await _reload();
   }
 

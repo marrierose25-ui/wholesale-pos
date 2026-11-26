@@ -836,7 +836,20 @@ async function setupOwner(db: any, body: any): Promise<Response> {
   const code = str(body.activation_code);
   const rawName = str(body.username);
   const password = String(body.password ?? "");
-  if (!code || !rawName || !password) {
+  // A native till bootstraps its first owner OFFLINE and reconciles later: it
+  // already minted a local user id and a cloud-format credential, so it sends
+  // `user_id` + `pw_salt`/`pw_hash` instead of a plaintext password. The id
+  // keeps local SQLite and cloud identity identical; the hash path is no
+  // weaker than the password path (a caller who can supply a hash can supply
+  // the password it was derived from). Everything is still gated by the
+  // activation code + the one-owner policy inside pos_setup_owner. The
+  // pre-hashed fields are read BEFORE the password requirement so a valid
+  // pre-hashed request is not rejected for lacking a plaintext password.
+  const requestedId = str(body.user_id);
+  const preSalt = str(body.pw_salt);
+  const preHash = str(body.pw_hash);
+  const hasPreHashed = preSalt !== "" && preHash !== "";
+  if (!code || !rawName || (!hasPreHashed && !password)) {
     return json({ ok: false, error: "Missing fields" }, 400);
   }
   if (
@@ -846,25 +859,11 @@ async function setupOwner(db: any, body: any): Promise<Response> {
   ) {
     return json({ ok: false, error: "Invalid account details." }, 400);
   }
-  const username = normalizePhone(rawName);
-  if (!username) return json({ ok: false, error: PHONE_INVALID }, 400);
-  // A native till bootstraps its first owner OFFLINE and reconciles later: it
-  // already minted a local user id and a cloud-format credential, so it sends
-  // `user_id` + `pw_salt`/`pw_hash` instead of a plaintext password. The id
-  // keeps local SQLite and cloud identity identical; the hash path is no
-  // weaker than the password path (a caller who can supply a hash can supply
-  // the password it was derived from). Everything is still gated by the
-  // activation code + the one-owner policy inside pos_setup_owner.
-  const requestedId = str(body.user_id);
   if (requestedId && !/^[0-9a-fA-F-]{16,64}$/.test(requestedId)) {
     return json({ ok: false, error: "Invalid account details." }, 400);
   }
-  const preSalt = str(body.pw_salt);
-  const preHash = str(body.pw_hash);
-  const hasPreHashed = preSalt !== "" && preHash !== "";
-  if (!hasPreHashed && !password) {
-    return json({ ok: false, error: "Missing fields" }, 400);
-  }
+  const username = normalizePhone(rawName);
+  if (!username) return json({ ok: false, error: PHONE_INVALID }, 400);
   const blocked = await probeAllowed(db, "posapi:setup", code);
   if (blocked) return blocked;
   const lic = await licenseForActivationCode(db, code);
@@ -915,6 +914,62 @@ async function setupOwner(db: any, body: any): Promise<Response> {
     true,
   );
   if (!setupChk.allowed) return tooManyAttempts(setupChk.retryAfter);
+
+  // Same-id retry: an existing account under the requested id is NOT proof of
+  // anything by itself. Verify the submitted credential against the stored
+  // row before issuing a session — a caller who merely knows the owner id and
+  // can format a hash must never mint an OWNER JWT. A verified retry is the
+  // idempotent "response was lost" case and gets the same session a fresh
+  // bootstrap would; anything else is a visible conflict.
+  if (requestedId) {
+    const { data: existing } = await db.from("pos_users")
+      .select(
+        "id, username, role, active, deleted_at, pw_salt, pw_hash, token_version",
+      )
+      .eq("customer_id", customerId).eq("id", requestedId).maybeSingle();
+    if (existing) {
+      const credMatch = hasPreHashed
+        ? existing.pw_salt === preSalt &&
+          timingSafeEqualStr(String(existing.pw_hash ?? ""), preHash) &&
+          String(existing.username ?? "") === username
+        : (await verifyPassword(
+          password,
+          String(existing.pw_salt ?? ""),
+          String(existing.pw_hash ?? ""),
+        )) && String(existing.username ?? "") === username;
+      const usable = existing.role === OWNER && existing.active === true &&
+        existing.deleted_at == null;
+      if (credMatch && usable) {
+        let demoPassword: string | null = null;
+        try {
+          demoPassword = await ensureDemoUser(db, customerId, true);
+        } catch { /* non-fatal */ }
+        const token = await signJwt({
+          sub: requestedId,
+          cid: customerId,
+          role: OWNER,
+          tv: Number(existing.token_version ?? 0),
+        });
+        return json({
+          ok: true,
+          token,
+          user_id: requestedId,
+          username,
+          role: OWNER,
+          permissions: [],
+          customer_id: customerId,
+          ...(demoPassword ? { demo_password: demoPassword } : {}),
+        });
+      }
+      return json({
+        ok: false,
+        error: "Owner already exists.",
+        owner_id: existing.id ?? null,
+        owner_username: existing.username ?? null,
+      }, 409);
+    }
+  }
+
   const id = requestedId || crypto.randomUUID();
   const rpc = await db.rpc("pos_setup_owner", {
     p_customer: customerId,

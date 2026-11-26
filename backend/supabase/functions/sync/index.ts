@@ -267,6 +267,8 @@ export async function handleSyncRequest(
         return await push(db, auth, body);
       case "pull":
         return await pull(db, auth, body);
+      case "recover":
+        return await recover(db, auth, body);
       case "ping":
         return await ping(db, auth);
       default:
@@ -624,6 +626,130 @@ async function push(
     results,
     error: anyFailed ? "Some entries failed to store." : undefined,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Action: recover — deliberate operator retry of quarantined records.
+// ---------------------------------------------------------------------------
+// A local outbox row the cloud permanently refused sits in quarantine. Re-
+// queueing it locally changes nothing: the staged sync_mirror row is still
+// REJECTED and every apply refuses it identically. This action asks
+// pos_sync_recover to re-queue ONLY still-REJECTED rows and re-run them through
+// pos_sync_apply — the same validation path as a fresh push — so grants,
+// permissions and payloads are genuinely re-checked. APPLIED rows are never
+// touched, the apply RPCs' idempotency prevents duplicate financial
+// transactions, and every recovery is audit-logged server-side.
+//
+//   { action: 'recover', license: '<licenseCode>',
+//     entries: [{ entryId, entityType, entityId }] }
+//     -> { ok, results: [{entryId, entityId, status, error?}] }
+//        status: applied | rejected | deferred | stored | missing
+async function recover(
+  db: any,
+  auth: { customerId: string; fingerprint: string },
+  body: any,
+): Promise<Response> {
+  const entries = Array.isArray(body.entries) ? body.entries : [];
+  if (entries.length === 0) {
+    return json({ ok: true, results: [] });
+  }
+  if (entries.length > 200) {
+    return json({ ok: false, error: "Batch too large (max 200)." }, 413);
+  }
+
+  const limited = await syncRateLimit(
+    db,
+    "sync:recover",
+    auth.customerId,
+    auth.fingerprint,
+    PUSH_DEVICE_LIMIT,
+    PUSH_TENANT_LIMIT,
+    PUSH_GLOBAL_LIMIT_PER_SHARD,
+  );
+  if (!limited.allowed) return tooManyRequests(limited.retryAfter);
+
+  // Fold the client's local vocabulary onto staging entity names exactly like
+  // push does; entries that cannot be named are refused per-entry.
+  const requested: {
+    entry_id: string;
+    entity_type: string;
+    entity_id: string;
+  }[] = [];
+  const results: {
+    entryId: string;
+    entityId: string;
+    status: string;
+    error?: string;
+  }[] = [];
+  for (const entry of entries) {
+    const entryId = String(entry.entryId ?? "");
+    const entityId = String(entry.entityId ?? "");
+    const rawType = String(entry.entityType ?? "");
+    const entityType = ENTITY_ALIAS[rawType] ?? "";
+    if (!entityType || !entityId) {
+      results.push({
+        entryId,
+        entityId,
+        status: "rejected",
+        error: !entityType
+          ? `unknown entity type: ${rawType}`
+          : "missing entity id",
+      });
+      continue;
+    }
+    requested.push({
+      entry_id: entryId,
+      entity_type: entityType,
+      entity_id: entityId,
+    });
+  }
+
+  if (requested.length > 0) {
+    const { data, error } = await db.rpc("pos_sync_recover", {
+      p_customer: auth.customerId,
+      p_device_fingerprint: auth.fingerprint,
+      p_entries: requested,
+    });
+    if (error) throw new Error(error.message);
+    const verdicts = (data as Record<string, unknown>)?.results;
+    if (Array.isArray(verdicts)) {
+      // The RPC echoes entry_id/entity_id back; join on entity identity as a
+      // fallback for a verdict that lost its echo.
+      const byKey: Record<string, any> = {};
+      for (const v of verdicts) {
+        if (v && typeof v === "object") {
+          byKey[`${v.entity_type}:${v.entity_id}`] = v;
+        }
+      }
+      const wanted = new Map(
+        requested.map((r) => [`${r.entity_type}:${r.entity_id}`, r]),
+      );
+      for (const v of verdicts) {
+        if (!v || typeof v !== "object") continue;
+        const key = `${v.entity_type}:${v.entity_id}`;
+        const req = wanted.get(key);
+        results.push({
+          entryId: String(v.entry_id ?? req?.entry_id ?? ""),
+          entityId: String(v.entity_id ?? req?.entity_id ?? ""),
+          status: String(v.status ?? "stored"),
+          error: v.error == null ? undefined : String(v.error),
+        });
+        byKey[key] = undefined as any;
+      }
+      // A requested entry with no verdict at all stays 'stored' — the client
+      // keeps it queued rather than guessing.
+      for (const [key, req] of wanted) {
+        if (byKey[key] !== undefined) continue;
+        results.push({
+          entryId: req.entry_id,
+          entityId: req.entity_id,
+          status: "stored",
+        });
+      }
+    }
+  }
+
+  return json({ ok: true, results });
 }
 
 // ---------------------------------------------------------------------------

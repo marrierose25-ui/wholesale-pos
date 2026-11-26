@@ -667,9 +667,10 @@ class SqfliteFinanceRepository implements FinanceRepository {
                 'Reversal: deleted cash collection from ${category.name} '
                 '(${entry.source})',
             'created_at': now.toIso8601String(),
-            // Deliberately no `source_finance_entry_id`: its unique index keeps
-            // one row per collection, and this is the opposite leg, not the
-            // deposit itself.
+            // Links the reversal to its collection like the DEPOSIT does, so
+            // the cloud can tell "the device already posted this leg" apart
+            // from a second reversal and never books the money back twice.
+            'source_finance_entry_id': entry.id,
           };
           await txn.insert('cash_movements', movement);
           await SyncOutbox.upsert(
