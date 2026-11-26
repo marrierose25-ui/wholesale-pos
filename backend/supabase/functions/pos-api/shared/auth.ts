@@ -839,12 +839,15 @@ async function setupOwner(db: any, body: any): Promise<Response> {
   // A native till bootstraps its first owner OFFLINE and reconciles later: it
   // already minted a local user id and a cloud-format credential, so it sends
   // `user_id` + `pw_salt`/`pw_hash` instead of a plaintext password. The id
-  // keeps local SQLite and cloud identity identical; the hash path is no
-  // weaker than the password path (a caller who can supply a hash can supply
-  // the password it was derived from). Everything is still gated by the
-  // activation code + the one-owner policy inside pos_setup_owner. The
-  // pre-hashed fields are read BEFORE the password requirement so a valid
-  // pre-hashed request is not rejected for lacking a plaintext password.
+  // keeps local SQLite and cloud identity identical; `pos_setup_owner` is
+  // idempotent for the same id and refuses a second owner atomically. The
+  // pre-hashed credential is a replayable verifier, NOT proof of the
+  // plaintext password: it may create the first owner and reconcile an
+  // existing same-id owner, but it NEVER mints an OWNER JWT — both outcomes
+  // are session-less. Everything is still gated by the activation code +
+  // the one-owner policy inside pos_setup_owner. The pre-hashed fields are
+  // read BEFORE the password requirement so a valid pre-hashed request is
+  // not rejected for lacking a plaintext password.
   const requestedId = str(body.user_id);
   const preSalt = str(body.pw_salt);
   const preHash = str(body.pw_hash);
@@ -916,11 +919,12 @@ async function setupOwner(db: any, body: any): Promise<Response> {
   if (!setupChk.allowed) return tooManyAttempts(setupChk.retryAfter);
 
   // Same-id retry: an existing account under the requested id is NOT proof of
-  // anything by itself. Verify the submitted credential against the stored
-  // row before issuing a session — a caller who merely knows the owner id and
-  // can format a hash must never mint an OWNER JWT. A verified retry is the
-  // idempotent "response was lost" case and gets the same session a fresh
-  // bootstrap would; anything else is a visible conflict.
+  // anything by itself. A pre-hashed retry proves possession of a replayable
+  // verifier, NOT the plaintext password — it may reconcile identity but must
+  // NEVER mint an OWNER JWT. It gets a session-less success carrying the
+  // matching owner id. A plaintext retry has actually verified the password,
+  // so it earns the same session a fresh bootstrap would; anything else is a
+  // visible conflict.
   if (requestedId) {
     const { data: existing } = await db.from("pos_users")
       .select(
@@ -940,6 +944,16 @@ async function setupOwner(db: any, body: any): Promise<Response> {
       const usable = existing.role === OWNER && existing.active === true &&
         existing.deleted_at == null;
       if (credMatch && usable) {
+        if (hasPreHashed) {
+          return json({
+            ok: true,
+            reconciled: true,
+            user_id: requestedId,
+            username,
+            role: OWNER,
+            customer_id: customerId,
+          });
+        }
         let demoPassword: string | null = null;
         try {
           demoPassword = await ensureDemoUser(db, customerId, true);
@@ -1003,6 +1017,20 @@ async function setupOwner(db: any, body: any): Promise<Response> {
     "OWNER_CREATED",
     `Web owner "${username}" created.`,
   );
+  // A pre-hashed native bootstrap CREATES the first cloud owner but proves
+  // only possession of a replayable verifier — it gets a session-less
+  // success. The till logs in later through the real password flow. Only
+  // the plaintext path (password actually verified above) earns a session.
+  if (hasPreHashed) {
+    return json({
+      ok: true,
+      created: true,
+      user_id: id,
+      username,
+      role: OWNER,
+      customer_id: customerId,
+    });
+  }
   let demoPassword: string | null = null;
   try {
     demoPassword = await ensureDemoUser(db, customerId, true);

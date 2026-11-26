@@ -294,3 +294,32 @@ jobs:
           PGUSER: postgres
           PGPASSWORD: postgres
         run: psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request3_acceptance/request3_acceptance_test.sql
+      # Request 3 bootstrap concurrency: two real sessions race
+      # pos_setup_owner — different ids serialize to one owner, identical
+      # retries converge, mismatched credentials never overwrite.
+      - name: Request 3 owner bootstrap concurrency
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: bash backend/supabase/tests/request3_acceptance/concurrency.sh
+      # Request 3 financial integrity: atomic cash-leg dedup (one
+      # deposit + one withdrawal per collection), safe legacy-reversal
+      # reconciliation, and ambiguity deferral — all asserted in SQL.
+      - name: Request 3 financial integrity SQL tests
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request3_financial_integrity/request3_financial_integrity_test.sql
+      # Two real sessions race different movement ids for the same
+      # collection leg: exactly one deposit and one withdrawal may exist.
+      - name: Request 3 cash-movement concurrency
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: bash backend/supabase/tests/request3_financial_integrity/concurrency.sh

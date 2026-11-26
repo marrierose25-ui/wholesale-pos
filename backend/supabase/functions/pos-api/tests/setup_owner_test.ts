@@ -1,11 +1,16 @@
 // Request 3 P0 regression tests for the setup_owner bootstrap path.
 //
-// Covers the two acceptance defects:
+// Covers the acceptance defects:
 //   A. A native bootstrap sends user_id + pw_salt/pw_hash and NO plaintext
 //      password — it must reach pos_setup_owner instead of dying on the
 //      "Missing fields" check.
 //   B. A same-id retry must VERIFY the submitted credential before any OWNER
 //      JWT is issued: same credentials converge, anything else conflicts.
+//   C. Pass-the-hash closure: a pre-hashed verifier is replayable, not proof
+//      of the plaintext password. Pre-hashed creation AND same-id retry may
+//      reconcile identity but must NEVER mint an OWNER JWT — both return a
+//      session-less success. Only the plaintext path (password verified)
+//      earns a session.
 
 import "./test_env.ts";
 import { assert, assertEquals } from "jsr:@std/assert@1";
@@ -65,7 +70,14 @@ Deno.test("setup_owner accepts pre-hashed credentials without a password", async
   assertEquals(r.json.ok, true);
   assertEquals(r.json.user_id, OWNER_ID);
   assertEquals(r.json.role, "OWNER");
-  assert(typeof r.json.token === "string" && r.json.token.length > 20);
+  // Pass-the-hash closure: creation via a replayable verifier is
+  // session-less — no OWNER JWT may be minted from pw_salt/pw_hash alone.
+  assertEquals(
+    r.json.token,
+    undefined,
+    "pre-hashed creation must not mint a session",
+  );
+  assertEquals(r.json.created, true);
   const owner = db.table("pos_users").find((u) => u.id === OWNER_ID);
   assert(owner, "owner row must be created with the supplied id");
   assertEquals(owner.pw_salt, SALT);
@@ -83,7 +95,7 @@ Deno.test("setup_owner still requires a credential of some kind", async () => {
   assertEquals(r.json.error, "Missing fields");
 });
 
-Deno.test("same-id retry with identical credentials returns a session", async () => {
+Deno.test("same-id pre-hashed retry reconciles without a session", async () => {
   const db = seed();
   const first = await call(db, preHashed());
   assertEquals(first.json.ok, true);
@@ -91,6 +103,12 @@ Deno.test("same-id retry with identical credentials returns a session", async ()
   assertEquals(retry.status, 200);
   assertEquals(retry.json.ok, true);
   assertEquals(retry.json.user_id, OWNER_ID);
+  assertEquals(retry.json.reconciled, true);
+  assertEquals(
+    retry.json.token,
+    undefined,
+    "a matching verifier reconciles identity but never mints an OWNER JWT",
+  );
   assertEquals(
     db.table("pos_users").filter((u) => u.role === "OWNER").length,
     1,
@@ -102,6 +120,16 @@ Deno.test("same-id retry with a different hash is refused, no JWT", async () => 
   const db = seed();
   await call(db, preHashed());
   const r = await call(db, preHashed({ pw_hash: `210000$${"B".repeat(43)}=` }));
+  assertEquals(r.status, 409);
+  assertEquals(r.json.ok, false);
+  assertEquals(r.json.error, "Owner already exists.");
+  assertEquals(r.json.token, undefined, "no session may be minted");
+});
+
+Deno.test("same-id retry with a different salt is refused", async () => {
+  const db = seed();
+  await call(db, preHashed());
+  const r = await call(db, preHashed({ pw_salt: "BQBBBBBBBBBBBBBBBBBBBB" }));
   assertEquals(r.status, 409);
   assertEquals(r.json.ok, false);
   assertEquals(r.json.error, "Owner already exists.");
@@ -168,4 +196,34 @@ Deno.test("plaintext bootstrap still works and verifies on retry", async () => {
   });
   assertEquals(wrong.status, 409);
   assertEquals(wrong.json.token, undefined);
+});
+
+Deno.test("plaintext login still issues a session; wrong password does not", async () => {
+  const db = seed();
+  const password = "correct-horse-battery";
+  const boot = await call(db, {
+    activation_code: CODE,
+    username: "0912345678",
+    password,
+  });
+  assertEquals(boot.json.ok, true);
+  assert(typeof boot.json.token === "string" && boot.json.token.length > 20);
+
+  const good = await call(db, {
+    action: "login",
+    activation_code: CODE,
+    username: "0912345678",
+    password,
+  });
+  assertEquals(good.status, 200);
+  assertEquals(good.json.ok, true);
+  assert(typeof good.json.token === "string" && good.json.token.length > 20);
+
+  const bad = await call(db, {
+    action: "login",
+    activation_code: CODE,
+    username: "0912345678",
+    password: "wrong-password-123",
+  });
+  assertEquals(bad.json.token, undefined, "bad password must not mint a JWT");
 });

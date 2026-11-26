@@ -389,7 +389,31 @@ enforced in code and covered by a test.
   happened offline before first sync keeps every actor, and CASH
   collections get exactly one deposit and one reversal because the device's
   cash legs carry `source_finance_entry_id` and the server-side reversal
-  skips legs the device already posted.
+  skips legs the device already posted. Since migration
+  `20261204000000_request3_financial_integrity` the dedup is atomic: a unique
+  index on `(customer_id, source_finance_entry_id, type)` lets one DEPOSIT and
+  one WITHDRAWAL exist per collection, and `pos_add_cash_movement` /
+  `pos_complete_finance` / `pos_delete_finance_entry` all insert with
+  `ON CONFLICT DO NOTHING`, so two devices racing different movement ids for
+  the same leg converge on one row — the loser is handed the existing
+  movement, never a financial failure.
+* **Legacy unlinked reversals** (Request 3 financial integrity). Tills that
+  queued a cash reversal before `source_finance_entry_id` existed send a
+  WITHDRAWAL with no collection link. The server never matches on amount
+  alone: a legacy leg is adopted only when its EXACT generated reason
+  (`Reversal: deleted cash collection from <category> (<source>)`), amount,
+  and actor evidence identify exactly ONE collection — either at movement
+  insert (`pos_legacy_reversal_entry_candidates`) or at delete time
+  (`pos_legacy_reversal_candidates`, which then links the movement and
+  audits `LEGACY_REVERSAL_LINKED`). Two or more matching unlinked reversals
+  are ambiguous: the delete refuses with `LEGACY_REVERSAL_AMBIGUOUS`, the
+  staged `finance_entry` stays PENDING with that durable marker (payload and
+  movements preserved, nothing acknowledged), and an operator links the
+  correct movement before retry. A missing reversal still gets exactly one
+  server-written leg; a uniquely identifiable one is never duplicated.
+  Devices with older pending outbox records need no special upgrade step:
+  the next sync push carries the same payload and the server reconciles it
+  under the rules above.
 * **First-owner bootstrap** (Request 3 acceptance). A native install creates
   its OWNER offline and reconciles through pos-api's `setup_owner` (activation
   code + one-owner policy + rate limits), passing the local user id and its
@@ -398,9 +422,14 @@ enforced in code and covered by a test.
   attempts per tenant; a different existing owner yields a conflict, never a
   silent overwrite. A same-id retry is idempotent ONLY when the submitted
   username and credential (`pw_salt` + `pw_hash`) match the stored owner row
-  exactly — pos-api also verifies the credential itself before issuing any
-  OWNER JWT, so knowing the owner id and formatting a replacement hash can
-  never mint a session (Request 3 final corrections).
+  exactly. Pass-the-hash is closed (Request 3 final corrections): the
+  pre-hashed credential is a replayable verifier, not proof of the plaintext
+  password, so pre-hashed creation and pre-hashed same-id retry return a
+  SESSION-LESS success (`ok` + `user_id`, `created`/`reconciled`) and never
+  mint an OWNER JWT — `OwnerBootstrapService` marks reconciliation done on
+  that response without needing a token. Only the plaintext-password path
+  (web bootstrap, password verified server-side) issues a session; normal
+  OWNER login always goes through the real password verification flow.
 * **Privileged transitions are never applied from pushed payloads** (Stage
   4.1 / audit H1). A license proves the device, never WHICH USER acted, so
   the gateway stages and applies only data: `pos_create_sale` hardcodes

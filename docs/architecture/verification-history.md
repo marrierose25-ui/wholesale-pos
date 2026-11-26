@@ -642,3 +642,59 @@ Corrections in this commit:
 
 GitHub Actions verification (Windows verify + Deno + supabase-replay +
 android/ios migration jobs) is reported on the push run, not here.
+
+## Stage 6 Request 3 — final financial-integrity and authentication corrections
+
+Branch `stage6/request3-security-hardening`. Corrections after independent
+review of `1ffcf9a`. All commands run locally on Windows; PostgreSQL 17 via
+the `pg17-replay` Docker container (`psql` shimmed through `docker exec`).
+
+| Check | Command | Result |
+| --- | --- | --- |
+| PG cold replay | `bash backend/supabase/scripts/replay_migrations.sh` | **exit 0 — 10 migrations applied** (incl. `20261204000000_request3_financial_integrity`) |
+| Request 3 financial integrity | `psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request3_financial_integrity/request3_financial_integrity_test.sql` | **ALL PASSED** — 15 assertions (F1–F6) |
+| Cash-leg concurrency | `bash backend/supabase/tests/request3_financial_integrity/concurrency.sh` | **ALL PASSED** — two-session WITHDRAWAL + DEPOSIT races, one leg each |
+| Request 3 bootstrap concurrency | `bash backend/supabase/tests/request3_acceptance/concurrency.sh` | **ALL PASSED** |
+| Request 3 acceptance SQL | `psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request3_acceptance/request3_acceptance_test.sql` | **ALL PASSED** |
+| Request 3 actor authorization | `psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request3_actor_authorization/request3_actor_authorization_test.sql` | **ALL PASSED** |
+| Request 2 licensing | `psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request2_licensing/request2_licensing_test.sql` | **ALL PASSED** |
+| H1 void invariants | `psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/h1_void_invariants/h1_void_invariants_test.sql` | **ALL PASSED** (13 assertions) |
+| Deno format | `deno fmt --check backend/supabase/functions` | exit 0 (45 files) |
+| Deno check | `deno check functions/{licensing,pos-api,sync}/index.ts` | exit 0 |
+| Deno tests | `deno test --allow-env --allow-read functions/{licensing,pos-api,sync}/tests/` | **81 passed, 0 failed** |
+| Flutter analyze | `flutter analyze --fatal-infos` (cwd `frontend`) | **exit 0 — no issues** (83.3s) |
+| Flutter test | `flutter test` (cwd `frontend`) | **768 passed, 1 skipped, 0 failed** (~6.5min) |
+| Owner bootstrap service | `flutter test test/core/sync/owner_bootstrap_service_test.dart` | **6/6 passed** (incl. session-less reconciliation) |
+| Web release | `flutter build web --release -t lib/main_web.dart` | reported below |
+
+Corrections in this commit:
+
+- **Atomic cash-leg dedup (P0).** Migration
+  `20261204000000_request3_financial_integrity` replaces the deposit-only
+  guard with `cash_movements_one_per_finance_leg` — unique
+  `(customer_id, source_finance_entry_id, type)` — after a non-destructive
+  duplicate diagnostic that aborts with a remediation hint instead of
+  deleting money rows. `pos_add_cash_movement`,
+  `pos_complete_finance_unchecked` and `pos_delete_finance_entry_unchecked`
+  all write legs with `ON CONFLICT DO NOTHING`, so concurrent different-id
+  pushes for the same leg converge on one row; the loser is returned the
+  existing movement (`duplicate: true`), never an error.
+- **Legacy reversal reconciliation (P0).** Unlinked pre-20261204 reversals
+  are adopted only on exact generated-reason + amount + actor evidence for
+  ONE collection (`pos_legacy_reversal_candidates` /
+  `pos_legacy_reversal_entry_candidates` — never amount alone). Unique
+  matches are linked and audited (`LEGACY_REVERSAL_LINKED`); ambiguous
+  matches refuse the delete and leave the staged `finance_entry` PENDING
+  with `LEGACY_REVERSAL_AMBIGUOUS`, preserving payload and movements for
+  operator resolution. `pos_sync_apply` classifies the ambiguity as a
+  deferral, not a rejection.
+- **Pass-the-hash closure (P0).** `setup_owner` no longer mints an OWNER
+  JWT for pre-hashed credentials: first-owner creation returns
+  `{ok, created}` and same-id retry returns `{ok, reconciled, user_id}` —
+  both session-less. Only the plaintext path (password verified) issues a
+  token. `OwnerBootstrapService` already keyed completion on `ok`, never on
+  a JWT; a new Flutter suite pins session-less reconciliation, conflict,
+  lost-response and retry behaviour.
+- **CI.** The `supabase-replay` PostgreSQL 17 job now also runs the Request
+  3 owner-bootstrap concurrency script, the new financial-integrity SQL
+  suite, and the cash-movement concurrency script — previously local-only.
