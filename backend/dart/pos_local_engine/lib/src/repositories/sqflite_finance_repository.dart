@@ -52,8 +52,14 @@ class SqfliteFinanceRepository implements FinanceRepository {
         'details': details,
         'created_at': DateTime.now().toIso8601String(),
       });
-    } catch (_) {
-      // Auditing must never block financial record keeping.
+    } catch (error) {
+      // A local audit-table failure must never roll back real financial
+      // activity, but it must be visible in the support log. Do not include
+      // the financial payload/details here; the action and actor are enough
+      // to correlate the failure with the transaction.
+      AppLogger.error(
+        'Finance audit write failed for $action (actor $userId): $error',
+      );
     }
   }
 

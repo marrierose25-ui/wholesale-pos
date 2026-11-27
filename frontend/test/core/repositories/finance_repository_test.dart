@@ -205,6 +205,66 @@ void main() {
   });
 
   group('entry lifecycle', () {
+    test(
+      'finance audit insert failure is logged without blocking the financial write',
+      () async {
+        await AppLogger.resetForTest();
+        try {
+          final category = await repository.createCategory(
+            ownerId: 'owner-1',
+            name: 'Alem',
+          );
+          final entry = await repository.addEntry(
+            ownerId: 'owner-1',
+            categoryId: category.id,
+            source: 'Counter',
+            amountMinorUnits: 10000,
+            paymentMethod: 'CASH',
+          );
+          await openShift();
+
+          await db.execute('''
+            CREATE TRIGGER fail_finance_completion_audit
+            BEFORE INSERT ON audit_logs
+            WHEN NEW.action = 'FINANCE_ENTRY_COMPLETED'
+            BEGIN
+              SELECT RAISE(ABORT, 'simulated audit write failure');
+            END
+          ''');
+
+          await repository.markCompleted(
+            ownerId: 'owner-1',
+            entryId: entry.id,
+          );
+
+          final updated = await repository.searchEntries(
+            ownerId: 'owner-1',
+            status: FinanceEntry.statusCompleted,
+          );
+          expect(updated.map((row) => row.id), [entry.id]);
+          expect(
+            await db.query(
+              'cash_movements',
+              where: "type = 'DEPOSIT' AND source_finance_entry_id = ?",
+              whereArgs: [entry.id],
+            ),
+            hasLength(1),
+          );
+          expect(
+            AppLogger.bufferedLines().any(
+              (line) =>
+                  line.contains('Finance audit write failed') &&
+                  line.contains('FINANCE_ENTRY_COMPLETED') &&
+                  line.contains('simulated audit write failure'),
+            ),
+            isTrue,
+          );
+        } finally {
+          await AppLogger.resetForTest();
+        }
+      },
+    );
+
     test('pending entry becomes completed and stays in history', () async {
       final category = await repository.createCategory(
         ownerId: 'owner-1',
