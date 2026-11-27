@@ -16,6 +16,15 @@
 
 The skipped test is `frontend/test/integration/sync_matrix_live_test.dart`; it requires `MATRIX_CODE`, `MATRIX_USER`, and `MATRIX_PASS`. Therefore the run does **not** establish live multi-device synchronization against a staging tenant. The cold replay proves the migration chain builds from empty PostgreSQL; it does not prove which versions are installed in the production Supabase project. The cited run tests the baseline commit above, not subsequent remediation PR commits; see PR #1 and its own checks for those changes.
 
+## Remediation PR verification — 2026-11-27
+
+The source fixes are being reviewed on [PR #1](https://github.com/marrierose25-ui/wholesale-pos/pull/1), head `8905f6fae6d49652e459a0a0ebfa2b72b3565de2`. The latest PR-triggered workflow runs observed for this head are:
+
+- [Verify / Deno / Supabase checks](https://github.com/marrierose25-ui/wholesale-pos/actions/runs/45938015669): Deno formatting/type/tests and Supabase cold migration replay completed successfully; Flutter `verify`, Android database, and iOS database jobs were still running at last inspection.
+- [SonarQube](https://github.com/marrierose25-ui/wholesale-pos/actions/runs/45938015661): still running at last inspection.
+
+Therefore the PR's final verification is **pending**, not passed. Earlier workflow runs on intermediate PR commits were cancelled or superseded; they are not treated as final-head evidence. This section must be updated from the final head's completed run before merging.
+
 ---
 
 

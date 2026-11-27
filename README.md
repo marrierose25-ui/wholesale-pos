@@ -110,7 +110,7 @@ dart format --output=none --set-exit-if-changed lib test tools
 - Database: SQLite in the platform application-support directory (`wholesale_pos.db`), schema v24.
 - Cloud: Postgres tables owned by `pos-api`; every row is scoped by `customer_id`, and money-moving paths go through RPCs (`pos_create_sale`, `pos_add_cash_movement`, `pos_shift_summary`) so totals cannot drift.
 - Device identity: `device_id.txt` next to the database.
-- Backups: owner-only JSON files in Documents include sales, finance, register and warehouse picklist business data, including soft-delete tombstones. Password hashes/salts and licensing/session/device secrets are excluded; the restoring owner keeps the local password and other staff passwords must be reset. The sync outbox/cursors are cleared so the restored till reconciles with the cloud.
+- Backups: owner-only JSON files in Documents include sales, finance, register and warehouse picklist business data, including soft-delete tombstones. Password hashes/salts and licensing/session/device secrets are excluded; the restoring owner keeps the local password and other staff passwords must be reset. The sync outbox/cursors are cleared so the restored till reconciles with the cloud. Older backups from the pre-fix exporter may omit all warehouse keys; restore preserves the target's current warehouse rows, but records absent from that old file cannot be recovered from it.
 - Schema details: `docs/DATABASE.md`.
 
 ## Structure
