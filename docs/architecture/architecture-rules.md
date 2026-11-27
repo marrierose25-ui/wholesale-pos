@@ -40,6 +40,11 @@
 | **`docs/*.sql` (17 files) are historical reference only** | Parallel set to `backend/supabase/migrations/`; not deployed; do not delete per Stage 9 constraint |
 | **Documentation must reference `backend/supabase/migrations/` as authoritative** | All docs referencing server schema must direct readers to `backend/supabase/migrations/` |
 | **Schema version:** | `schemaVersion = 23` defined in `backend/dart/pos_local_engine/lib/src/database/local_database.dart` — one definition only |
+| **`supabase/migrations/` is the single authoritative source for the live Supabase schema** | 9 timestamped migration files (newest: `20261111000000`); all schema changes must go through these files |
+| **`docs/postgres_schema.sql` is reference only** | Manually maintained DDL script; not deployed to Supabase; stale compared to `supabase/migrations/` |
+| **`docs/*.sql` (16 files) are historical reference only** | Parallel set to `supabase/migrations/`; not deployed; do not delete per Stage 9 constraint |
+| **Documentation must reference `supabase/migrations/` as authoritative** | All docs referencing server schema must direct readers to `supabase/migrations/` |
+| **Schema version:** | `schemaVersion = 22` defined in `frontend/lib/core/database/local_database.dart` — one definition only |
 
 ### Rule L4: One `schemaVersion = 23` definition only
 
@@ -49,6 +54,10 @@
 | **No other file should define or override `schemaVersion`** | All documentation claims must align with v23 |
 | **DATABASE.md claims must be corrected:** | Title: "schema version 23"; Body: "currently 23" |
 | **Other docs referencing schema versions must be updated** | Any doc claiming v9, v14, or any version ≠ 23 must be corrected |
+| **The single source of truth for SQLite schema version is `frontend/lib/core/database/local_database.dart`** | `LocalDatabase.schemaVersion = 22` |
+| **No other file should define or override `schemaVersion`** | All documentation claims must align with v22 |
+| **DATABASE.md claims must be corrected:** | Title: "schema version 22" (was "9"); Body: "currently 22" (was "14") |
+| **Other docs referencing schema versions must be updated** | Any doc claiming v9, v14, or any version ≠ 22 must be corrected |
 
 ### Rule L5: Transaction inventory must remain 38
 
@@ -199,6 +208,9 @@ Per STRICT SOURCE PROTECTION, the following must remain unchanged:
 | **SQL migrations** | `backend/supabase/migrations/` (6 files) | Append-only once applied to a shared environment; the Stage 5 chain (baseline + H1 + Request 2) is still unmerged branch work |
 | **Database schema** | `backend/dart/pos_local_engine/lib/src/database/local_database.dart` | Actual schema v22; only documentation may change |
 | **TypeScript handlers** | `backend/supabase/functions/{pos-api,sync,licensing}/` | Modular router + `modules/*`/`shared/*`; the public action contract must not change, but Stage 5 legitimately hardened licensing/device-management internals (owner-gated device actions, durable rate limits, device-license proofs) — earlier "handlers are frozen" wording was a Stage-9-era constraint, now superseded |
+| **SQL migrations** | `supabase/migrations/` (9 files) | Never modify, never delete; part of Supabase migration history |
+| **Database schema** | `frontend/lib/core/database/local_database.dart` | Actual schema v22; only documentation may change |
+| **TypeScript handlers** | `supabase/functions/pos-api/` | All Stage 8 changes already made; no further edits |
 | **API contracts** | pos-api action signatures | Verified unchanged by Stage 8 |
 | **Sync implementation** | sync backends, pull applier | Verified unchanged by Stage 7 |
 | **Licensing implementation** | Ed25519 license validator, device activation | Verified unchanged by Stage 7 |
@@ -256,3 +268,4 @@ Before any code change or stage progression, verify:
 ---
 
 ## End of Architecture Rules
+End of Architecture Rules

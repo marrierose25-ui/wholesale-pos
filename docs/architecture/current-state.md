@@ -45,6 +45,7 @@ not just existing documentation.
 | Function | File | Size | Role |
 | --- | --- | --- | --- |
 | `pos-api` | `functions/pos-api/index.ts` (~210-line router) + `modules/*` (7 domains) + `shared/*` (auth, authorization, helpers, env) + `tests/*` | — | Modular Edge Function — `index.ts` is the production entry point: CORS/JSON guards → JWT verify → `checkAuthorization` (actor load, token_version, OWNER_ONLY, ACTION_FEATURES) → `ACTIONS` dispatch table → domain module handlers. Action contract unchanged. `Deno.serve` is guarded by `import.meta.main` so tests can import `handleRequest` with an injected DB. |
+| `pos-api` | `functions/pos-api/index.ts` + `modules/*` + `shared/*` | ~434 lines (router), 28 module/shared files | Modularized Edge Function — router dispatches to domain modules (auth, catalog, sales, register, finance, warehouse, reporting, users) via shared helpers. Same deploy boundary. |
 | `sync` | `functions/sync/index.ts` | 576 lines | License-gated push/pull gateway; stages into `sync_mirror`, `pos_sync_apply` RPC replays to canonical tables |
 | `licensing` | `functions/licensing/index.ts` | 358 lines | Device activation/seats, vouchers, Ed25519 license issuance helpers |
 
