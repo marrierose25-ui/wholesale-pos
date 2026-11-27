@@ -4,8 +4,8 @@ name: Deploy Web (Cloudflare Pages)
 # production domain (https://aymen-pos.pages.dev) at the newest deploy of the
 # `main` branch on every upload, so there is none of the alias-drift-to-404
 # failure the hand-pinned *.vercel.app alias kept hitting (see deploy_web.ps1's
-# original rationale). Push to `main` -> automatic production deploy; the
-# `workflow_dispatch` trigger is the "on demand" button to redeploy whenever.
+# original rationale). Pushes and merges to `main` do not deploy. Production publication is manual-only
+# through `workflow_dispatch`, with an explicit confirmation input.
 #
 # ONE-TIME SETUP (GitHub -> repo Settings -> Secrets and variables -> Actions):
 #   * Secret  CLOUDFLARE_API_TOKEN  — a Cloudflare API token with the "Edit
@@ -15,9 +15,15 @@ name: Deploy Web (Cloudflare Pages)
 #   * The account id below is not secret (it is wrangler's own whoami output);
 #     if it ever changes, update CLOUDFLARE_ACCOUNT_ID here or add a repo variable.
 on:
-  push:
-    branches: [main]
+  # Production deployment is deliberately manual. A push or merge to main
+  # must never publish the app without an explicit release decision.
   workflow_dispatch:
+    inputs:
+      confirm_production:
+        description: "I explicitly approve publishing this build to production."
+        required: true
+        type: boolean
+        default: false
 
 concurrency:
   # Never cancel a deploy mid-upload: two concurrent Pages uploads to the same
@@ -51,7 +57,7 @@ jobs:
     # manual dispatch, which may select any ref. There is deliberately no
     # event-name escape hatch: if the push trigger is ever widened to feature
     # branches, this condition still refuses them.
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && inputs.confirm_production == true
     environment:
       name: 'production'
     env:
