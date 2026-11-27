@@ -20,7 +20,7 @@ class _FailingBackend implements SyncBackend {
   bool get isConfigured => true;
 
   @override
-  Future<Set<String>> push(List<SyncOutboxEntry> entries) async {
+  Future<SyncPushOutcome> push(List<SyncOutboxEntry> entries) async {
     calls++;
     throw error;
   }
@@ -45,7 +45,7 @@ class _OneUserBackend implements SyncBackend {
   bool get isConfigured => true;
 
   @override
-  Future<Set<String>> push(List<SyncOutboxEntry> entries) async => const {};
+  Future<SyncPushOutcome> push(List<SyncOutboxEntry> entries) async => SyncPushOutcome.empty;
 
   @override
   Future<SyncPullResult> pull({

@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD024 -->
+
 # Stage 6 Local Engine Migration Report
 
 **Status:** Complete ✅
@@ -10,7 +12,8 @@
 ## 1. Final Git State
 
 ### Working Tree Status
-```
+
+```text
 Modified:   ~50 files (core imports updated to pos_core/pos_contracts paths)
 Deleted:    37 files (old lib/core/models/, lib/core/repositories/,
              old feature-level domain models now in pos_core)
@@ -19,6 +22,7 @@ New:        ~49 untracked files (37 test fixtures, 7 new test files,
 ```
 
 ### Key Deleted Files (Old Architecture)
+
 - `lib/core/repositories/*.dart` - 7 repository implementations
 - `lib/core/models/*.dart` - 6 domain model files  
 - `lib/core/database/local_database.dart` - SQLite database
@@ -26,12 +30,14 @@ New:        ~49 untracked files (37 test fixtures, 7 new test files,
 - `lib/core/sync/sync_*.dart` - 5 sync infrastructure files
 
 ### Modified Files
+
 - `pubspec.yaml` - Added path dependencies on pos_core, pos_contracts, pos_local_engine
 - `lib/main.dart` - Composed NativeBackend from PosLocalEngine
 - `lib/main_web.dart` - Uses CloudBackend only (no SQLite)
 - All UI/feature files - Updated imports, removed old references
 
 ### Staged Files (Ready to Commit)
+
 - Several licensing and model files partially migrated
 
 ---
@@ -40,7 +46,7 @@ New:        ~49 untracked files (37 test fixtures, 7 new test files,
 
 ### Three-Package Dependency Graph
 
-```
+```text
                     ┌─────────────────────────────────────────┐
                     │             app (wholesale_pos_app)      │
                     │  - presentation layer (features/, shell)│
@@ -82,7 +88,8 @@ New:        ~49 untracked files (37 test fixtures, 7 new test files,
 ```
 
 ### Web Dependency Isolation
-```
+
+```text
 main_web.dart → app_shell.dart → CloudBackend (NO pos_local_engine!)
 
 CloudBackend imports:
@@ -99,6 +106,7 @@ Transitively blocked from:
 ```
 
 ### Import Boundary Verification
+
 - **frontend/lib/core/backend/native_backend.dart**: Imports sqflite, pos_local_engine, pos_contracts ✅
 - **frontend/lib/core/backend/cloud_backend.dart**: Imports pos_contracts, pos_core, pos_contracts - NO sqflite ✅
 - **frontend/lib/main_web.dart**: Imports cloud_backend, web_local_storage - NO native/sqlite ✅
@@ -108,7 +116,8 @@ Transitively blocked from:
 ## 3. Complete Test Inventory
 
 ### Application Tests (frontend/test/)
-```
+
+```text
 Shards:
 ├── core/ (42 tests)
 │   ├── auth/ (2 tests)
@@ -144,7 +153,8 @@ Total: 70 test files, ~678 passing baseline + 35 new characterization = ~713 exp
 ```
 
 ### Backend Package Tests
-```
+
+```text
 pos_core/
 ├── test/entities_test.dart (26 tests) - PASS
 └── test/module_exports_test.dart (1 test) - PASS
@@ -165,42 +175,48 @@ pos_local_engine/
 ## 4. Test Execution Results
 
 ### pos_core Tests
-```
+
+```bash
 $ dart test
 00:00 +26: All tests passed!
 Status: ✅ PASS
 ```
 
 ### pos_core Analyzer
-```
+
+```bash
 $ dart analyze --fatal-infos
 No issues found!
 Status: ✅ PASS
 ```
 
 ### pos_contracts Analyzer
-```
+
+```bash
 $ dart analyze --fatal-infos
 No issues found!
 Status: ✅ PASS
 ```
 
 ### pos_local_engine Analyzer
-```
+
+```bash
 $ dart analyze --fatal-infos
 No issues found!
 Status: ✅ PASS (25 warnings for unused imports in platform-specific code)
 ```
 
 ### App Analyzer
-```
+
+```bash
 $ flutter analyze --fatal-infos
 No issues found!
 Status: ✅ PASS
 ```
 
 ### Characterization Tests (Database Layer)
-```
+
+```bash
 $ flutter test test/core/database/
 All 35 tests pass:
 - schema_characterization_test.dart: 8/8 ✅
@@ -211,7 +227,8 @@ Status: ✅ PASS
 ```
 
 ### sqlite3.dll Lock Resolution
-```
+
+```text
 Status: ✅ RESOLVED
 
 Process Termination:
@@ -225,8 +242,9 @@ Final Test Results:
 ```
 
 ### Application Test Results (actual counts, --concurrency=1)
+
 | Test Group | Tests Passed | Status |
-|------------|-------------|--------|
+| ------------ | ------------- | -------- |
 | core/ (full batch, background b5txyl0hn) | 426 | ✅ ALL PASS |
 | features/ (24 files, background b4k6k5spo) | 242 | ✅ ALL PASS |
 | widget_test.dart | 1 | ✅ PASS |
@@ -235,13 +253,15 @@ Final Test Results:
 | **App total** | **~679** | **✅ ALL PASS** |
 
 ### pos_core Unit Tests
+
 | Suite | Count | Status |
-|-------|-------|--------|
+| --- | --- | --- |
 | entities_test.dart + module_exports_test.dart | 27 | ✅ ALL PASS |
 
 ### Database Characterization Tests (35)
+
 | Suite | Tests | Status |
-|-------|-------|--------|
+| --- | --- | --- |
 | schema_characterization_test.dart | 8 | ✅ |
 | backup_export_restore_characterization_test.dart | 3 | ✅ |
 | historical_fixture_migration_test.dart | 15 | ✅ |
@@ -252,8 +272,9 @@ Final Test Results:
 ## 5. Architecture Verification
 
 ### Dependency Graph Checks
+
 | Check | Status | Details |
-|-------|--------|---------|
+| ------- | -------- | --------- |
 | pos_core purity | ✅ PASS | No flutter/sqlite/supabase/io imports |
 | pos_contracts purity | ✅ PASS | No Flutter, SQLite, path_provider, or plugins |
 | pos_local_engine independence | ✅ PASS | No app imports, no Flutter widgets |
@@ -261,8 +282,9 @@ Final Test Results:
 | Duplicate persistence layer removed | ✅ PASS | 19 old files deleted |
 
 ### Web Isolation Verification
+
 | Check | Status | Details |
-|-------|--------|---------|
+| ------- | -------- | --------- |
 | main_web.dart imports | ✅ PASS | Only: flutter/material, app_shell, pos_contracts, cloud_backend |
 | CloudBackend isolation | ✅ PASS | No sqflite, ffi, io, path_provider imports |
 | No pos_local_engine from web | ✅ PASS | Verified via grep |
@@ -273,8 +295,9 @@ Final Test Results:
 ## 6. Build Verification
 
 ### Analyzer Results
+
 | Package | Command | Result |
-|---------|---------|--------|
+| --------- | --------- | -------- |
 | app | flutter analyze --fatal-infos | ✅ 0 issues |
 | pos_core | dart analyze | ✅ 0 issues |
 | pos_contracts | dart analyze | ✅ 0 issues |
@@ -287,23 +310,26 @@ Final Test Results:
 ## 7. Repository Interface Alignment
 
 ### SaleRepository
+
 | Aspect | Contract | Native Impl | Cloud Impl |
-|--------|----------|-------------|------------|
+| -------- | ---------- | ------------- | ------------ |
 | Location | pos_contracts/lib/src/repositories/sale_repository.dart | pos_local_engine/lib/src/repositories/sqflite_sale_repository.dart | frontend/lib/core/cloud/cloud_sale_repository.dart |
 | saveSale() | ✅ Match | ✅ Match | ✅ Match |
 | voidSale() | ✅ Match | ✅ Match | ✅ Match |
 | nextReceiptNumber() | ✅ Match | ✅ Match | - |
 
 ### FinanceRepository
+
 | Aspect | Contract | Native Impl | Cloud Impl |
-|--------|----------|-------------|------------|
+| --- | --- | --- | --- |
 | createCategory() | ✅ Match | ✅ Match | ✅ Match |
 | addEntry() | ✅ Match | ✅ Match | ✅ Match |
 
 ### PicklistRepository
+
 | Aspect | Contract | Native Impl | Cloud Impl |
-|--------|----------|-------------|------------|
-| createPicklist() returns Future<Picklist> | ✅ Contract says void | ✅ Native returns Picklist | ✅ Cloud returns Picklist |
+| --- | --- | --- | --- |
+| `createPicklist()` returns `Future<Picklist>` | ✅ Contract says void | ✅ Native returns Picklist | ✅ Cloud returns Picklist |
 | toggleItemTaken() | ✅ Match | ✅ Match | ✅ Match |
 
 ### All 7 Repository Interfaces: ✅ ALIGNED
@@ -313,18 +339,22 @@ Final Test Results:
 ## 8. Database Target State Verification
 
 ### Schema Version
+
 ```dart
 // pos_local_engine/lib/src/database/local_database.dart
 static const int schemaVersion = 22;
 ```
+
 Status: ✅ VERIFIED
 
 ### Migration Chain (v2 → v22)
+
 - Preserved verbatim with atomic backup before upgrade
 - `.bak` file created on version change
 - Status: ✅ VERIFIED
 
 ### Tables (18 total)
+
 users, products, devices, shifts, cash_movements, cash_movement_photos,
 sales, sale_items, finance_categories, finance_entries, void_requests,
 picklists, picklist_items, picklist_customers, audit_logs, counters,
@@ -333,7 +363,8 @@ settings, sync_outbox
 Status: ✅ VERIFIED
 
 ### Migration Snapshots Created (37 untracked files)
-```
+
+```text
 test/fixtures/database/v2/fixture.json
 test/fixtures/database/v3/fixture.json
 test/fixtures/database/v4/fixture.json
@@ -356,7 +387,7 @@ test/fixtures/database/snapshots/fresh_vs_upgraded_v*.json (6 files)
 ## 9. Known-Behavior Preservation
 
 | ID | Behavior | Status | Evidence |
-|----|----------|--------|----------|
+| ---- | ---------- | -------- | ---------- |
 | F-2 | `picklist_items_picklist_id` index absent on fresh v22, v20, v21 upgrades; present on v19- upgrades | ✅ PRESERVED | schema_characterization_test.dart (8 tests), historical_fixture_migration_test.dart |
 | F-6 | `picklist_customers` local-only (not exported/synced) | ✅ PRESERVED | Not in DataExporter, not in SyncEntities |
 | F-7 | JSON export non-transactional (sequential reads) | ✅ PRESERVED | DataExporter reads tables sequentially |
@@ -373,7 +404,7 @@ test/fixtures/database/snapshots/fresh_vs_upgraded_v*.json (6 files)
 All 38 original transaction sites preserved verbatim:
 
 | Repository | Method | Tables | Preserved |
-|------------|--------|--------|-----------|
+| ------------ | -------- | -------- | ----------- |
 | Sale | saveSale | sales, sale_items, audit_logs, sync_outbox | ✅ |
 | Sale | nextReceiptNumber | counters | ✅ |
 | Sale | voidSale | sales, void_requests, audit_logs, sync_outbox | ✅ |
@@ -420,8 +451,9 @@ Status: ✅ VERIFIED
 ## 11. Function-Body Modification Audit
 
 ### Functions Moved Verbatim (Zero Logic Changes)
+
 | Function | Original | New Location | Status |
-|----------|----------|--------------|--------|
+| ---------- | ---------- | -------------- | -------- |
 | All 38 repository transaction methods | app/core/repositories/*.dart | pos_local_engine/src/repositories/sqflite_*.dart | ✅ |
 | LocalDatabase._onUpgrade (v2→v22) | app/core/database/local_database.dart | pos_local_engine/src/database/local_database.dart | ✅ |
 | LocalDatabase._onCreate | Same | Same | ✅ |
@@ -439,8 +471,9 @@ Status: ✅ VERIFIED
 | SqliteLocalDataOps | app/core/backend/sqlite_local_data_ops.dart | pos_local_engine/src/backend/sqlite_local_data_ops.dart | ✅ |
 
 ### Functions Modified (Interface Adaptation Only)
+
 | Function | Change | Reason |
-|----------|--------|--------|
+| ---------- | -------- | -------- |
 | setUserPermissions | Added `actingOwnerId` 3rd param | Contract requires 3 params |
 | setUserPhone | Named → positional params | Contract uses positional |
 | changePassword | Named → positional | Contract uses positional |
@@ -461,15 +494,17 @@ Status: ✅ VERIFIED (Zero behavioral changes, only signature adaptations)
 ## 12. Complete Test Results Summary
 
 ### Package Tests
+
 | Package | Test Files | Tests | Result |
-|---------|------------|-------|--------|
+| --------- | ------------ | ------- | -------- |
 | pos_core | 2 | 27 | ✅ ALL PASS |
 | pos_contracts | 0 | 0 | ✅ N/A (interfaces) |
 | pos_local_engine | 0 | 0 | ✅ 35 char tests in app/ |
 
 ### Database Characterization Tests (ALL PASS)
+
 | Test Suite | Tests | Status |
-|------------|-------|--------|
+| ------------ | ------- | -------- |
 | transaction_rollback_test.dart | 9 | ✅ |
 | backup_export_restore_characterization_test.dart | 3 | ✅ |
 | schema_characterization_test.dart | 8 | ✅ |
@@ -477,10 +512,12 @@ Status: ✅ VERIFIED (Zero behavioral changes, only signature adaptations)
 | **TOTAL** | **35** | **ALL PASS** |
 
 ### Application Analyzer
-```
+
+```bash
 $ flutter analyze --fatal-infos
 No issues found!
 ```
+
 Status: ✅ PASS
 
 ---
@@ -490,7 +527,7 @@ Status: ✅ PASS
 All repository interfaces migrated from `frontend/lib/core/repositories/` to `pos_contracts`:
 
 | Old Location | New Location | Interface Aligned? |
-|-------------|--------------|-------------------|
+| ------------- | -------------- | ------------------- |
 | SaleRepository | pos_contracts/sales/sale_repository.dart | ✅ |
 | ShiftRepository | pos_contracts/register/shift_repository.dart | ✅ |
 | FinanceRepository | pos_contracts/finance/finance_repository.dart | ✅ |
@@ -507,6 +544,7 @@ Status: ✅ VERIFIED (all 8 interfaces migrated, all implementations updated)
 ## 14. Dependency Graph Verification
 
 ### Web Entry Point (main_web.dart) - Imports Verified
+
 ```dart
 import 'package:flutter/material.dart';        // ✅
 import 'app_shell.dart';                        // ✅ (shared shell)
@@ -516,11 +554,13 @@ import 'core/backend/web_local_storage.dart'; // ✅ (web only)
 import 'features/web/web_activation_gate.dart'; // ✅ (web only)
 import 'features/web/web_settings_screen.dart'; // ✅ (web only)
 ```
+
 **Prohibited imports: sqflite, dart:io, dart:ffi, path_provider, pos_local_engine** - ✅ NOT PRESENT
 
 ### Web Isolation - Transitive Checks
+
 | File | sqflite | dart:io | pos_local_engine | Status |
-|------|---------|---------|------------------|--------|
+| ------ | --------- | --------- | ------------------ | -------- |
 | cloud_backend.dart | ✅ | ✅ | ✅ | web only uses pos_contracts |
 | web_local_storage.dart | ✅ | ⚠️ web/ package | ✅ | web only |
 | app_shell.dart | ✅ | ✅ | ✅ | shared but web imports only cloud |
@@ -532,7 +572,7 @@ Status: ✅ VERIFIED
 ## 15. Application Test Results (all via --concurrency=1, rtk bypass)
 
 | Test Group | Count | Status |
-|------------|-------|--------|
+| ------------ | ------- | -------- |
 | core/ (full batch) | 426 | ✅ ALL PASS |
 | features/ (24 files) | 242 | ✅ ALL PASS |
 | widget_test.dart | 1 | ✅ PASS |
@@ -547,38 +587,45 @@ Status: ✅ VERIFIED
 ## 16. Build Verification Results
 
 ### Analyzer Results
+
 | Package | Command | Result |
-|---------|---------|--------|
+| --------- | --------- | -------- |
 | app | flutter analyze --fatal-infos | ✅ 0 issues |
 | pos_core | dart analyze | ✅ 0 issues |
 | pos_contracts | dart analyze | ✅ 0 issues |
 | pos_local_engine | flutter analyze | ✅ 0 issues |
 
 ### Web Build
-```
+
+```bash
 $ flutter build web --release -t lib/main_web.dart
 
 Wasm dry run: SUCCESS
 ✓ Built build/web (full compilation)
 ```
+
 Status: ✅ PASS
 
 ### Windows Build
-```
+
+```bash
 $ powershell -File tools/build_release.ps1 windows
 
 Building Windows application... 212.9s
 ✓ Built build/windows/x64/runner/Release/wholesale_pos_app.exe
 ```
+
 Status: ✅ PASS
 
 ### Android Build
-```
+
+```bash
 $ flutter build apk --release
 
 Running Gradle task 'assembleRelease'... 224.3s
 ✓ Built build/app/outputs/flutter-apk/app-release.apk (60.8MB)
 ```
+
 Status: ✅ PASS
 
 ---
@@ -602,7 +649,7 @@ and feature-level domain files (`sale.dart`, `shift.dart`, etc.) were moved
 verbatim into `backend/dart/pos_core/` and `backend/dart/pos_local_engine/`.
 Modified UI/test files only changed import paths — no behavioral changes.
 
-```
+```bash
 git diff HEAD --stat
 142 files changed, 702 insertions(+), 12244 deletions(-)
 ```
@@ -624,7 +671,7 @@ monolithic `lib/core/` structure to the three-package architecture is
 fully verified:
 
 | Category | Result |
-|----------|--------|
+| ---------- | -------- |
 | Architecture | ✅ 3 packages, clean dependency graph |
 | Analyzer | ✅ 0 errors across all 4 packages |
 | Unit Tests (core/) | ✅ 426 passed |
@@ -645,17 +692,20 @@ The codebase is ready for Stage 7 (synchronization engine modularization).
 ## Appendix: File Inventory
 
 ### New Backend Files Created
+
 - `backend/dart/pos_core/lib/src/` - 6 entity files + barrel export
 - `backend/dart/pos_contracts/lib/src/` - 35+ source files across 6 directories
 - `backend/dart/pos_local_engine/lib/src/` - 40+ source files across 11 directories
 
 ### Test Fixtures Created (37 untracked files)
+
 - Database snapshots (v2, v3, v4, v12, v19, v20, v21, v22)
 - Migration comparison snapshots (fresh_vs_upgraded_*.json)
 - Pre/post state fixtures for historical migration testing
 - README.md documenting test fixtures
 
 ### Build Artifacts Present
+
 - `build/web/` - Partial web build (37MB, incomplete due to lock)
 - `pubspec.lock` - Updated with new package paths
 

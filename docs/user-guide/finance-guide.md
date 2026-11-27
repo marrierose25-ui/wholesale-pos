@@ -9,7 +9,7 @@
 
 ## Creating a Category
 
-**Finance → Categories → +**
+### Finance → Categories → +
 
 1. Enter a name (e.g., `Transport`).
 2. Choose type: **Income** or **Expense**.
@@ -51,7 +51,7 @@ Permanent deletion (beyond retention window) requires Owner role and emits an au
 
 ## Running Reports
 
-**Finance → Reports**
+### Finance → Reports
 
 - **Monthly summary** — grouped by category; income minus expense = net position.
 - **Trend line** — daily/weekly totals over a selectable range.
@@ -60,7 +60,7 @@ Permanent deletion (beyond retention window) requires Owner role and emits an au
 ## Permissions
 
 | Action | Cashier | Finance | Manager | Owner |
-|--------|---------|---------|---------|-------|
+| -------- | --------- | --------- | --------- | ------- |
 | Create category | ❌ | ✅ | ✅ | ✅ |
 | Add pending entry | ✅* | ✅ | ✅ | ✅ |
 | Mark complete | ✅* | ✅ | ✅ | ✅ |

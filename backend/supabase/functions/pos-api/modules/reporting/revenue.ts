@@ -1,7 +1,5 @@
 import type { Ctx } from "../../shared/types.ts";
-import { json } from "../../shared/helpers.ts";
-
-import { usernamesById } from "../../shared/helpers.ts";
+import { json, usernamesById } from "../../shared/helpers.ts";
 
 export async function revenueTrend(
   db: any,

@@ -45,8 +45,8 @@ class PagingBackend implements SyncBackend {
   bool get isConfigured => true;
 
   @override
-  Future<Set<String>> push(List<SyncOutboxEntry> entries) async =>
-      entries.map((e) => e.id).toSet();
+  Future<SyncPushOutcome> push(List<SyncOutboxEntry> entries) async =>
+      SyncPushOutcome(acked: entries.map((e) => e.id).toSet());
 
   @override
   Future<SyncPullResult> pull({

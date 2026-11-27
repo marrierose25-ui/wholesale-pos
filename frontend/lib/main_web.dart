@@ -12,7 +12,7 @@
 // localStorage) and hands it to the SAME adaptive shell the app uses
 // ([PosRoot]). There is no device-license gate here: the browser's tenant
 // identity is captured once on the activation step [PosRoot] shows.
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'app_shell.dart';
 import 'core/backend/app_backend.dart';

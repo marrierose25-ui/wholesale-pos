@@ -1,37 +1,44 @@
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:pos_cloud_engine/pos_cloud_engine.dart'
+    show CloudApiClient, CloudApiException;
 
-import 'package:pos_local_engine/pos_local_engine.dart';
 import '../../core/theme/app_design.dart';
 import '../../core/theme/app_theme.dart';
 
-/// Buyer-facing screen for the seat-based licensing (Phase 17 / 17b).
+/// Buyer-facing screen for device management under the shop's activation
+/// code(s).
 ///
-/// Shows every device currently occupying a seat on the shop's activation
-/// code, lets the buyer deactivate one (e.g. a lost phone) so the seat is
-/// freed for a replacement, and lets the buyer redeem a one-shot seat
-/// voucher issued by Umer after an out-of-band payment.
+/// Policy: ONE activation code = ONE business with UNLIMITED devices. This
+/// screen lists every device currently registered against the shop's code(s)
+/// so the owner can deactivate a lost or replaced device; there is no seat
+/// cap and no seat voucher.
 ///
-/// All actions go through [ActivationClient] against the licensing Edge
-/// Function. The Edge Function requires a valid (activation_code,
-/// device_fingerprint) pair from a device that already holds an active seat
-/// before it will respond, so this screen only works after the current
-/// device has been activated with a short activation code (not the legacy
-/// file-based license).
+/// Security: device management is an OWNER action on the `pos-api` surface.
+/// The owner signs in with their cloud (pos-api) credentials — the same
+/// phone + password the web/PWA uses — and the returned session JWT scopes
+/// every call server-side. The activation code plus a device fingerprint is
+/// NOT sufficient to list or deactivate devices; that unauthenticated path
+/// was removed from the licensing Edge Function.
 class DevicesScreen extends StatefulWidget {
   final Future<String?> Function() activationCodeProvider;
   final Future<String> Function() fingerprintProvider;
-  final ActivationClient client;
 
-  /// Optional hook so the caller can delete the persisted activation_code +
-  /// license_code from local settings after the last seat is deactivated.
-  /// In practice this screen refuses to deactivate "this device" so it is
-  /// only used defensively.
+  /// This device's signed license (`license_code` setting). Sent with
+  /// list/deactivate calls so the server can verify WHICH device is calling
+  /// instead of trusting the client-supplied fingerprint.
+  final Future<String?> Function() licenseProvider;
+
+  /// pos-api client. [CloudApiClient.token] starts empty; this screen drives
+  /// the owner `login` action itself and keeps the JWT in memory only.
+  final CloudApiClient api;
+
   const DevicesScreen({
     super.key,
     required this.activationCodeProvider,
     required this.fingerprintProvider,
-    required this.client,
+    required this.licenseProvider,
+    required this.api,
   });
 
   @override
@@ -40,15 +47,17 @@ class DevicesScreen extends StatefulWidget {
 
 class _DevicesScreenState extends State<DevicesScreen> {
   bool _loading = true;
+  bool _needsOwnerLogin = false;
   String? _error;
   String? _activationCode;
   String _fingerprint = '';
+  String? _license;
   List<Map<String, dynamic>> _devices = const [];
-  int? _seatLimit;
-  int? _seatsUsed;
+  int _activeDevices = 0;
 
-  final TextEditingController _voucherController = TextEditingController();
-  bool _redeeming = false;
+  final TextEditingController _usernameController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+  bool _signingIn = false;
 
   @override
   void initState() {
@@ -58,7 +67,8 @@ class _DevicesScreenState extends State<DevicesScreen> {
 
   @override
   void dispose() {
-    _voucherController.dispose();
+    _usernameController.dispose();
+    _passwordController.dispose();
     super.dispose();
   }
 
@@ -67,19 +77,19 @@ class _DevicesScreenState extends State<DevicesScreen> {
       _loading = true;
       _error = null;
     });
-    if (!widget.client.isConfigured) {
+    if (!widget.api.isConfigured) {
       if (!mounted) return;
       setState(() {
         _loading = false;
         _error =
-            'Licensing server is not configured for this build. Seat '
-            'management is only available in builds compiled with '
-            '--dart-define=WHOLESALE_POS_LICENSE_FN_URL=<url>.';
+            'Cloud API is not configured for this build. Device management '
+            'needs --dart-define=WHOLESALE_POS_API_URL=<url>.';
       });
       return;
     }
     final code = await widget.activationCodeProvider();
     final fp = await widget.fingerprintProvider();
+    final license = await widget.licenseProvider();
     if (!mounted) return;
     if (code == null || code.isEmpty) {
       setState(() {
@@ -88,44 +98,99 @@ class _DevicesScreenState extends State<DevicesScreen> {
         _fingerprint = fp;
         _error =
             'This install was activated with a license file, not an '
-            'activation code, so there are no remote seats to manage. To '
+            'activation code, so there are no cloud devices to manage. To '
             'switch to the code-based model, activate again with the '
             'activation code Umer sent you.';
       });
       return;
     }
-    final response = await widget.client.listDevices(
-      activationCode: code,
-      deviceFingerprint: fp,
-    );
-    if (!mounted) return;
-    setState(() {
-      _loading = false;
-      _activationCode = code;
-      _fingerprint = fp;
-      if (response.ok) {
-        _devices = response.devices ?? const [];
-        _seatLimit = response.seatLimit;
-        _seatsUsed = response.seatsUsed;
+    _activationCode = code;
+    _fingerprint = fp;
+    _license = license;
+    if (!widget.api.isSignedIn) {
+      setState(() {
+        _loading = false;
+        _needsOwnerLogin = true;
+      });
+      return;
+    }
+    await _refreshDevices();
+  }
+
+  Future<void> _refreshDevices() async {
+    try {
+      final res = await widget.api.call('list_devices', {
+        'device_fingerprint': _fingerprint,
+        if (_license != null && _license!.isNotEmpty) 'license': _license,
+      });
+      if (!mounted) return;
+      final raw = res['devices'];
+      setState(() {
+        _loading = false;
+        _needsOwnerLogin = false;
+        _devices = raw is List
+            ? raw.whereType<Map<String, dynamic>>().toList()
+            : const [];
+        _activeDevices =
+            (res['active_devices'] as num?)?.toInt() ?? _devices.length;
         _error = null;
-      } else {
-        _error = response.error;
-      }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e is CloudApiException ? e.message : 'Could not load devices.';
+      });
+    }
+  }
+
+  Future<void> _signIn() async {
+    final username = _usernameController.text.trim();
+    final password = _passwordController.text;
+    if (username.isEmpty || password.isEmpty) {
+      _showSnack('Enter the owner phone number and password.', danger: true);
+      return;
+    }
+    setState(() {
+      _signingIn = true;
+      _error = null;
     });
+    try {
+      final res = await widget.api.call('login', {
+        'activation_code': _activationCode,
+        'username': username,
+        'password': password,
+      });
+      final token = res['token'] as String?;
+      if (token == null || token.isEmpty) {
+        throw CloudApiException('Sign-in did not return a session.');
+      }
+      widget.api.token = token;
+      _passwordController.clear();
+      setState(() => _signingIn = false);
+      await _refreshDevices();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _signingIn = false;
+        _needsOwnerLogin = true;
+        _error = e is CloudApiException ? e.message : 'Sign-in failed.';
+      });
+    }
   }
 
   Future<void> _deactivate(Map<String, dynamic> device) async {
-    final targetFingerprint = device['device_fingerprint'] as String?;
-    if (targetFingerprint == null) return;
+    final registrationId = device['id'] as String?;
+    if (registrationId == null) return;
     final name = (device['device_name'] as String?) ?? 'this device';
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Deactivate device?'),
         content: Text(
-          '"$name" will lose its seat as soon as it next contacts the '
-          'licensing server. The seat becomes free for another device. '
-          'You can reactivate it later if the deactivation was a mistake.',
+          '"$name" will lose access to the cloud as soon as it next '
+          'syncs. You can reactivate it later by signing in on that '
+          'device with the activation code.',
         ),
         actions: [
           TextButton(
@@ -142,48 +207,22 @@ class _DevicesScreenState extends State<DevicesScreen> {
     );
     if (confirmed != true || !mounted) return;
     setState(() => _loading = true);
-    final response = await widget.client.deactivateDevice(
-      activationCode: _activationCode!,
-      requestingFingerprint: _fingerprint,
-      targetFingerprint: targetFingerprint,
-    );
-    if (!mounted) return;
-    if (!response.ok) {
+    try {
+      await widget.api.call('deactivate_device', {
+        'registration_id': registrationId,
+        'device_fingerprint': _fingerprint,
+        if (_license != null && _license!.isNotEmpty) 'license': _license,
+      });
+      _showSnack('Device deactivated.');
+      await _refreshDevices();
+    } catch (e) {
+      if (!mounted) return;
       setState(() => _loading = false);
-      _showSnack(response.error ?? 'Deactivation failed.', danger: true);
-      return;
+      _showSnack(
+        e is CloudApiException ? e.message : 'Deactivation failed.',
+        danger: true,
+      );
     }
-    _showSnack('Device deactivated. Seat is now free.');
-    await _load();
-  }
-
-  Future<void> _redeemVoucher() async {
-    final code = _voucherController.text.trim();
-    if (code.isEmpty) {
-      _showSnack('Enter the voucher code from Umer first.', danger: true);
-      return;
-    }
-    setState(() => _redeeming = true);
-    final response = await widget.client.redeemVoucher(
-      activationCode: _activationCode!,
-      deviceFingerprint: _fingerprint,
-      voucherCode: code,
-    );
-    if (!mounted) return;
-    setState(() => _redeeming = false);
-    if (!response.ok) {
-      _showSnack(response.error ?? 'Voucher redemption failed.', danger: true);
-      return;
-    }
-    final added = response.seatsAdded ?? 0;
-    final newLimit = response.newSeatLimit;
-    _voucherController.clear();
-    _showSnack(
-      newLimit == null
-          ? 'Voucher applied: $added seat(s) added.'
-          : 'Voucher applied: $added seat(s) added. New limit: $newLimit.',
-    );
-    await _load();
   }
 
   void _showSnack(String message, {bool danger = false}) {
@@ -193,12 +232,6 @@ class _DevicesScreenState extends State<DevicesScreen> {
         backgroundColor: danger ? AppTheme.danger : null,
       ),
     );
-  }
-
-  String _mask(String? full) {
-    if (full == null || full.isEmpty) return '';
-    if (full.length <= 12) return full;
-    return '${full.substring(0, 8)}…${full.substring(full.length - 4)}';
   }
 
   @override
@@ -223,98 +256,55 @@ class _DevicesScreenState extends State<DevicesScreen> {
               : ListView(
                   padding: const EdgeInsets.all(16),
                   children: [
-                    if (_activationCode != null) ...[
+                    if (_activationCode != null && !_needsOwnerLogin) ...[
                       _HeaderCard(
                         activationCodeMasked: _mask(_activationCode),
-                        seatsUsed: _seatsUsed,
-                        seatLimit: _seatLimit,
+                        activeDevices: _activeDevices,
                       ),
                       const SizedBox(height: 16),
                     ],
-                    if (_error != null) ...[
-                      _ErrorCard(message: _error!, onRetry: _load),
-                      const SizedBox(height: 16),
-                    ],
-                    if (_error == null && _activationCode != null)
-                      ..._deviceTiles(),
-                    if (_error == null && _activationCode != null) ...[
-                      const SizedBox(height: 24),
-                      const Text(
-                        'Add more seats',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 18,
-                        ),
+                    if (_needsOwnerLogin) ...[
+                      _OwnerSignInCard(
+                        usernameController: _usernameController,
+                        passwordController: _passwordController,
+                        signingIn: _signingIn,
+                        onSignIn: _signIn,
                       ),
-                      const SizedBox(height: 8),
-                      GlassCard(
-                        padding: EdgeInsets.zero,
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'Bought extra seats from Umer? Paste the '
-                                'voucher code (starts with V-) below. It '
-                                'works once and permanently raises your seat '
-                                'limit for this activation code.',
-                              ),
-                              const SizedBox(height: 12),
-                              TextField(
-                                controller: _voucherController,
-                                enabled: !_redeeming,
-                                decoration: const InputDecoration(
-                                  labelText: 'Voucher code',
-                                  hintText: 'V-1A2B3C4D',
-                                  border: OutlineInputBorder(),
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              Align(
-                                alignment: Alignment.centerRight,
-                                child: FilledButton.icon(
-                                  onPressed: _redeeming ? null : _redeemVoucher,
-                                  icon: _redeeming
-                                      ? const SizedBox(
-                                          width: 16,
-                                          height: 16,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                          ),
-                                        )
-                                      : const Icon(CupertinoIcons.number),
-                                  label: const Text('Redeem'),
-                                ),
-                              ),
-                            ],
+                      if (_error != null) ...[
+                        const SizedBox(height: 16),
+                        _ErrorCard(message: _error!, onRetry: _load),
+                      ],
+                    ] else ...[
+                      if (_error != null) ...[
+                        _ErrorCard(message: _error!, onRetry: _load),
+                        const SizedBox(height: 16),
+                      ],
+                      if (_error == null) ..._deviceTiles(),
+                      if (_error == null) ...[
+                        const SizedBox(height: 24),
+                        const Text(
+                          'How devices work',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 18,
                           ),
                         ),
-                      ),
-                      const SizedBox(height: 24),
-                      const Text(
-                        'How seats work',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 18,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      GlassCard(
-                        padding: EdgeInsets.zero,
-                        child: const Padding(
-                          padding: EdgeInsets.all(16),
-                          child: Text(
-                            'Each device that redeems your activation code '
-                            'takes one seat. Your seat limit is the number '
-                            'of phones or PCs that can be active at the '
-                            'same time. Reinstalling the app on the same '
-                            'device reuses its existing seat. If a device '
-                            'is lost, deactivate it here and activate the '
-                            'replacement — no need to contact Umer.',
+                        const SizedBox(height: 8),
+                        const GlassCard(
+                          padding: EdgeInsets.zero,
+                          child: Padding(
+                            padding: EdgeInsets.all(16),
+                            child: Text(
+                              'One activation code covers your whole business '
+                              '— activate as many phones, PCs, or tills as '
+                              'you need; there is no device limit and nothing '
+                              'extra to buy. If a device is lost, sign in '
+                              'here as the owner and deactivate it, then '
+                              'activate the replacement with the same code.',
+                            ),
                           ),
                         ),
-                      ),
+                      ],
                     ],
                   ],
                 ),
@@ -329,15 +319,15 @@ class _DevicesScreenState extends State<DevicesScreen> {
         const GlassCard(
           child: ListTile(
             leading: Icon(CupertinoIcons.info_circle),
-            title: Text('No devices listed yet.'),
+            title: Text('No devices registered yet.'),
           ),
         ),
       ];
     }
-    final tiles = <Widget>[
-      const Text(
-        'Active seats',
-        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+    return [
+      Text(
+        'Active devices ($_activeDevices)',
+        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
       ),
       const SizedBox(height: 8),
       GlassCard(
@@ -352,25 +342,30 @@ class _DevicesScreenState extends State<DevicesScreen> {
         ),
       ),
     ];
-    return tiles;
   }
 
   Widget _buildDeviceTile(Map<String, dynamic> device) {
-    final fp = device['device_fingerprint'] as String? ?? '';
-    final isSelf = fp.isNotEmpty && fp == _fingerprint;
+    final isSelf = device['is_self'] == true;
     final name = (device['device_name'] as String?) ?? 'Unnamed device';
-    final lastSeen = device['last_seen_at'] as String?;
-    final subtitleParts = <String>[_mask(fp)];
-    if (lastSeen != null) subtitleParts.add('Last seen $lastSeen');
+    final masked = (device['fingerprint_masked'] as String?) ?? '';
+    final lastSeen = device['last_heartbeat'] as String?;
+    final subtitleParts = <String>[
+      if (masked.isNotEmpty) masked,
+      if (lastSeen != null) 'Last seen $lastSeen',
+    ];
     return ListTile(
-      leading: Icon(isSelf ? CupertinoIcons.device_phone_portrait : CupertinoIcons.desktopcomputer),
+      leading: Icon(
+        isSelf
+            ? CupertinoIcons.device_phone_portrait
+            : CupertinoIcons.desktopcomputer,
+      ),
       title: Row(
         children: [
           Flexible(child: Text(name)),
           if (isSelf) ...[const SizedBox(width: 8), const _ThisDeviceChip()],
         ],
       ),
-      subtitle: Text(subtitleParts.join(' · ')),
+      subtitle: subtitleParts.isEmpty ? null : Text(subtitleParts.join(' · ')),
       trailing: isSelf
           ? null
           : TextButton(
@@ -382,23 +377,24 @@ class _DevicesScreenState extends State<DevicesScreen> {
             ),
     );
   }
+
+  String _mask(String? full) {
+    if (full == null || full.isEmpty) return '';
+    if (full.length <= 12) return full;
+    return '${full.substring(0, 8)}…${full.substring(full.length - 4)}';
+  }
 }
 
 class _HeaderCard extends StatelessWidget {
   final String? activationCodeMasked;
-  final int? seatsUsed;
-  final int? seatLimit;
+  final int activeDevices;
   const _HeaderCard({
     required this.activationCodeMasked,
-    required this.seatsUsed,
-    required this.seatLimit,
+    required this.activeDevices,
   });
 
   @override
   Widget build(BuildContext context) {
-    final usage = seatsUsed != null && seatLimit != null
-        ? '$seatsUsed of $seatLimit seats in use'
-        : 'Seat usage loading…';
     return GlassCard(
       padding: EdgeInsets.zero,
       child: ListTile(
@@ -407,7 +403,93 @@ class _HeaderCard extends StatelessWidget {
           'Activation code ${activationCodeMasked ?? ''}',
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
-        subtitle: Text(usage),
+        subtitle: Text(
+          '$activeDevices active device${activeDevices == 1 ? '' : 's'} · '
+          'unlimited devices on this code',
+        ),
+      ),
+    );
+  }
+}
+
+class _OwnerSignInCard extends StatelessWidget {
+  final TextEditingController usernameController;
+  final TextEditingController passwordController;
+  final bool signingIn;
+  final VoidCallback onSignIn;
+
+  const _OwnerSignInCard({
+    required this.usernameController,
+    required this.passwordController,
+    required this.signingIn,
+    required this.onSignIn,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      padding: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(CupertinoIcons.person_crop_circle_badge_checkmark),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Owner sign-in required',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Managing devices is an owner action. Sign in with the shop '
+              'owner account (the same phone number and password used on '
+              'the web app). Your session is kept in memory only.',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: usernameController,
+              enabled: !signingIn,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(
+                labelText: 'Owner phone number',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: passwordController,
+              enabled: !signingIn,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'Password',
+                border: OutlineInputBorder(),
+              ),
+              onSubmitted: (_) => onSignIn(),
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton.icon(
+                onPressed: signingIn ? null : onSignIn,
+                icon: signingIn
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(CupertinoIcons.lock_open),
+                label: const Text('Sign in'),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -428,13 +510,16 @@ class _ErrorCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: const [
-                Icon(CupertinoIcons.exclamationmark_triangle, color: AppTheme.danger),
+            const Row(
+              children: [
+                Icon(
+                  CupertinoIcons.exclamationmark_triangle,
+                  color: AppTheme.danger,
+                ),
                 SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Cannot load seat list',
+                    'Cannot load devices',
                     style: TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ),

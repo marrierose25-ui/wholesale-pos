@@ -15,7 +15,7 @@ Successfully migrated all cloud communication, synchronization transport, and cl
 
 ## Target Architecture Achieved
 
-```
+```text
 backend/dart/
 ├── pos_core/          — Pure domain entities (unchanged)
 ├── pos_contracts/     — Repository interfaces + sync contracts (unchanged)
@@ -26,7 +26,7 @@ backend/dart/
 ### Package Boundaries
 
 | Package | Responsibility | Dependencies |
-|---------|---------------|--------------|
+| --------- | --------------- | -------------- |
 | `pos_core` | Domain models (Sale, User, Product, etc.) | None (pure Dart) |
 | `pos_contracts` | Interfaces (SyncBackend, Repository traits), SyncOutboxEntry | pos_core |
 | `pos_local_engine` | SQLite DB, SyncOutbox, SyncPullApplier, CloudSyncPuller | pos_contracts, sqflite |
@@ -40,14 +40,14 @@ backend/dart/
 ### From `frontend/lib/core/cloud/` → `pos_cloud_engine/lib/src/api/`
 
 | Original Path | New Path | Lines | Status |
-|--------------|----------|-------|--------|
+| -------------- | ---------- | ------- | -------- |
 | `cloud_api_client.dart` | `src/api/cloud_api_client.dart` | 114 | ✅ Moved verbatim |
 | *(deleted)* | *(new location above)* | — | Removed from app |
 
 ### From `frontend/lib/core/cloud/` → `pos_cloud_engine/lib/src/repositories/`
 
 | Original Path | New Path | Repository Interface | Status |
-|--------------|----------|---------------------|--------|
+| -------------- | ---------- | --------------------- | -------- |
 | `cloud_sale_repository.dart` | `repositories/sales/cloud_sale_repository.dart` | SaleRepository | ✅ Moved |
 | `cloud_shift_repository.dart` | `repositories/register/cloud_shift_repository.dart` | ShiftRepository | ✅ Moved |
 | `cloud_product_repository.dart` | `repositories/catalog/cloud_product_repository.dart` | ProductRepository | ✅ Moved |
@@ -59,7 +59,7 @@ backend/dart/
 ### From `frontend/lib/core/sync/` → `pos_cloud_engine/lib/src/sync/`
 
 | Original Path | New Path | Class | Status |
-|--------------|----------|-------|--------|
+| -------------- | ---------- | ------- | -------- |
 | `sync_gateway_backend.dart` | `src/sync/sync_gateway_backend.dart` | SyncGatewayBackend | ✅ Moved |
 | `supabase_sync_backend.dart` | `src/sync/supabase_sync_backend.dart` | SupabaseSyncBackend | ✅ Moved + Refactored |
 
@@ -74,6 +74,7 @@ backend/dart/
 **Why:** `pos_cloud_engine` must not depend on Flutter or dart:io to maintain web compatibility.
 
 **How it was handled:**
+
 - Extracted `fromEnvironment()` factory (which used kIsWeb + Platform) out of the class
 - Made `selectBackend()` a pure static method that accepts parameters instead of reading environment
 - The app layer now calls `SupabaseSyncBackend.selectBackend(url, key, unsafeAllowEmbed, isMobile)` directly
@@ -85,7 +86,7 @@ backend/dart/
 
 All cloud repositories moved from flat `lib/core/cloud/` to nested `lib/src/repositories/{category}/`. Relative imports updated:
 
-```
+```dart
 Before: import 'cloud_api_client.dart';
 After:  import '../../api/cloud_api_client.dart';
 
@@ -98,6 +99,7 @@ After:  import '../reporting/cloud_reporting_repository.dart';
 ### 3. App Layer Import Consolidation
 
 **Before:**
+
 ```dart
 import '../cloud/cloud_api_client.dart';
 import '../cloud/cloud_finance_repository.dart';
@@ -106,6 +108,7 @@ import '../cloud/cloud_picklist_repository.dart';
 ```
 
 **After:**
+
 ```dart
 import 'package:pos_cloud_engine/pos_cloud_engine.dart';
 // Barrel export provides all classes:
@@ -116,6 +119,7 @@ import 'package:pos_cloud_engine/pos_cloud_engine.dart';
 ```
 
 Same for `main.dart`:
+
 ```dart
 // Before:
 import 'core/sync/sync_gateway_backend.dart';
@@ -144,7 +148,7 @@ Added architecture test verifying `pos_cloud_engine` has no Flutter/sqlite/io im
 The following were verified as **untouched** in migration:
 
 | Category | Items Verified Unchanged |
-|----------|-------------------------|
+| ---------- | ------------------------- |
 | Sync payloads | JSON structure for push/pull requests/responses |
 | Conflict resolution | Parent-before-child ordering, placeholder creation |
 | Retry behavior | Adaptive cadence (floor 3s, boost 30s, backoff rungs 10/30/60s) |
@@ -163,7 +167,7 @@ The following were verified as **untouched** in migration:
 
 ### No Circular Dependencies
 
-```
+```text
 pos_cloud_engine → pos_contracts → pos_core  ✅ (no cycle)
 pos_cloud_engine ↛ pos_local_engine          ✅ (clean separation)
 app → pos_cloud_engine                        ✅ (one-way import)
@@ -172,7 +176,7 @@ app → pos_local_engine                        ✅ (existing, unchanged)
 
 ### Web Build Safety
 
-```
+```text
 main_web.dart imports:
   - CloudBackend (from app layer)
   - CloudBackend uses pos_cloud_engine (barrel export)
@@ -180,6 +184,7 @@ main_web.dart imports:
 ```
 
 Verified by architecture test: `pos_cloud_engine/lib` contains zero occurrences of:
+
 - `package:flutter`
 - `package:sqflite`
 - `dart:io`
@@ -190,7 +195,7 @@ Verified by architecture test: `pos_cloud_engine/lib` contains zero occurrences 
 ## Quality Gates
 
 | Gate | Result |
-|------|--------|
+| ------ | -------- |
 | `dart analyze` (pos_cloud_engine) | ✅ 0 issues |
 | `flutter analyze` (app) | ✅ 0 issues |
 | `dart analyze` (pos_local_engine) | ✅ 0 issues (unchanged) |
@@ -203,7 +208,7 @@ Verified by architecture test: `pos_cloud_engine/lib` contains zero occurrences 
 
 ## New Package Structure: pos_cloud_engine
 
-```
+```text
 backend/dart/pos_cloud_engine/
 ├── pubspec.yaml                    # name: pos_cloud_engine, deps: pos_core, pos_contracts, http, uuid
 ├── lib/
@@ -244,6 +249,7 @@ The following files were removed after successful migration and import verificat
 - `frontend/lib/core/sync/sync_gateway_backend.dart`
 
 The `frontend/lib/core/cloud/` directory was removed (now empty). The `frontend/lib/core/sync/` directory retains only orchestration files:
+
 - `sync_service.dart` — adaptive cadence, single-flight guard (kept in app due to Flutter ValueNotifier dep)
 - `sync_runtime.dart` — composition root helper (kept in app)
 - `sync_status.dart` — pure data class (kept in app per requirements)
@@ -253,7 +259,7 @@ The `frontend/lib/core/cloud/` directory was removed (now empty). The `frontend/
 ## Acceptance Criteria Met
 
 | Criterion | Status | Evidence |
-|-----------|--------|----------|
+| ----------- | -------- | ---------- |
 | Synchronization responsibilities have clear ownership | ✅ | pos_cloud_engine owns transport; pos_local_engine owns persistence; app owns orchestration |
 | Local sync persistence belongs to local engine | ✅ | SyncOutbox, SyncPullApplier, CloudSyncPuller all remain in pos_local_engine |
 | Cloud transport belongs to cloud engine | ✅ | CloudApiClient, SyncGatewayBackend, SupabaseSyncBackend all in pos_cloud_engine |

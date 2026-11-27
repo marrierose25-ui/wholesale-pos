@@ -27,6 +27,10 @@ class SyncStatus {
   /// Outbox rows still waiting to upload.
   final int queued;
 
+  /// Rows the cloud permanently refused, held in durable quarantine with
+  /// their payloads until an operator retries or discards them.
+  final int quarantined;
+
   const SyncStatus({
     this.configured = false,
     this.lastSuccess,
@@ -34,6 +38,7 @@ class SyncStatus {
     this.authenticationFailed = false,
     this.applied = 0,
     this.queued = 0,
+    this.quarantined = 0,
   });
 
   /// No remote target on this build; nothing is expected to happen.

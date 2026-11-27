@@ -72,6 +72,48 @@ class DataImporter {
         ? data['void_requests'] as List
         : <dynamic>[];
 
+    // Warehouse tables were introduced in schema v20 (picklists/items) and
+    // v21 (reusable customer directory). The first v20-v24 JSON exporters did
+    // not include these keys. For backward compatibility, an older backup
+    // with *all* warehouse keys absent remains restorable and preserves the
+    // target's current warehouse rows (the backup contains no information
+    // with which to replace them). Partial key sets are malformed and rejected.
+    final expectedPicklistTables = <String>[
+      if (backupVersion >= 20) 'picklists',
+      if (backupVersion >= 20) 'picklist_items',
+      if (backupVersion >= 21) 'picklist_customers',
+    ];
+    final presentPicklistTables = expectedPicklistTables
+        .where(data.containsKey)
+        .toList();
+    if (presentPicklistTables.isNotEmpty &&
+        presentPicklistTables.length != expectedPicklistTables.length) {
+      throw Exception(
+        'Backup contains an incomplete set of warehouse tables.',
+      );
+    }
+    if (backupVersion < 20 &&
+        const ['picklists', 'picklist_items', 'picklist_customers']
+            .any(data.containsKey)) {
+      throw Exception(
+        'Backup version predates warehouse tables but contains warehouse data.',
+      );
+    }
+    final replacePicklistTables = backupVersion < 20 ||
+        presentPicklistTables.length == expectedPicklistTables.length;
+    List<dynamic> readPicklistTable(String table) {
+      if (!data.containsKey(table)) return <dynamic>[];
+      final rows = data[table];
+      if (rows is! List) {
+        throw Exception('Backup has an invalid $table table.');
+      }
+      return rows;
+    }
+
+    final picklists = readPicklistTable('picklists');
+    final picklistItems = readPicklistTable('picklist_items');
+    final picklistCustomers = readPicklistTable('picklist_customers');
+
     final requiredFields = <String, List<String>>{
       // password_hash / salt are intentionally NOT required: the plaintext
       // backup never carries them (audit #7). Missing credentials are re-seeded
@@ -180,6 +222,39 @@ class DataImporter {
       }
     }
 
+    const picklistRequiredFields = <String, List<String>>{
+      'picklists': [
+        'id',
+        'customer_name',
+        'status',
+        'created_by',
+        'created_at',
+        'updated_at',
+      ],
+      'picklist_items': [
+        'id',
+        'picklist_id',
+        'product_name',
+        'requested_qty',
+        'taken_qty',
+        'updated_at',
+      ],
+      'picklist_customers': ['id', 'name', 'created_at'],
+    };
+    for (final entry in picklistRequiredFields.entries) {
+      final rows = switch (entry.key) {
+        'picklists' => picklists,
+        'picklist_items' => picklistItems,
+        _ => picklistCustomers,
+      };
+      for (final row in rows) {
+        if (row is! Map ||
+            entry.value.any((field) => !row.containsKey(field))) {
+          throw Exception('Backup has an invalid ${entry.key} record.');
+        }
+      }
+    }
+
     // Normalize sale items to the schema 7 shape. Rows from schema 6 backups
     // carried an integer `quantity`; schema 7 rows pass through unchanged.
     final saleItems = (data['sale_items'] as List)
@@ -226,6 +301,15 @@ class DataImporter {
       await txn.delete('shifts');
       await txn.delete('finance_entries');
       await txn.delete('finance_categories');
+      // Backups captured before the picklist-export fix contain no
+      // warehouse keys. Preserve the target's existing warehouse rows rather
+      // than silently destroying them; pre-v20 backups explicitly predate
+      // these tables and therefore restore them as empty.
+      if (replacePicklistTables) {
+        await txn.delete('picklist_items');
+        await txn.delete('picklists');
+        await txn.delete('picklist_customers');
+      }
       await txn.delete('devices');
       await txn.delete('products');
       await txn.delete('settings');
@@ -289,6 +373,17 @@ class DataImporter {
       }
       for (var row in financeEntries) {
         await txn.insert('finance_entries', Map<String, dynamic>.from(row));
+      }
+      if (replacePicklistTables) {
+        for (var row in picklistCustomers) {
+          await txn.insert('picklist_customers', Map<String, dynamic>.from(row));
+        }
+        for (var row in picklists) {
+          await txn.insert('picklists', Map<String, dynamic>.from(row));
+        }
+        for (var row in picklistItems) {
+          await txn.insert('picklist_items', Map<String, dynamic>.from(row));
+        }
       }
       for (var row in (data['audit_logs'] as List)) {
         await txn.insert('audit_logs', Map<String, dynamic>.from(row));

@@ -82,15 +82,19 @@ The script re-points the stable domain at the new deployment every run, so the p
 link cannot drift to an aged-out build. After a deploy, tell testers to close **every**
 tab and reopen — the service worker serves the previous build until then.
 
-The cloud schema, RPCs, and invariant indexes live in `docs/supabase_pos_integrity.sql`;
-apply it with the Supabase CLI before deploying the function. Smoke-test a deployment
-(read-only) with:
+The active Supabase migration chain is `backend/supabase/migrations/`
+(see its README for ordering and cold-replay instructions). The SQL file
+`docs/supabase_pos_integrity.sql` is historical/superseded and MUST NOT be
+applied to a production project. Do not run bootstrap/reset SQL against a
+populated customer database. Before upgrading an existing project, verify its
+recorded migration history and follow the documented production migration-repair
+procedure. Smoke-test a deployment (read-only) with:
 
 ```powershell
 powershell -File tools\verify_pos_api.ps1 -ActivationCode <code>
 ```
 
-**Architecture Note**: The sync gateway (`sync` Edge Function) is a read-only "delta feed" that transports data between the cloud and devices. It does not modify business logic such as sale timestamps, which are handled by the native application layer.
+**Architecture Note**: The `sync` Edge Function is not a read-only delta feed. It accepts license-authenticated push and recovery requests, stages device outbox records, and applies authorized business changes through server-side database logic; it also provides tenant-scoped, paginated pulls. The client does not get to establish the human actor by submitting an actor ID: the gateway resolves server-issued actor grants. See `docs/CLOUD_SYNC.md` and `backend/supabase/migrations/`.
 
 ## Test and analyze
 
@@ -103,10 +107,10 @@ dart format --output=none --set-exit-if-changed lib test tools
 
 ## Data
 
-- Database: SQLite in the platform application-support directory (`wholesale_pos.db`), schema v14.
+- Database: SQLite in the platform application-support directory (`wholesale_pos.db`), schema v24.
 - Cloud: Postgres tables owned by `pos-api`; every row is scoped by `customer_id`, and money-moving paths go through RPCs (`pos_create_sale`, `pos_add_cash_movement`, `pos_shift_summary`) so totals cannot drift.
 - Device identity: `device_id.txt` next to the database.
-- Backups: JSON files written to the user's Documents directory; owner-only and include password hashes, so store them securely.
+- Backups: owner-only JSON files in Documents include sales, finance, register and warehouse picklist business data, including soft-delete tombstones. Password hashes/salts and licensing/session/device secrets are excluded; the restoring owner keeps the local password and other staff passwords must be reset. The sync outbox/cursors are cleared so the restored till reconciles with the cloud. Older backups from the pre-fix exporter may omit all warehouse keys; restore preserves the target's current warehouse rows, but records absent from that old file cannot be recovered from it.
 - Schema details: `docs/DATABASE.md`.
 
 ## Structure

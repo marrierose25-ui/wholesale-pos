@@ -205,6 +205,66 @@ void main() {
   });
 
   group('entry lifecycle', () {
+    test(
+      'finance audit insert failure is logged without blocking the financial write',
+      () async {
+        await AppLogger.resetForTest();
+        try {
+          final category = await repository.createCategory(
+            ownerId: 'owner-1',
+            name: 'Alem',
+          );
+          final entry = await repository.addEntry(
+            ownerId: 'owner-1',
+            categoryId: category.id,
+            source: 'Counter',
+            amountMinorUnits: 10000,
+            paymentMethod: 'CASH',
+          );
+          await openShift();
+
+          await db.execute('''
+            CREATE TRIGGER fail_finance_completion_audit
+            BEFORE INSERT ON audit_logs
+            WHEN NEW.action = 'FINANCE_ENTRY_COMPLETED'
+            BEGIN
+              SELECT RAISE(ABORT, 'simulated audit write failure');
+            END
+          ''');
+
+          await repository.markCompleted(
+            ownerId: 'owner-1',
+            entryId: entry.id,
+          );
+
+          final updated = await repository.searchEntries(
+            ownerId: 'owner-1',
+            status: FinanceEntry.statusCompleted,
+          );
+          expect(updated.map((row) => row.id), [entry.id]);
+          expect(
+            await db.query(
+              'cash_movements',
+              where: "type = 'DEPOSIT' AND source_finance_entry_id = ?",
+              whereArgs: [entry.id],
+            ),
+            hasLength(1),
+          );
+          expect(
+            AppLogger.bufferedLines().any(
+              (line) =>
+                  line.contains('Finance audit write failed') &&
+                  line.contains('FINANCE_ENTRY_COMPLETED') &&
+                  line.contains('simulated audit write failure'),
+            ),
+            isTrue,
+          );
+        } finally {
+          await AppLogger.resetForTest();
+        }
+      },
+    );
+
     test('pending entry becomes completed and stays in history', () async {
       final category = await repository.createCategory(
         ownerId: 'owner-1',
@@ -348,6 +408,154 @@ void main() {
           outbox.where((r) => r['entity_type'] == 'cash_movement'),
           isNotEmpty,
         );
+      },
+    );
+
+    test(
+      'blocks deleting a legacy completed cash entry with no linked deposit',
+      () async {
+        final category = await repository.createCategory(
+          ownerId: 'owner-1',
+          name: 'Alem',
+        );
+        final entry = await repository.addEntry(
+          ownerId: 'owner-1',
+          categoryId: category.id,
+          source: 'Counter',
+          amountMinorUnits: 10000,
+          paymentMethod: 'CASH',
+        );
+        await openShift();
+        await repository.markCompleted(ownerId: 'owner-1', entryId: entry.id);
+
+        // Simulate a pre-v17 database: the column exists after upgrade, but
+        // the historical deposit has no backfilled finance-entry association.
+        await db.update(
+          'cash_movements',
+          {'source_finance_entry_id': null},
+          where: "type = 'DEPOSIT'",
+        );
+
+        await expectLater(
+          repository.deleteEntry(ownerId: 'owner-1', entryId: entry.id),
+          throwsException,
+        );
+
+        final stored = await db.query(
+          'finance_entries',
+          where: 'id = ?',
+          whereArgs: [entry.id],
+        );
+        expect(stored.single['status'], FinanceEntry.statusCompleted);
+        expect(
+          await db.query('cash_movements', where: "type = 'DEPOSIT'"),
+          hasLength(1),
+        );
+        expect(
+          await db.query('cash_movements', where: "type = 'WITHDRAWAL'"),
+          isEmpty,
+        );
+        expect(
+          await db.query(
+            'audit_logs',
+            where: "action = 'FINANCE_ENTRY_DELETED'",
+          ),
+          isEmpty,
+        );
+      },
+    );
+
+    test(
+      'blocks deleting a completed cash entry when its deposit amount differs',
+      () async {
+        final category = await repository.createCategory(
+          ownerId: 'owner-1',
+          name: 'Alem',
+        );
+        final entry = await repository.addEntry(
+          ownerId: 'owner-1',
+          categoryId: category.id,
+          source: 'Counter',
+          amountMinorUnits: 10000,
+          paymentMethod: 'CASH',
+        );
+        await openShift();
+        await repository.markCompleted(ownerId: 'owner-1', entryId: entry.id);
+
+        await db.update(
+          'cash_movements',
+          {'amount_minor_units': 9000},
+          where: "type = 'DEPOSIT' AND source_finance_entry_id = ?",
+          whereArgs: [entry.id],
+        );
+
+        await expectLater(
+          repository.deleteEntry(ownerId: 'owner-1', entryId: entry.id),
+          throwsException,
+        );
+
+        final stored = await db.query(
+          'finance_entries',
+          where: 'id = ?',
+          whereArgs: [entry.id],
+        );
+        expect(stored.single['status'], FinanceEntry.statusCompleted);
+        expect(
+          await db.query('cash_movements', where: "type = 'WITHDRAWAL'"),
+          isEmpty,
+        );
+      },
+    );
+
+    test(
+      'blocks deleting a completed cash entry that already has a linked withdrawal',
+      () async {
+        final category = await repository.createCategory(
+          ownerId: 'owner-1',
+          name: 'Alem',
+        );
+        final entry = await repository.addEntry(
+          ownerId: 'owner-1',
+          categoryId: category.id,
+          source: 'Counter',
+          amountMinorUnits: 10000,
+          paymentMethod: 'CASH',
+        );
+        final shiftId = await openShift();
+        await repository.markCompleted(ownerId: 'owner-1', entryId: entry.id);
+
+        // Simulate an inconsistent legacy state: a reversal leg exists while
+        // the finance entry is still marked COMPLETED. Do not create a second
+        // withdrawal or mark the entry deleted.
+        await db.insert('cash_movements', {
+          'id': 'existing-reversal',
+          'shift_id': shiftId,
+          'user_id': 'owner-1',
+          'type': 'WITHDRAWAL',
+          'amount_minor_units': 10000,
+          'reason': 'Previously reversed collection',
+          'created_at': DateTime.now().toIso8601String(),
+          'source_finance_entry_id': entry.id,
+        });
+
+        await expectLater(
+          repository.deleteEntry(ownerId: 'owner-1', entryId: entry.id),
+          throwsException,
+        );
+
+        final stored = await db.query(
+          'finance_entries',
+          where: 'id = ?',
+          whereArgs: [entry.id],
+        );
+        expect(stored.single['status'], FinanceEntry.statusCompleted);
+        final withdrawals = await db.query(
+          'cash_movements',
+          where: "source_finance_entry_id = ? AND type = 'WITHDRAWAL'",
+          whereArgs: [entry.id],
+        );
+        expect(withdrawals, hasLength(1));
+        expect(withdrawals.single['id'], 'existing-reversal');
       },
     );
 

@@ -33,6 +33,106 @@ class SyncPullResult {
   bool get isEmpty => rowCount == 0;
 }
 
+/// The actor grants to attach to one outbox entry (Request 3 acceptance).
+///
+/// [primary] is the single grant sent as `actorGrant` — the entry's main
+/// actor. [byActor] maps every actor id the payload references (a finance
+/// entry's `created_by`, `completed_by`, `deleted_by`, …) to that user's
+/// grant, sent as `actorGrants` so the server can resolve EACH actor through
+/// its own server-issued credential instead of attributing the whole entity
+/// to one person.
+class SyncActorGrantSet {
+  final String? primary;
+  final Map<String, String> byActor;
+
+  const SyncActorGrantSet({this.primary, this.byActor = const {}});
+}
+
+/// Looks up the grants for one outbox entry at push time. Returns null when
+/// no grant is available — the entry is still pushed and simply defers
+/// server-side until a grant can be attached.
+typedef SyncGrantProvider =
+    Future<SyncActorGrantSet?> Function(SyncOutboxEntry entry);
+
+/// One permanently refused outbox row, reported by a [SyncBackend] so the
+/// caller can quarantine it instead of silently dropping it. [entryId] is the
+/// outbox row id; [error] is the server's reason, safe to show an operator.
+class SyncPushRejection {
+  final String entryId;
+  final String entityId;
+  final String error;
+
+  const SyncPushRejection({
+    required this.entryId,
+    required this.entityId,
+    required this.error,
+  });
+}
+
+/// Per-entry verdicts from one push batch (Request 3 acceptance).
+///
+/// Only [acked] rows may be marked synced: the server confirmed the record
+/// landed. [rejected] rows are PERMANENT refusals — they must be quarantined
+/// in durable local storage with their payload and [SyncPushRejection.error],
+/// never acked and never pruned. Deferred and retryable rows simply stay
+/// queued (they are in neither set).
+class SyncPushOutcome {
+  /// Outbox row ids ([SyncOutboxEntry.id]) the server confirmed applied.
+  final Set<String> acked;
+
+  /// Permanent per-entry refusals to quarantine.
+  final List<SyncPushRejection> rejected;
+
+  /// Entries the server reported as deferred (e.g. waiting for an actor
+  /// grant). Informational; those rows stay queued like everything unacked.
+  final int deferred;
+
+  const SyncPushOutcome({
+    this.acked = const {},
+    this.rejected = const [],
+    this.deferred = 0,
+  });
+
+  static const SyncPushOutcome empty = SyncPushOutcome();
+}
+
+/// Per-entry verdicts from a quarantine-recovery pass (Request 3 P1).
+///
+/// [applied] rows are confirmed landed — mark the outbox row synced.
+/// [rejected] rows were refused AGAIN — they stay quarantined with the new
+/// server reason. [retryable] rows are deferred or still staged — they go
+/// back to the normal pending queue. [missing] rows have no staged copy
+/// server-side at all — they stay quarantined with the explanation.
+class SyncRecoveryOutcome {
+  final Set<String> applied;
+  final List<SyncPushRejection> rejected;
+  final Set<String> retryable;
+  final List<SyncPushRejection> missing;
+
+  const SyncRecoveryOutcome({
+    this.applied = const {},
+    this.rejected = const [],
+    this.retryable = const {},
+    this.missing = const [],
+  });
+
+  static const SyncRecoveryOutcome empty = SyncRecoveryOutcome();
+}
+
+/// A [SyncBackend] that can ask the cloud to re-validate quarantined records.
+///
+/// Re-queueing a quarantined outbox row locally is NOT recovery: the staged
+/// server row is still REJECTED and refuses identically forever. Only a
+/// backend that implements this can honour an operator "retry" — anything
+/// else must tell the operator recovery is unsupported instead of pretending
+/// the requeue did something.
+abstract class SyncRecoveryBackend {
+  /// Asks the server to re-queue each entry's still-REJECTED staged row and
+  /// re-run it through the normal apply path. The entries are the quarantined
+  /// outbox rows; the payload is NOT re-sent — the server already holds it.
+  Future<SyncRecoveryOutcome> recover(List<SyncOutboxEntry> entries);
+}
+
 /// Seam between the offline POS and whatever remote store is used later
 /// (Supabase/PostgREST, a REST API, etc.). The app never talks to the network
 /// directly — it hands batches of queued changes to a [SyncBackend].
@@ -50,13 +150,13 @@ abstract class SyncBackend {
   /// Pushes a batch of queued changes. Throw on any wholesale failure; the
   /// caller leaves every row in the outbox and retries later.
   ///
-  /// On partial success (some entries applied, some rejected/transient) return
-  /// the set of OUTBOX row ids ([SyncOutboxEntry.id]) the server confirmed —
-  /// either applied or permanently rejected — so exactly those are marked
-  /// synced and only the genuinely retryable ones stay queued (audit #20).
-  /// Back-ends that cannot report per-entry outcomes return every id (the
-  /// pre-existing "ack the whole batch" behaviour).
-  Future<Set<String>> push(List<SyncOutboxEntry> entries);
+  /// Return a [SyncPushOutcome]: only [SyncPushOutcome.acked] ids are marked
+  /// synced, [SyncPushOutcome.rejected] ids are quarantined with their server
+  /// error, and everything else stays queued for the next drain.
+  ///
+  /// Back-ends that cannot report per-entry outcomes ack the whole batch
+  /// (the pre-existing behaviour).
+  Future<SyncPushOutcome> push(List<SyncOutboxEntry> entries);
 
   /// Fetches cloud changes recorded after [cursor].
   ///
@@ -102,9 +202,9 @@ class NoopSyncBackend implements SyncBackend {
   bool get isConfigured => false;
 
   @override
-  Future<Set<String>> push(List<SyncOutboxEntry> entries) async {
+  Future<SyncPushOutcome> push(List<SyncOutboxEntry> entries) async {
     // Intentionally does nothing. The outbox retains every row.
-    return const {};
+    return SyncPushOutcome.empty;
   }
 
   @override

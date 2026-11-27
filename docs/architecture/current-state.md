@@ -1,5 +1,27 @@
 # Current-State Architecture Audit
 
+> **Current repository snapshot — 2026-11-27 (verified baseline `81960c34d30f78733e1f3bfc9b0d834b19bf84ca`):** The active development branch is `stage6/request3-security-hardening`; it was 36 commits ahead of `main` (`ec47ff4abc74de8689e040b72373b5128bc2a4c3`) and 0 behind at the time of comparison. The current source uses `frontend/`, shared Dart packages under `backend/dart/` (`pos_core`, `pos_contracts`, `pos_local_engine`, `pos_cloud_engine`), and Supabase functions/migrations under `backend/supabase/`. SQLite schema version is **24** and the active Supabase migration chain contains **14 SQL files**. CI run [#39](https://github.com/marrierose25-ui/wholesale-pos/actions/runs/45895098268) passed all five jobs on this baseline. Its verified outputs are recorded in `verification-history.md`. This is CI evidence, not proof that production Supabase has the same migration state or that a Windows customer release has been independently certified. A separate remediation branch `stage6/finance-sync-docs-hardening` is under review in [PR #1](https://github.com/marrierose25-ui/wholesale-pos/pull/1); its head is `303b994c5ee5aa714f8a6f262df3ec18493b11e7` and it has not been merged into this development branch.
+>
+> The detailed audit body below is a historical source review from November 18/24, 2026. Its old paths, schema version, migration count, test counts, and findings must not be treated as current without rechecking the source.
+
+
+> **Historical status note (2026-11-24, Stage 5 branch `stage5/licensing-and-server-schema`):**
+> This document is a HISTORICAL audit (baseline `64ff4fe`, pre-migration
+> `app/` layout). The repository has since been reorganized: the app lives in
+> `frontend/`, shared Dart packages in `backend/dart/` (`pos_core`,
+> `pos_contracts`, `pos_local_engine`, `pos_cloud_engine`), and the Supabase
+> backend in `backend/supabase/` (`functions/{licensing,pos-api,sync}` +
+> `migrations/`). Server schema authority is `backend/supabase/migrations/`
+> (6 files: `20261030000000` production baseline, H1 void migrations
+> `20261125`–`20261127`, Request 2 `20261128000000`/`20261128000001`).
+> SQLite `schemaVersion = 23` in `pos_local_engine`. Licensing is now
+> unlimited-device; device management is owner-authenticated on `pos-api`
+> with Ed25519 device-license proofs; rate limiting is durable
+> (`rate_limit_buckets`). Paths, file counts, and test totals below are
+> historical and superseded — see `verification-history.md` for current
+> results.
+
+
 Audit date: 2026-11-18. Baseline commit: `64ff4fe` on `main` (clean tree).
 Method: full source inspection of `app/lib`, `app/test`, `app/tools`,
 `supabase/functions`, `supabase/migrations`, `docs/`, `.github/workflows` —
@@ -10,7 +32,7 @@ not just existing documentation.
 ### Flutter application (`app/`)
 
 | Area | Contents | Size |
-|---|---|---|
+| --- | --- | --- |
 | Entry points | `lib/main.dart` (native, 1351 lines), `lib/main_web.dart` (PWA, 32 lines) | 2 files |
 | Shells | `lib/app_shell.dart` (web shell: `PosRoot`/`AuthGate`/`MainScaffold`, 983 lines) and a **parallel native shell inside `main.dart`** (`WholesalePosApp`/`LicenseWrapper`/`AuthWrapper`/`MainLayout`, ~1100 lines) | 2 implementations |
 | `lib/core/` | `auth/` (2), `backend/` (3: `AppBackend` seam, `CloudBackend`, `web_local_storage`), `cloud/` (7: `CloudApiClient` + 6 cloud repositories), `database/` (`local_database.dart`, 1066 lines — open/migrate/backup + settings + device registration helpers), `licensing/` (4), `models/` (7 — but the sales-domain models are NOT here), `repositories/` (6 SQLite repos + interfaces), `sync/` (10 files), `theme/` (2), `util/` + `utils/` (split, 12 files) | ~45 files |
@@ -21,8 +43,8 @@ not just existing documentation.
 ### Backend (`supabase/`)
 
 | Function | File | Size | Role |
-|---|---|---|---|
-| `pos-api` | `functions/pos-api/index.ts` + `modules/*` + `shared/*` | ~434 lines (router), 28 module/shared files | Modularized Edge Function — router dispatches to domain modules (auth, catalog, sales, register, finance, warehouse, reporting, users) via shared helpers. Same deploy boundary. |
+| --- | --- | --- | --- |
+| `pos-api` | `functions/pos-api/index.ts` (~210-line router) + `modules/*` (7 domains) + `shared/*` (auth, authorization, helpers, env) + `tests/*` | — | Modular Edge Function — `index.ts` is the production entry point: CORS/JSON guards → JWT verify → `checkAuthorization` (actor load, token_version, OWNER_ONLY, ACTION_FEATURES) → `ACTIONS` dispatch table → domain module handlers. Action contract unchanged. `Deno.serve` is guarded by `import.meta.main` so tests can import `handleRequest` with an injected DB. |
 | `sync` | `functions/sync/index.ts` | 576 lines | License-gated push/pull gateway; stages into `sync_mirror`, `pos_sync_apply` RPC replays to canonical tables |
 | `licensing` | `functions/licensing/index.ts` | 358 lines | Device activation/seats, vouchers, Ed25519 license issuance helpers |
 
@@ -147,8 +169,10 @@ Feature additions must be wired twice; drift is already possible.
   sync markers, audit — at least four responsibilities.
 - `sale_repository.dart` (1047 lines): writes + outbox + void workflow +
   reporting/analytics queries.
-- `pos-api/index.ts` (2399 lines): ~60 actions across 8 business domains in
-  one dispatch file (already sectioned by comment banners, not modules).
+- `pos-api/index.ts` (~210 lines): thin router only — transport guards, JWT
+  verification, authorization gates, and the `ACTIONS` dispatch table. All
+  ~60 action implementations live in `modules/*` (auth, catalog, sales,
+  register, finance, warehouse, reporting, users) over `shared/*` helpers.
 - `sync_pull_applier.dart` (1531 lines): per-entity appliers for all 12
   entity types in one class.
 
@@ -220,7 +244,7 @@ repositories and the pull applier.
 ## 5. Baseline results (Part 1, before any refactoring)
 
 | Check | Command | Result |
-|---|---|---|
+| --- | --- | --- |
 | Analyze | `flutter analyze --fatal-infos` | **PASS** — no issues (62.7s) |
 | Tests | `flutter test` | **PASS** — 637 passed, 1 skipped, 0 failed (~4:53) |
 | Web release | `flutter build web --release -t lib/main_web.dart` | **PASS** (211.6s) |
@@ -238,7 +262,7 @@ All baseline failures: **none**. Everything green that can run locally.
 3. `lib/core/backend/cloud_backend.dart` — remove `features/web` imports (inject widgets instead).
 4. `lib/main.dart` + `lib/app_shell.dart` — converge on one shell/navigation implementation.
 5. `lib/features/settings/settings_screen.dart` — remove raw `Database` dependency behind the backend seam.
-6. `supabase/functions/pos-api/index.ts` — split into internal feature modules without changing the action contract.
+6. ~~`supabase/functions/pos-api/index.ts` — split into internal feature modules without changing the action contract.~~ Done (Stage 2): `index.ts` is the modular router; implementations live in `modules/*` + `shared/*`; behaviour locked by `pos-api/tests/`.
 7. `supabase/functions/sync/index.ts`, `licensing/index.ts` — same internal organization treatment.
 8. `lib/core/database/local_database.dart` — separate schema/migrations from runtime helpers.
 9. `lib/core/sync/sync_pull_applier.dart` — per-entity applier modules.

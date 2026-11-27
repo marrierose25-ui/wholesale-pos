@@ -1,6 +1,6 @@
 import 'package:sqflite/sqflite.dart';
 
-import 'database/local_database.dart';
+import 'database/local_database_app.dart';
 import 'repositories/sqflite_sale_repository.dart';
 import 'repositories/sqflite_finance_repository.dart';
 import 'repositories/sqflite_shift_repository.dart';
@@ -44,7 +44,7 @@ class PosLocalEngine {
   /// Initializes the local engine by opening the database and constructing
   /// all repositories.
   static Future<PosLocalEngine> initialize() async {
-    final db = await LocalDatabase.open();
+    final db = await openApplicationDatabase();
     final productRepository = SqfliteProductRepository(db);
     final saleRepository = SqfliteSaleRepository(db, reporting: SqfliteReportingRepository(db));
     final userRepository = SqfliteUserRepository(db);

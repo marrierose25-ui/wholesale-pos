@@ -9,6 +9,7 @@
 ## Mission
 
 Perform controlled root-level directory migration ("ROOT ARCHITECTURE NORMALIZATION"):
+
 - Move `app/` → `frontend/` (Flutter project)
 - Ensure `supabase/` lives at `backend/supabase/` (already done)
 - Keep `backend/dart/` unchanged (pos_core, pos_contracts, pos_local_engine, pos_cloud_engine)
@@ -23,9 +24,11 @@ Perform controlled root-level directory migration ("ROOT ARCHITECTURE NORMALIZAT
 ## Completed Work
 
 ### ✅ Pre-Migration Snapshot
+
 - Full backup created at: `C:\tmp\wpos-snapshot\app-backup\`
 
 ### ✅ Directory Rename Completed
+
 - **Method used:** PowerShell `Copy-Item` + `Remove-Item` (rename operations blocked by Windows/WSL permission issues)
 - **Source:** `app/` (deleted)
 - **Destination:** `frontend/` (active)
@@ -34,7 +37,7 @@ Perform controlled root-level directory migration ("ROOT ARCHITECTURE NORMALIZAT
 ### ✅ Path References Updated
 
 | File | Changes Made |
-|------|-------------|
+| ------ | ------------- |
 | `.gitignore` | All `app/` → `frontend/`, all `supabase/` → `backend/supabase/` |
 | `README.md` | All `cd app` → `cd frontend`, structure section updated |
 | `.github/workflows/build.yml` | `working-directory: ./app` → `./frontend` (×2) |
@@ -64,7 +67,7 @@ Perform controlled root-level directory migration ("ROOT ARCHITECTURE NORMALIZAT
 ### Test Results
 
 | Test Suite | Result | Notes |
-|------------|--------|-------|
+| ------------ | -------- | ------- |
 | `flutter test test/core` | ✅ PASSED | 426+ tests passed |
 | `flutter analyze --fatal-infos` (lib/) | ✅ PASSED | 0 errors in production code |
 | Architecture tests | ⚠️ 7 tests failing | See "Known Issues" below |

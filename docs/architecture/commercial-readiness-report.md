@@ -1,5 +1,18 @@
 # Commercial Readiness Report — Wholesale POS
 
+> ## Current reassessment — 2026-11-27
+>
+> **This report's PASS table is historical Stage 10 evidence dated 2026-11-21, not a current commercial-release approval.** It was written against an earlier source snapshot (SQLite schema v22 and older repository layout). The current development baseline reviewed on 2026-11-27 is `81960c34d30f78733e1f3bfc9b0d834b19bf84ca`, with SQLite schema v24 and 14 active Supabase migrations. Baseline CI run [#39](https://github.com/marrierose25-ui/wholesale-pos/actions/runs/45895098268) passed its five jobs: 768 Flutter tests passed, 1 live sync test was skipped, 81 Deno tests passed, Android/iOS database jobs passed, and 14 migrations replayed against an empty PostgreSQL 17 database.
+>
+> **Current decision: NO-GO for customer rollout until the outstanding gates below are closed.** PR [#1](https://github.com/marrierose25-ui/wholesale-pos/pull/1) is open against the security-hardening branch (not merged) at head `303b994c5ee5aa714f8a6f262df3ec18493b11e7`. It proposes fail-closed handling for legacy cash-collection deletion, transactional product-name uniqueness, safe handling of unsupported legacy-sync entities, picklist-complete JSON backups, logging of finance-audit write failures, corrected deployment documentation, and two-session manual-reversal-link tests. The PR's latest CI is still running; no change is production-approved until the final head's required checks pass. It does not auto-reconcile old financial records; historical unlinked cash deposits require explicit, evidence-based reconciliation. Older v20–v24 JSON backups produced before the picklist-export fix omit warehouse data; the new importer preserves the target's current warehouse rows when all warehouse keys are absent, but absent historical records cannot be recovered from those old backup files.
+>
+> **Additional production security/recovery gates:** the native SQLite database is not encrypted at rest (standard sqflite open, no SQLCipher keying), and exported JSON backups are plaintext. Require full-disk/OS-account protection and controlled backup handling immediately; decide whether SQLCipher is a product requirement before customer rollout, with a tested key provisioning and migration/recovery design rather than an unsafe retrofit. The sync gateway's tenant-scoped pull includes user PBKDF2 salts/hashes for offline login and authenticates devices with a signed bearer license rather than hardware-bound challenge/response; copied license material can impersonate its registered device until revoked/expired, although tenant identity is derived from the verified signed claim. Review the offline-login requirement and credential exposure model before making stronger device-security claims. Finance audit insert failures now reach the support log without blocking financial writes, but no durable audit-event repair queue exists yet.
+>
+> Production Supabase migration state has not been inspected; the live multi-device sync matrix remains skipped without staging credentials; a current Windows customer installer and real receipt/printing/scanner/cash-drawer behavior have not been certified by baseline CI.
+>
+> Do not use the historical PASS rows below as evidence that the current branch is production-ready. The previous audit's source-protection constraint and results are preserved for history; this reassessment does not change production data or deploy anything.
+
+
 **Date:** 2026-11-21  
 **Auditor:** Agnes (Claude Code)  
 **Scope:** Evaluate all acceptance criteria for commercial deployment readiness  
@@ -10,7 +23,7 @@
 ## 1. Architecture Quality Gate
 
 | Criterion | Status | Evidence |
-|-----------|--------|----------|
+| ----------- | -------- | ---------- |
 | Four-package separation enforced | ✅ PASS | pubspec dependency hierarchy verified; 12 architecture tests pass |
 | Domain purity (pos_core) | ✅ PASS | Zero flutter/sqflite/http/io imports in pos_core |
 | Contracts purity (pos_contracts) | ✅ PASS | Zero Flutter/platform imports; only meta + pos_core |
@@ -26,7 +39,7 @@
 ## 2. Database Safety Gate
 
 | Criterion | Status | Evidence |
-|-----------|--------|----------|
+| ----------- | -------- | ---------- |
 | Schema version single definition | ✅ PASS | `schemaVersion = 22` defined once at `local_database.dart:15` |
 | All 18 tables present | ✅ PASS | CREATE TABLE count matches expected 18 business + infra tables |
 | Migration chain intact | ✅ PASS | 10 migration files in supabase/migrations/; v22 is latest |
@@ -43,7 +56,7 @@
 ## 3. Authentication & Authorization Gate
 
 | Criterion | Status | Evidence |
-|-----------|--------|----------|
+| ----------- | -------- | ---------- |
 | JWT signing algorithm | ✅ PASS | HMAC-SHA256; secret from env var |
 | Token lifetime | ✅ PASS | 10-year TTL with token_version revocation |
 | Password hashing strength | ✅ PASS | PBKDF2-HMAC-SHA256 @ 210k iterations |
@@ -60,7 +73,7 @@
 ## 4. Licensing Gate
 
 | Criterion | Status | Evidence |
-|-----------|--------|----------|
+| ----------- | -------- | ---------- |
 | Ed25519 signature verification | ✅ PASS | Build-time injected public key; runtime signature check |
 | v1 format support | ✅ PASS | Legacy license format still accepted |
 | v2 format support | ✅ PASS | Current format with device binding |
@@ -74,7 +87,7 @@
 ## 5. Synchronization Gate
 
 | Criterion | Status | Evidence |
-|-----------|--------|----------|
+| ----------- | -------- | ---------- |
 | Outbox enqueue atomicity | ✅ PASS | Enqueue inside business transaction |
 | Push drain correctness | ✅ PASS | Ordered by created_at; batch size 50; on-success mark |
 | Pull application correctness | ✅ PASS | Dependency-ordered page application; cursor post-commit |
@@ -89,7 +102,7 @@
 ## 6. Security Gate
 
 | Criterion | Status | Evidence |
-|-----------|--------|----------|
+| ----------- | -------- | ---------- |
 | Tenant isolation (SQL) | ✅ PASS | All queries include `customer_id` filter; never from request body |
 | Service role bypass RLS | ✅ INTENTIONAL | Supabase Edge Function uses service role; app-level checks enforce isolation |
 | No credentials in bundle | ✅ PASS | JWT only; no Supabase key in web build |
@@ -103,7 +116,7 @@
 ## 7. Test Coverage Gate
 
 | Criterion | Status | Evidence |
-|-----------|--------|----------|
+| ----------- | -------- | ---------- |
 | Unit test count | ✅ 684 passed, 1 skipped | Stable since Stage 7 |
 | Architecture test count | ✅ 12 passing | Static boundary enforcement |
 | Backend package tests | ✅ 26 passed | pos_core domain entity tests |
@@ -119,7 +132,7 @@
 ## 8. Build Gate
 
 | Criterion | Status | Evidence |
-|-----------|--------|----------|
+| ----------- | -------- | ---------- |
 | Web release build | ✅ PASS | `flutter build web --release -t lib/main_web.dart` succeeds |
 | Windows release build | ✅ PASS | `build_release.ps1 windows` produces portable zip |
 | Android build | ✅ PASS | Standard Gradle build (no changes to platform code) |
@@ -132,7 +145,7 @@
 ## 9. Documentation Gate
 
 | Criterion | Status | Evidence |
-|-----------|--------|----------|
+| ----------- | -------- | ---------- |
 | Architecture docs complete | ✅ PASS | 28 architecture markdown files |
 | User guides complete | ✅ PASS | 6 user-facing guides (created Stage 10) |
 | API docs complete | ✅ PASS | 6 API reference documents (created Stage 10) |
@@ -148,7 +161,7 @@
 ## 10. Commercial Deployment Readiness Verdict
 
 | Category | Score | Weighted Status |
-|----------|-------|-----------------|
+| ---------- | ------- | ----------------- |
 | Architecture Quality | 10/10 | ✅ Ready |
 | Database Safety | 9/10 | ⚠️ One note (F-12) |
 | Authentication & Authz | 10/10 | ✅ Ready |
@@ -162,6 +175,7 @@
 ### Overall Verdict: **CONDITIONALLY COMMERCIAL READY**
 
 **Conditions:**
+
 1. **F-12 (pre-v6 upgrade blocking):** Acknowledged limitation. Any shop on schema version < 6 must perform a manual upgrade step before adopting the current build. Existing v6+ shops are unaffected.
 2. **Rollback coverage gap:** 29 of 40 transaction sites lack dedicated rollback tests. Production-safe due to structured try/catch around each transaction, but verification coverage is incomplete. Acceptable for commercial deployment given the simplicity of each transaction.
 
@@ -172,7 +186,7 @@
 ## 11. Known Risks at Deployment
 
 | Risk | Likelihood | Impact | Mitigation |
-|------|-----------|--------|------------|
+| ------ | ----------- | -------- | ------------ |
 | Supabase edge function cold start latency | Medium | Low — 200-500ms on first request | Acceptable for POS scale; warm pooling available |
 | Outbox growth under prolonged offline | Low | Medium — storage increases linearly | Automatic pruning of synced rows; monitor threshold |
 | Customer data loss on restore from corrupted export | Low | High — data dependent on export quality | Pre-restore backup always created; recovery export before destructive operations |
@@ -181,4 +195,4 @@
 
 ---
 
-**Report End**
+## Report End

@@ -9,7 +9,7 @@
 ## Executive Summary
 
 | Metric | Value | Status |
-|--------|-------|--------|
+| -------- | ------- | -------- |
 | Database schema version | v22 | ✅ Verified single definition |
 | Business tables (SQLite) | 18 | ✅ All documented |
 | Transaction sites | 38 (engine) + 2 (app-core) | ✅ Inventory complete |
@@ -43,7 +43,7 @@ static const int schemaVersion = 22;
 All 18 business and infrastructure tables are owned and operated exclusively by `pos_local_engine`. No table is accessed directly from `frontend/lib/features/` or `frontend/lib/main*.dart`.
 
 | # | Table | Owning Repository Class | Sync | Export | Owner Repo File |
-|---:|-------|------------------------|------|--------|-----------------|
+| ---: | ------- | ------------------------ | ------ | -------- | ----------------- |
 | 1 | `users` | `SqfliteUserRepository` | ✅ | ✅ (pw_hash/salt stripped) | `sqflite_user_repository.dart` |
 | 2 | `products` | `SqfliteProductRepository` | ✅ | ✅ | `sqflite_product_repository.dart` |
 | 3 | `sales` | `SqfliteSaleRepository` | ✅ | ✅ | `sqflite_sale_repository.dart` |
@@ -64,6 +64,7 @@ All 18 business and infrastructure tables are owned and operated exclusively by 
 | 18 | `sync_outbox` | `SyncOutbox` (enqueue from all repos) | ✅ | ❌ (plumbing) | `local_database.dart:372` |
 
 **Source paths:**
+
 - Repositories: `backend/dart/pos_local_engine/lib/src/repositories/sqflite_*.dart`
 - Schema DDL: `backend/dart/pos_local_engine/lib/src/database/local_database.dart`
 - App-level sync core: `frontend/lib/core/sync/sync_pull_applier.dart`, `data_importer.dart`
@@ -79,7 +80,7 @@ All 18 business and infrastructure tables are owned and operated exclusively by 
 Transactions exist in two locations:
 
 | Location | Files | Transaction Sites | Total |
-|----------|-------|-------------------|-------|
+| ---------- | ------- | ------------------- | ------- |
 | `backend/dart/pos_local_engine/lib/src/repositories/` | 6 .dart files | 38 | ✅ Complete inventory |
 | `frontend/lib/core/sync/sync_pull_applier.dart` | 1 file | 1 | ✅ Complete |
 | `frontend/lib/core/utils/data_importer.dart` | 1 file | 1 | ✅ Complete |
@@ -92,7 +93,7 @@ Transactions exist in two locations:
 Refer to `database-transaction-inventory.md` (Stage 6 baseline) for the complete method-by-method roster. Summary below confirms it remains accurate post-migration:
 
 | Repository | Methods with transactions | Lines at time of audit | Rollback tested |
-|------------|--------------------------|----------------------|-----------------|
+| ------------ | -------------------------- | ---------------------- | ----------------- |
 | `SqfliteSaleRepository` | `saveSale`, `nextReceiptNumber`, `voidSale`, `requestVoid`, `approveVoidRequest`, `rejectVoidRequest` | ~700 lines | 3 of 6 |
 | `SqfliteShiftRepository` | `ensureActiveShift`, `openShift`, `addCashMovement`, `closeShift` | ~500 lines | 3 of 4 |
 | `SqfliteFinanceRepository` | `createCategory`, `renameCategory`, `deleteCategory`, `restoreCategory`, `permanentlyDeleteCategory`, `addEntry`, `updateEntry`, `markCompleted`, `deleteEntry` | ~750 lines | 2 of 9 |
@@ -107,7 +108,7 @@ Refer to `database-transaction-inventory.md` (Stage 6 baseline) for the complete
 **Test file:** `frontend/test/core/database/transaction_rollback_test.dart` (9 tests)
 
 | # | Scenario | Result | What rolls back |
-|---:|----------|--------|-----------------|
+| ---: | ---------- | -------- | ----------------- |
 | 1 | `saveSale` abort after header + first line + outbox | ✅ Proven | Nothing survives |
 | 2 | `voidSale` abort after sale update + request settlement | ✅ Proven | Sale stays COMPLETED |
 | 3 | `approveVoidRequest` abort after sale void + request approval | ✅ Proven | Both revert |
@@ -137,7 +138,7 @@ The following are intentionally NOT wrapped in transactions (documented in `data
 ## 4. Known Behaviors Verification (F-1 through F-13)
 
 | ID | Category | Description | Status | Evidence |
-|----|----------|-------------|--------|----------|
+| ---- | ---------- | ------------- | -------- | ---------- |
 | **F-1** | Boundary (resolved) | Web graph free of sqflite/io/path_provider/LocalDatabase | ✅ **RESOLVED** | `frontend/lib/core/backend/cloud_backend.dart` imports only `pos_contracts` + `pos_cloud_engine`. `web_local_storage.dart` uses only `package:web`. Architecture test `'web entry graph never reaches the native engine or SQLite'` passes. |
 | **F-2** | Schema drift | Fresh v22 lacks `picklist_items_picklist_id`; upgraded DBs have it | ✅ Preserved | Index created only in v20 upgrade branch (`local_database.dart:568-571`); absent from `_onCreate`. Query-performance only. Frozen in golden snapshots. |
 | **F-3** | Test gap | Migration tests use rewind-based fixtures, not true historical fixtures | ✅ Documented | `historical_fixture_migration_test.dart` exists. Stage 6.0 characterization captures fresh-vs-upgraded diffs as goldens. |
@@ -163,7 +164,7 @@ The following are intentionally NOT wrapped in transactions (documented in `data
 **Latest:** `20261111000000` (v22)
 
 | Migration | Key Changes |
-|-----------|-------------|
+| ----------- | ------------- |
 | `20261031000000_void_owner_check.sql` | Void owner privilege check trigger |
 | `20261031010000_sync_user_privilege_check.sql` | Sync user privilege enforcement |
 | `20261031020000_sync_mirror_operation_check.sql` | Mirror operation validation |
@@ -194,7 +195,7 @@ The following are intentionally NOT wrapped in transactions (documented in `data
 **Total:** 61 actions
 
 | Type | Count | Actions |
-|------|-------|---------|
+| ------ | ------- | --------- |
 | Unauthenticated | 3 | `login`, `setup_owner`, `has_users` |
 | Authenticated (via switch-case) | 58 | See api-action-inventory.md |
 | **Grand total** | **61** | |
@@ -204,6 +205,7 @@ The following are intentionally NOT wrapped in transactions (documented in `data
 ### 5.4 Error Response Contract
 
 Every action returns one of:
+
 ```typescript
 { ok: true, ...data }       // Success
 { ok: false, error: string } // Business error (4xx)
@@ -218,7 +220,7 @@ Unhandled exceptions return `{ ok: false, error: "Internal error." }` with HTTP 
 ## 6. Security Audit Summary
 
 | Area | Implementation | Status |
-|------|---------------|--------|
+| ------ | --------------- | -------- |
 | Password hashing | PBKDF2-HMAC-SHA256, 210k iterations, 16-byte salt | ✅ Verified |
 | JWT authentication | HMAC-SHA256, 10-year TTL, token_version revocation | ✅ Verified |
 | Tenant isolation | All queries include `.eq('customer_id', ctx.customerId)` | ✅ Verified |
@@ -234,7 +236,7 @@ Unhandled exceptions return `{ ok: false, error: "Internal error." }` with HTTP 
 
 ## 7. Package Dependency Hierarchy (Verified)
 
-```
+```text
 pos_core (pure domain)
 ├── zero runtime dependencies
 └── Entities: Product, Sale, SaleItem, VoidRequest, Shift, User,
@@ -280,7 +282,7 @@ pos_cloud_engine (HTTP/cloud repositories)
 ## 8. Build & Analysis Results
 
 | Check | Command | Result |
-|-------|---------|--------|
+| ------- | --------- | -------- |
 | Flutter analyze | `flutter analyze --fatal-infos` | **PASS** — no issues (ran in 58.2s) |
 | Flutter test | `flutter test --no-pub` | **PASS** — 684 passed, 1 skipped |
 | Architecture test | `flutter test test/architecture_test.dart --no-pub` | **PASS** — 12/12 tests |
@@ -292,7 +294,7 @@ pos_cloud_engine (HTTP/cloud repositories)
 
 ## 9. Root Directory Layout (Stage 10 Observation)
 
-```
+```text
 wholesale_pos/
 ├── README.md                              # Project overview (updated v22)
 ├── pubspec.yaml                           # Flutter workspace root
@@ -341,7 +343,7 @@ wholesale_pos/
 ## 10. Stage 10 Findings Summary
 
 | Finding | Severity | Action Taken |
-|---------|----------|--------------|
+| --------- | ---------- | -------------- |
 | F-1 sqflite leak in web graph | **Resolved** | Backend split completed; cloud_backend has zero sqflite |
 | F-5 raw Database in features | **Resolved** | No raw Database fields in any feature widget |
 | API action count discrepancy (60 vs 61) | Info | Documented; change_password case exists without explicit if-guard |
@@ -356,7 +358,7 @@ wholesale_pos/
 ## 11. Acceptance Criteria Evaluation
 
 | # | Criterion | Evidence | Status |
-|---:|-----------|----------|--------|
+| ---: | ----------- | ---------- | -------- |
 | 1 | Four-package architecture enforced | pubspec.yaml hierarchy verified; import-graph tests pass | ✅ |
 | 2 | Two-entry-point shell intact | main.dart (NativeBackend) + main_web.dart (CloudBackend) share app_shell.dart | ✅ |
 | 3 | SQLite schema version 22 single definition | `local_database.dart:15` verified; grep finds one definition | ✅ |
@@ -380,7 +382,7 @@ wholesale_pos/
 The following tests were appended to `frontend/test/architecture_test.dart`:
 
 | # | Group | Test Name | Purpose |
-|---:|-------|-----------|---------|
+| ---: | ------- | ----------- | --------- |
 | 13 | `frontend boundaries` | `feature widgets use repository contracts not raw Database handles` | Verify no `final Database` fields in feature classes |
 | 14 | `frontend boundaries` | `features import only from pos_contracts for data access` | Ensure no feature imports `pos_local_engine` or `pos_cloud_engine` |
 | 15 | `frontend boundaries` | `all nav items resolve to a registered feature key` | Confirm navigation entries use known FeatureDef keys |
@@ -393,4 +395,4 @@ The following tests were appended to `frontend/test/architecture_test.dart`:
 
 ---
 
-**Report End**
+## Report End

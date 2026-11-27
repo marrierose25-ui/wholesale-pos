@@ -96,6 +96,12 @@ class DataExporter {
         .toList();
     final financeCategories = await db.query('finance_categories');
     final financeEntries = await db.query('finance_entries');
+    // Warehouse picklists are business records too. Preserve both the lists
+    // and their item rows (including soft-delete tombstones), plus the reusable
+    // customer directory, so a restore is a complete operational snapshot.
+    final picklists = await db.query('picklists');
+    final picklistItems = await db.query('picklist_items');
+    final picklistCustomers = await db.query('picklist_customers');
 
     final exportData = {
       'exported_at': DateTime.now().toIso8601String(),
@@ -113,6 +119,9 @@ class DataExporter {
       'settings': settings,
       'finance_categories': financeCategories,
       'finance_entries': financeEntries,
+      'picklists': picklists,
+      'picklist_items': picklistItems,
+      'picklist_customers': picklistCustomers,
     };
 
     final jsonString = const JsonEncoder.withIndent('  ').convert(exportData);

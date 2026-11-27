@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:sqflite/sqflite.dart';
@@ -12,10 +12,15 @@ import 'package:pos_local_engine/pos_local_engine.dart';
 import 'core/auth/features.dart';
 
 import 'package:pos_contracts/pos_contracts.dart' hide AppBackend;
-import 'package:pos_cloud_engine/pos_cloud_engine.dart' show SyncGatewayBackend;
+import 'package:pos_cloud_engine/pos_cloud_engine.dart'
+    show CloudApiClient, SyncGatewayBackend;
 
 import 'core/backend/native_backend.dart';
 
+import 'core/sync/actor_grant_service.dart';
+import 'core/sync/actor_grant_store.dart';
+import 'core/sync/owner_action_reconciler.dart';
+import 'core/sync/owner_bootstrap_service.dart';
 import 'core/sync/sync_runtime.dart';
 import 'core/sync/sync_service.dart';
 import 'core/sync/sync_status.dart';
@@ -29,6 +34,7 @@ import 'features/finance/finance_overview_screen.dart';
 import 'features/licensing/activation_screen.dart';
 import 'features/register/register_screen.dart';
 import 'features/reports/reports_screen.dart';
+import 'features/startup/unsupported_database_view.dart';
 import 'features/sales/sales_screen.dart';
 import 'features/settings/settings_screen.dart';
 import 'features/users/user_management_screen.dart';
@@ -55,7 +61,7 @@ Future<void> main() async {
 }
 
 Future<void> _startup() async {
-  final db = await LocalDatabase.open();
+  final db = await openApplicationDatabase();
   final productRepository = SqfliteProductRepository(db);
   final saleRepository = SqfliteSaleRepository(db);
   final userRepository = SqfliteUserRepository(db);
@@ -82,6 +88,18 @@ Future<void> _startup() async {
   // --dart-define=WHOLESALE_POS_SYNC_FN_URL or derived from the licensing
   // function URL, so the release script's defines enable it automatically.
   // Rows queued before activation stay put and flow on the first drain after.
+  // Actor grants (Request 3): the licence authenticates the DEVICE, never the
+  // person. After a password sign-in the client asks pos-api for an opaque,
+  // device-bound grant and the sync gateway attaches it to each staged row so
+  // pos_sync_apply can resolve the real actor. The store also answers "which
+  // grant does this queued row need" at push time.
+  final actorGrantStore = ActorGrantStore(db);
+  final actorGrantService = ActorGrantService(
+    store: actorGrantStore,
+    apiUrl: const String.fromEnvironment('WHOLESALE_POS_API_URL'),
+    licenseProvider: () =>
+        LocalDatabase.getSetting(db, SyncGatewayBackend.licenseSettingKey),
+  );
   final syncBackend = SyncGatewayBackend.selectBackend(
     gatewayUrl: SyncGatewayBackend.gatewayUrlFromEnvironment(),
     secretUrl: const String.fromEnvironment('SUPABASE_URL'),
@@ -92,6 +110,7 @@ Future<void> _startup() async {
     isMobile: !kIsWeb && Platform.isAndroid || !kIsWeb && Platform.isIOS,
     licenseProvider: () =>
         LocalDatabase.getSetting(db, SyncGatewayBackend.licenseSettingKey),
+    grantProvider: actorGrantStore.grantsForEntry,
   );
   final outbox = SqfliteSyncOutboxRepository(db);
   final puller = CloudSyncPuller(backend: syncBackend, db: db);
@@ -124,6 +143,7 @@ Future<void> _startup() async {
       // default to dark on fresh installs / when unset.
       initialDarkMode: themeSetting != 'light',
       syncRuntime: runtime,
+      actorGrantService: actorGrantService,
     ),
   );
 }
@@ -187,6 +207,7 @@ class WholesalePosApp extends StatefulWidget {
   final String deviceId;
   final bool initialDarkMode;
   final SyncRuntime? syncRuntime;
+  final ActorGrantService actorGrantService;
 
   const WholesalePosApp({
     super.key,
@@ -199,6 +220,7 @@ class WholesalePosApp extends StatefulWidget {
     required this.deviceId,
     required this.initialDarkMode,
     this.syncRuntime,
+    required this.actorGrantService,
   });
 
   @override
@@ -250,6 +272,7 @@ class _WholesalePosAppState extends State<WholesalePosApp> {
         isDarkMode: _themeMode == ThemeMode.dark,
         onToggleTheme: () => _toggleTheme(_themeMode == ThemeMode.light),
         syncRuntime: widget.syncRuntime,
+        actorGrantService: widget.actorGrantService,
       ),
     );
   }
@@ -266,6 +289,7 @@ class LicenseWrapper extends StatefulWidget {
   final bool isDarkMode;
   final VoidCallback onToggleTheme;
   final SyncRuntime? syncRuntime;
+  final ActorGrantService? actorGrantService;
 
   const LicenseWrapper({
     super.key,
@@ -279,6 +303,7 @@ class LicenseWrapper extends StatefulWidget {
     required this.isDarkMode,
     required this.onToggleTheme,
     this.syncRuntime,
+    this.actorGrantService,
   });
 
   @override
@@ -419,6 +444,7 @@ class _LicenseWrapperState extends State<LicenseWrapper> {
       isDarkMode: widget.isDarkMode,
       onToggleTheme: widget.onToggleTheme,
       syncRuntime: widget.syncRuntime,
+      actorGrantService: widget.actorGrantService,
     );
   }
 }
@@ -434,6 +460,7 @@ class AuthWrapper extends StatefulWidget {
   final bool isDarkMode;
   final VoidCallback onToggleTheme;
   final SyncRuntime? syncRuntime;
+  final ActorGrantService? actorGrantService;
 
   const AuthWrapper({
     super.key,
@@ -447,6 +474,7 @@ class AuthWrapper extends StatefulWidget {
     required this.isDarkMode,
     required this.onToggleTheme,
     this.syncRuntime,
+    this.actorGrantService,
   });
 
   @override
@@ -456,12 +484,44 @@ class AuthWrapper extends StatefulWidget {
 class _AuthWrapperState extends State<AuthWrapper> {
   User? _currentUser;
   bool _restoring = true;
+  bool _ownerAuthPromptShown = false;
+  DateTime _lastOwnerPromptAt = DateTime.fromMillisecondsSinceEpoch(0);
+  Timer? _ownerActionTimer;
   late final SessionStore _sessions = SettingsSessionStore(widget.db);
+
+  /// First-owner cloud reconciliation (Request 3 P0): a native install can
+  /// create its OWNER fully offline, but the cloud only learns that owner
+  /// through the secure `setup_owner` bootstrap — never through device sync.
+  late final OwnerBootstrapService _ownerBootstrap = OwnerBootstrapService(
+    db: widget.db,
+    apiUrl: const String.fromEnvironment('WHOLESALE_POS_API_URL'),
+    activationCodeProvider: () =>
+        LocalDatabase.getSetting(widget.db, DeviceActivation.activationCodeKey),
+  );
+
+  bool _grantPromptShown = false;
+  DateTime _lastGrantPromptAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   @override
   void initState() {
     super.initState();
     _restoreSession();
+    // Stage 4.1.3: pending owner transitions are recoverable — re-check on a
+    // slow cadence so a void recorded offline is offered for authorization
+    // again once the sync loop has delivered its prerequisite to the cloud,
+    // not only once per session. Owner-role gated: a cashier login never
+    // sees the prompt (authorization itself is still enforced server-side).
+    _ownerActionTimer = Timer.periodic(const Duration(minutes: 2), (_) {
+      _maybePromptOwnerAuthorization();
+      _maybePromptGrantRenewal();
+      unawaited(_ownerBootstrap.reconcile());
+    });
+  }
+
+  @override
+  void dispose() {
+    _ownerActionTimer?.cancel();
+    super.dispose();
   }
 
   /// On launch, resume the previous sign-in unless the user explicitly opted
@@ -488,6 +548,9 @@ class _AuthWrapperState extends State<AuthWrapper> {
                 lifetime: SessionStore.defaultLifetime,
               ),
             );
+            // Rows queued before the restart still attribute to this person;
+            // the grant itself is re-verified server-side on every push.
+            widget.actorGrantService?.store.currentUserId = restored.id;
           }
         }
       }
@@ -501,10 +564,198 @@ class _AuthWrapperState extends State<AuthWrapper> {
       _currentUser = restored;
       _restoring = false;
     });
+    _maybePromptOwnerAuthorization();
+    _maybePromptGrantRenewal();
+    unawaited(_ownerBootstrap.reconcile());
+  }
+
+  /// Grant recovery after offline login / session restore (Request 3 P1):
+  /// a user who signed in while offline holds no server-issued actor grant,
+  /// so their queued rows would defer forever. When connectivity is back the
+  /// only missing piece is proof of identity — ask for the password ONCE per
+  /// cooldown and mint a fresh grant. The register stays usable meanwhile and
+  /// no password is ever stored.
+  Future<void> _maybePromptGrantRenewal() async {
+    final service = widget.actorGrantService;
+    final user = _currentUser;
+    if (service == null || user == null || _grantPromptShown) return;
+    if (DateTime.now().difference(_lastGrantPromptAt) <
+        const Duration(minutes: 10)) {
+      return;
+    }
+    String? existing;
+    try {
+      existing = await service.store.grantFor(user.id);
+    } catch (_) {
+      existing = null;
+    }
+    if (existing != null) return;
+    if (!mounted) return;
+    _grantPromptShown = true;
+    _lastGrantPromptAt = DateTime.now();
+    await _showGrantRenewalDialog(service, user);
+    if (mounted) _grantPromptShown = false;
+  }
+
+  Future<void> _showGrantRenewalDialog(
+    ActorGrantService service,
+    User user,
+  ) async {
+    final passwordController = TextEditingController();
+    final renewed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Reconnect cloud sync'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'This account has no active cloud-sync grant (it may have '
+              'expired or been issued while offline). Enter the account '
+              'password once to renew it — selling is not affected.',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: passwordController,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'Password'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Later'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Renew'),
+          ),
+        ],
+      ),
+    );
+    if (renewed != true || !mounted) return;
+    final password = passwordController.text;
+    passwordController.dispose();
+    await service.acquire(
+      user: user,
+      username: user.username,
+      password: password,
+    );
+  }
+
+  /// Stage 4.1: voids/decisions recorded while offline await authoritative
+  /// owner authorization through pos-api. When the till can reach it, ask the
+  /// owner to re-authenticate once per session; every pending record survives
+  /// restarts until the server confirms it.
+  Future<void> _maybePromptOwnerAuthorization() async {
+    // Only an owner can release these; a cashier session must never see the
+    // prompt (the server would refuse anyway, but don't even offer it).
+    if (_currentUser?.role != 'OWNER') return;
+    if (_ownerAuthPromptShown) return;
+    // Re-prompt at most every 10 minutes while work stays pending, so the
+    // dialog is persistent without nagging every sync cycle.
+    if (DateTime.now().difference(_lastOwnerPromptAt) <
+        const Duration(minutes: 10)) {
+      return;
+    }
+    final apiUrl = const String.fromEnvironment('WHOLESALE_POS_API_URL');
+    if (apiUrl.isEmpty) return;
+    final activationCode =
+        await LocalDatabase.getSetting(
+          widget.db,
+          DeviceActivation.activationCodeKey,
+        ) ??
+        '';
+    if (activationCode.isEmpty) return;
+    final reconciler = OwnerActionReconciler(
+      db: widget.db,
+      api: CloudApiClient(url: apiUrl, activationCode: activationCode),
+      activationCode: activationCode,
+    );
+    if (!await reconciler.hasPending()) return;
+    if (!mounted) return;
+    _ownerAuthPromptShown = true;
+    _lastOwnerPromptAt = DateTime.now();
+    await _showOwnerAuthorizationDialog(reconciler);
+    // If work remains (deferral, failure, or still-waiting targets), allow a
+    // later retry once the cooldown elapses — nothing is ever discarded.
+    if (mounted && await reconciler.pendingCount() != 0) {
+      _ownerAuthPromptShown = false;
+    }
+  }
+
+  Future<void> _showOwnerAuthorizationDialog(
+    OwnerActionReconciler reconciler,
+  ) async {
+    final usernameController = TextEditingController();
+    final passwordController = TextEditingController();
+    final authorized = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Authorize pending voids'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Voids recorded while offline need owner authorization '
+              'before the cloud accepts them. Sign in with your cloud '
+              'account to release them.',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: usernameController,
+              decoration: const InputDecoration(labelText: 'Username'),
+            ),
+            TextField(
+              controller: passwordController,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'Password'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Later'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Authorize'),
+          ),
+        ],
+      ),
+    );
+    if (authorized != true || !mounted) return;
+    final result = await reconciler.reconcile(
+      username: usernameController.text.trim(),
+      password: passwordController.text,
+    );
+    passwordController.dispose();
+    usernameController.dispose();
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    if (result.error != null) {
+      messenger.showSnackBar(SnackBar(content: Text(result.error!)));
+    } else if (result.confirmed > 0) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            '${result.confirmed} pending void'
+            '${result.confirmed == 1 ? '' : 's'} authorized.',
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _onLoginSuccess(User user) async {
     setState(() => _currentUser = user);
+    _maybePromptOwnerAuthorization();
+    _maybePromptGrantRenewal();
+    unawaited(_ownerBootstrap.reconcile());
     // "Sign in and see the whole shop": refresh immediately instead of waiting
     // for the next cycle. Fire-and-forget so a dead network can never hold
     // up a cashier who is standing at the till ready to sell.
@@ -538,7 +789,26 @@ class _AuthWrapperState extends State<AuthWrapper> {
     }
   }
 
+  /// Mints the sync actor grant for the person who just signed in. The licence
+  /// proves the device; this delegated credential is what lets the sync
+  /// gateway attribute queued sales/cash/finance rows to a real user.
+  /// Fire-and-forget: offline or a refused grant must never delay the till —
+  /// affected outbox rows simply stay queued server-side until a later push
+  /// carries a valid grant.
+  void _onGrantRequest(User user, String username, String password) {
+    final service = widget.actorGrantService;
+    if (service == null) return;
+    service.store.currentUserId = user.id;
+    unawaited(
+      service.acquire(user: user, username: username, password: password),
+    );
+  }
+
   Future<void> _onLogout() async {
+    // Re-arm the owner-authorization prompt: pending void transitions must be
+    // recoverable after sign-out, not only once per app launch.
+    _ownerAuthPromptShown = false;
+    widget.actorGrantService?.store.currentUserId = null;
     await _sessions.clear();
     if (!mounted) return;
     setState(() => _currentUser = null);
@@ -553,6 +823,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
       return LoginScreen(
         userRepository: widget.userRepository,
         onLoginSuccess: _onLoginSuccess,
+        onGrantRequest: _onGrantRequest,
       );
     }
 
@@ -1268,6 +1539,14 @@ class _StartupErrorAppState extends State<_StartupErrorApp> {
 
   @override
   Widget build(BuildContext context) {
+    // A database written by a newer build gets a dedicated recovery screen:
+    // the generic error text cannot tell the operator that the file is
+    // intact and that the only fix is installing the newer app.
+    if (widget.error is UnsupportedDatabaseVersionException) {
+      return UnsupportedDatabaseVersionView(
+        error: widget.error as UnsupportedDatabaseVersionException,
+      );
+    }
     final logPath = AppLogger.logFilePath;
     return MaterialApp(
       debugShowCheckedModeBanner: false,

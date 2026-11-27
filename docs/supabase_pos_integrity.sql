@@ -1,6 +1,9 @@
--- ⚠️ SUPERSEDED. Current version lives in supabase/migrations/.
--- Applied in production via supabase/migrations/20261031000000_void_owner_check.sql
--- Do not apply this file to production. Last synced: 2026-10-31.
+-- ⚠️ HISTORICAL / SUPERSEDED snapshot. Do NOT apply this file to production.
+-- Current source of truth: backend/supabase/migrations/ (14 timestamped files).
+-- This snapshot contains pre-fix function bodies and predates the current
+-- Request 2 / Request 3 migration chain. Production migration state must be
+-- checked from the linked project's remote schema_migrations table; this file
+-- is not proof that any particular migration is applied.
 -- The pos_void_sale, pos_approve_void, pos_reject_void functions below
 -- are PRE-FIX bodies. Production has the owner check applied.
 
@@ -16,8 +19,7 @@
 -- (docs/supabase_schema.sql / docs/supabase_sync_multi_tenant.sql) that DROP
 -- and recreate tables. Those must NEVER be executed against a live tenant.
 --
--- Apply via:
---   supabase db query --linked --project-ref <ref> --file docs/supabase_pos_integrity.sql
+-- This file is retained for historical reference only. Do not apply it.
 --
 -- DELIBERATELY DEFERRED (see plan notes; need native-client changes first):
 --   * sync revision conflict guard: needs every till to stamp a monotonic

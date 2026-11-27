@@ -8,7 +8,7 @@ export type AuditFn = (
   details: string,
 ) => Promise<void>;
 
-const CORS_HEADERS: Record<string, string> = {
+export const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers":
@@ -25,6 +25,79 @@ export function json(body: unknown, status = 200): Response {
 
 export function str(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
+}
+
+/// Read a JSON request body with a hard byte ceiling. `Content-Length` is a
+/// cheap pre-check; the streamed count is the real bound because a chunked
+/// request may omit or misstate it. Shared by every Edge entry point so a
+/// single huge body cannot be buffered before an action ever runs.
+export async function readJsonBody(
+  req: Request,
+  maxBytes: number,
+): Promise<
+  { ok: true; body: any } | { ok: false; status: number; error: string }
+> {
+  const declared = Number(req.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    return { ok: false, status: 413, error: "Request body too large." };
+  }
+  if (!req.body) return { ok: false, status: 400, error: "Invalid JSON" };
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        return { ok: false, status: 413, error: "Request body too large." };
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return { ok: false, status: 400, error: "Invalid JSON" };
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return { ok: true, body: JSON.parse(new TextDecoder().decode(bytes)) };
+  } catch {
+    return { ok: false, status: 400, error: "Invalid JSON" };
+  }
+}
+
+// Best-effort client-address HINT for rate limiting (Request 2 review).
+//
+// Honesty note: whether Supabase's hosted edge ingress rewrites, appends to,
+// or passes through X-Forwarded-For is NOT authoritatively documented.
+// Supabase's own examples read the header, but no published contract
+// guarantees the value reaching this function is sanitized — a client may
+// control the entire header, including the rightmost entry. We therefore
+// treat the parsed address as a hint for ONE extra throttle bucket, never
+// as a trusted identity. The security guarantee for the public endpoints is
+// carried by the durable per-code and global limits, which do not depend on
+// this value at all; this bucket only adds a bound against clients that do
+// not forge forwarding headers.
+//
+// The rightmost IP-literal entry is parsed only because that is the shape a
+// proxy-appended chain would have — it is NOT evidence the platform added
+// it. Missing header or a non-IP literal yields null and the caller falls
+// back to shared buckets — fail-safe, never fail-open.
+const IP_LITERAL = /^[0-9a-fA-F:.%[\]]{3,45}$/;
+export function bestEffortSourceAddress(req: Request): string | null {
+  const xff = req.headers.get("x-forwarded-for");
+  if (!xff) return null;
+  const parts = xff.split(",").map((s) => s.trim()).filter((s) => s.length);
+  const last = parts[parts.length - 1];
+  if (!last || !IP_LITERAL.test(last)) return null;
+  return last;
 }
 
 export function strip(rows: any[] | null): any[] {

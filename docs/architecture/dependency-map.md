@@ -24,7 +24,7 @@ technical debt to be extracted in a later stage.
 
 ## 1. Layer overview
 
-```
+```text
 main.dart (native entry)          main_web.dart (web entry)
    │                                    │
    ├─ core/database, auth, licensing    ├─ core/backend (AppBackend)
@@ -40,7 +40,7 @@ its own graph.
 ## 2. Core internal dependencies
 
 | File | Depends on (project imports) |
-|---|---|
+| --- | --- |
 | `core/backend/app_backend.dart` | `auth/session_store`, `pos_core` (User), all 6 `repositories/*` interfaces |
 | `core/backend/cloud_backend.dart` | `auth/session_store`, `cloud/*` (client + 6 repos), `pos_core` entities, all 6 `repositories/*` interfaces, **`features/web/web_activation_gate`, `features/web/web_settings_screen`** ⚠ (Stage 2) |
 | `core/backend/web_local_storage.dart` | `package:web` only |
@@ -74,7 +74,7 @@ its own graph.
 ## 3. Feature dependencies
 
 | Feature file | Project imports beyond core/theme/utils |
-|---|---|
+| --- | --- |
 | `features/sales/` | screens only now (`sales_screen`, `sale_details`); models moved to `pos_core` — imports `pos_core`, `repositories/*` |
 | `features/dashboard/dashboard_screen.dart` | `sales_by_day_screen` (same feature) |
 | `features/dashboard/sales_by_day_screen.dart` | `pos_core` (Sale) — the shared day browser other features import ⚠ |
@@ -108,7 +108,7 @@ features — its extraction to a shared UI location is deferred work.
 Single shared database — no per-module DBs (per Part-0 constraint).
 
 | Table(s) | Primary writer(s) | Other direct accessors |
-|---|---|---|
+| --- | --- | --- |
 | `users`, `settings`, `audit_logs` | `user_repository` | `session_store` (settings), `local_database` helpers, `device_fingerprint` (settings), `sync_pull_applier` (all three), `data_exporter/importer`, `sync_outbox` (reads `users` for demo check) |
 | `products` | `product_repository` | `sync_pull_applier`, `data_exporter/importer` |
 | `sales`, `sale_items`, `void_requests`, `counters` | `sale_repository` | `shift_repository` (reads sales for shift math), `finance_repository` (reads via join for person totals? — verify during migration), `sync_pull_applier`, `supabase_sync_backend` (entity names only), `data_exporter/importer` |
@@ -119,6 +119,7 @@ Single shared database — no per-module DBs (per Part-0 constraint).
 | `sync_outbox` | `sync_outbox` (+ every repo via `enqueue`) | `sync_outbox_repository`, `sync_pull_applier` (synced_at markers), `data_importer` |
 
 Cross-module reads that matter for future boundaries:
+
 - `sale_repository → shifts` (shift summary for register snapshot)
 - `finance_repository → cash_movements, shifts, users` (person/deposit views)
 - `shift_repository → cash_movements, cash_movement_photos, users` (drawer math)
@@ -137,6 +138,7 @@ Cross-module reads that matter for future boundaries:
 ## 7. Tests → code under test
 
 `frontend/test/` mirrors `lib/` structure (`core/...`, `features/...`). Notable:
+
 - Repository tests exercise the **same** repository classes the app uses.
 - `sync_matrix_live_test.dart` (integration) hits live endpoints — skipped
   by default (`~1` skip in baseline).
@@ -153,7 +155,7 @@ core → `pos_core`, or core → core.
 ## 9. Package summary
 
 | Package | Path | Runtime deps | Depends on |
-|---------|------|-------------|------------|
+| --------- | ------ | ------------- | ------------ |
 | `pos_core` | `backend/dart/pos_core` | none | — |
 | `pos_contracts` | `backend/dart/pos_contracts` | none | `pos_core` |
 | `pos_local_engine` | `backend/dart/pos_local_engine` | `sqflite_common_ffi` | `pos_contracts`, `pos_core` |
@@ -175,7 +177,7 @@ Cloud transport, cloud repositories, and sync gateway backends:
 
 ### Import direction
 
-```
+```text
 app ──► pos_cloud_engine ──► pos_contracts ──► pos_core
 app      pos_local_engine ──► pos_contracts ──► pos_core
                                    ▲
@@ -190,7 +192,7 @@ packages are independent consumers of `pos_contracts`. The app composes them.
 
 Modularized in Stage 8 (~2399 → ~434 lines router + 28 new files):
 
-```
+```text
 pos-api/
 ├── index.ts                        ← Router (JWT verify → feature-gate → switch dispatch)
 ├── shared/

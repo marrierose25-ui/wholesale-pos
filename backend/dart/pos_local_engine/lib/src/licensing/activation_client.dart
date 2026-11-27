@@ -6,10 +6,20 @@ import 'package:http/http.dart' as http;
 ///
 /// The Edge Function is deployed with "Verify JWT" OFF, so callers authenticate
 /// by presenting a valid (activation_code, device_fingerprint) pair that the
-/// server has already registered — the shared secret IS the seat binding. The
-/// anon Supabase key is not required and is deliberately not baked into the
+/// server has already registered. IMPORTANT: that pair is a bearer identifier,
+/// NOT a device binding — the signed license is a document, not proof of
+/// hardware possession, and a copied license authenticates identically (see
+/// docs/LICENSING.md "Limitations"). What authorizes a PERSON is separate:
+/// password login plus the server-issued actor grant used by sync.
+/// The anon Supabase key is not required and is deliberately not baked into the
 /// app; only the function URL is (via
 /// `--dart-define=WHOLESALE_POS_LICENSE_FN_URL=...`).
+///
+/// Policy: ONE activation code = ONE business with UNLIMITED devices. There
+/// is no seat cap to hit and no seat voucher to redeem. Device management
+/// (list / deactivate) is NOT done here — it moved to the owner-authenticated
+/// `pos-api` surface (`list_devices` / `deactivate_device`), because a bare
+/// activation code plus a fingerprint is not proof of owner identity.
 ///
 /// Every method returns a [_Result]-shaped map from the server's JSON body.
 /// Callers check `ok` and either apply the change or surface the `error`
@@ -37,6 +47,10 @@ class ActivationClient {
   /// server-signed `license_code` (paste-ready string of the form
   /// `base64url(payload).base64url(signature)`) which the caller stores in
   /// `settings.license_code` and re-verifies offline on every startup.
+  ///
+  /// Unlimited devices: `seat_limit`/`seats_used` in the response are
+  /// informational only (the live active-device count); nothing is refused
+  /// for exceeding a seat count.
   Future<ActivationResponse> activateDevice({
     required String activationCode,
     required String deviceFingerprint,
@@ -60,76 +74,6 @@ class ActivationClient {
       error: (json['error'] as String?) ?? 'Activation failed.',
       seatLimit: (json['seat_limit'] as num?)?.toInt(),
       seatsUsed: (json['seats_used'] as num?)?.toInt(),
-    );
-  }
-
-  /// Returns the buyer's own list of active seats. Only works from a device
-  /// that already holds an active registration (enforced server-side).
-  Future<ActivationResponse> listDevices({
-    required String activationCode,
-    required String deviceFingerprint,
-  }) async {
-    final json = await _post({
-      'action': 'list_devices',
-      'activation_code': activationCode,
-      'device_fingerprint': deviceFingerprint,
-    });
-    if (json['ok'] == true) {
-      final raw = json['devices'];
-      final list = raw is List
-          ? raw.whereType<Map<String, dynamic>>().toList()
-          : <Map<String, dynamic>>[];
-      return ActivationResponse.success(
-        devices: list,
-        seatLimit: (json['seat_limit'] as num?)?.toInt(),
-        seatsUsed: (json['seats_used'] as num?)?.toInt(),
-      );
-    }
-    return ActivationResponse.failure(
-      error: (json['error'] as String?) ?? 'Could not list devices.',
-    );
-  }
-
-  /// Removes one of the caller's own devices to free a seat. Refuses
-  /// self-deactivation server-side so the caller cannot lock themselves out.
-  Future<ActivationResponse> deactivateDevice({
-    required String activationCode,
-    required String requestingFingerprint,
-    required String targetFingerprint,
-  }) async {
-    final json = await _post({
-      'action': 'deactivate_device',
-      'activation_code': activationCode,
-      'requesting_fingerprint': requestingFingerprint,
-      'target_fingerprint': targetFingerprint,
-    });
-    if (json['ok'] == true) return ActivationResponse.success();
-    return ActivationResponse.failure(
-      error: (json['error'] as String?) ?? 'Deactivation failed.',
-    );
-  }
-
-  /// Applies a seat voucher (bought from Umer out-of-band) to the current
-  /// license, raising `seat_limit` by the voucher's `seats_added`.
-  Future<ActivationResponse> redeemVoucher({
-    required String activationCode,
-    required String deviceFingerprint,
-    required String voucherCode,
-  }) async {
-    final json = await _post({
-      'action': 'redeem_voucher',
-      'activation_code': activationCode,
-      'device_fingerprint': deviceFingerprint,
-      'voucher_code': voucherCode,
-    });
-    if (json['ok'] == true) {
-      return ActivationResponse.success(
-        seatsAdded: (json['seats_added'] as num?)?.toInt(),
-        newSeatLimit: (json['new_seat_limit'] as num?)?.toInt(),
-      );
-    }
-    return ActivationResponse.failure(
-      error: (json['error'] as String?) ?? 'Voucher redemption failed.',
     );
   }
 
@@ -162,8 +106,8 @@ class ActivationClient {
   }
 }
 
-/// Uniform result shape for all ActivationClient methods. Optional fields
-/// are populated depending on which action ran.
+/// Uniform result shape for [ActivationClient.activateDevice]. Optional
+/// fields are populated depending on the response.
 class ActivationResponse {
   final bool ok;
   final String? error;
@@ -171,18 +115,12 @@ class ActivationResponse {
   final DateTime? expiresAt;
   final int? seatLimit;
   final int? seatsUsed;
-  final int? seatsAdded;
-  final int? newSeatLimit;
-  final List<Map<String, dynamic>>? devices;
 
   ActivationResponse.success({
     this.licenseCode,
     this.expiresAt,
     this.seatLimit,
     this.seatsUsed,
-    this.seatsAdded,
-    this.newSeatLimit,
-    this.devices,
   }) : ok = true,
        error = null;
 
@@ -192,8 +130,5 @@ class ActivationResponse {
     this.seatsUsed,
   }) : ok = false,
        licenseCode = null,
-       expiresAt = null,
-       seatsAdded = null,
-       newSeatLimit = null,
-       devices = null;
+       expiresAt = null;
 }

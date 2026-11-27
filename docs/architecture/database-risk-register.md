@@ -17,7 +17,7 @@ Severity reflects impact if the risk materialises, not the probability of the
 move being approved.
 
 | Severity | Meaning |
-|---|---|
+| --- | --- |
 | **Critical** | Data loss, corrupted schema, or a security/licensing regression |
 | **High** | Silent behaviour change, broken isolation, or a stage that cannot be verified |
 | **Medium** | Boundary/test/doc debt that increases future risk |
@@ -25,7 +25,7 @@ move being approved.
 | **Info** | Fact to preserve or reconcile later |
 
 | Likelihood | Meaning |
-|---|---|
+| --- | --- |
 | **High** | Expected without an explicit gate |
 | **Medium** | Plausible with normal review |
 | **Low** | Unlikely with the stated mitigation |
@@ -35,7 +35,7 @@ move being approved.
 ## Part A — Pre-existing findings (carried from the Stage 5 audit)
 
 | ID | Severity | Likelihood | Finding | Migration relevance | Mitigation / gate | Status |
-|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- |
 | **F-1** | High (boundary) | Certain today | **The web compile graph still contains sqflite.** `main_web.dart` → `app_shell.dart` → `app_backend.dart` imports all seven `Sqflite*Repository` classes; `app_shell.dart` also imports `core/auth/session_store.dart` (sqflite); `cloud_backend.dart` and `web_settings_screen.dart` import the mixed repository files. The build succeeds because sqflite is web-compilable, but the stated “web graph free of sqflite” rule is not met. `sqflite_common_ffi`, `path_provider`, `dart:io`, and `LocalDatabase` are not in the web graph. | This is the primary defect Stage 6 exists to remove. The audit’s original wording mentioned only `app_backend.dart`; the session/store and web-settings paths are part of the same leak. | `pos_contracts` split (6.1); web import-graph test (6.7); no combined port+impl re-exports. | Open |
 | **F-2** | Low (schema drift) | Certain today | **Fresh v22 installs lack `picklist_items_picklist_id`.** The index is created only inside the v20 upgrade branch; `_createIndexesAndTriggers` does not create it and `_onCreate` calls only that helper. Upgraded databases have it; fresh ones do not. Query-performance only, no data/constraint difference. | A “tidy” move could accidentally add the index to `_createIndexesAndTriggers` or remove the v20 call, silently changing fresh/upgraded parity. | Preserve both paths exactly; fresh-v22 snapshot must still show the missing index. Do not fix in Stage 6. | Open (preserve) |
 | **F-3** | Medium (test gap) | High | **Migration tests are rewind-based**, starting from the current schema and undoing selected parts. v2–v4, v12, v19 (standalone), v20, v21 and v22 have no dedicated upgrade assertion. | A pure move could hide a migration-order regression that the current suite does not see. | Stage 6.0 characterisation fixtures for every version; `sqlite_master`/PRAGMA snapshots before/after. | Open |
@@ -53,7 +53,7 @@ move being approved.
 ## Part B — Migration risks (Stage 6)
 
 | ID | Severity | Likelihood | Risk | Impact | Mitigation | Gate / early warning |
-|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- |
 | **M-01** | High | Medium | **sqflite re-enters the web graph through a shim or a mixed re-export.** | Violates the primary boundary requirement; build may still pass, so it is easy to miss. | Contract files are sqflite-free; implementation shims are separate native-only files; import-graph test from `main_web.dart`. | Test fails on `sqflite`, `sqflite_common_ffi`, `path_provider`, `dart:io`, `pos_local_engine`, `LocalDatabase`. |
 | **M-02** | Critical | Low | **The app opens a different/empty database after the move** (path resolution changed, support directory resolved differently, filename changed). | Appears as total data loss to the shop. | Keep `path_provider` resolution inside the engine `open()`; `openAt` only for tests/recovery; assert basename/location. | Fresh install and existing-file smoke; temp-path test asserts `wholesale_pos.db`. |
 | **M-03** | Critical | Low | **A second connection is opened** (repository/test/composition) during the transition. | SQLite locking, divergent snapshots, failed writes, possible corruption under rollback-journal mode. | One handle owned by the composition root; repositories take the handle; no repository opens its own; grep for `openDatabase`. | Static grep + runtime single-open test; no `openDatabase` outside lifecycle. |
@@ -91,7 +91,7 @@ These are real defects or deliberate limitations. They are recorded so the
 move does not “helpfully” change them.
 
 | ID | Classification | Description | Required Stage 6 behaviour |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **B-1** | Schema inconsistency (F-2) | Fresh v22 lacks `picklist_items_picklist_id`; upgraded DBs have it. | Preserve both paths. Do not add the index to `_createIndexesAndTriggers`. |
 | **B-2** | Documentation defect (F-4) | `docs/DATABASE.md` wrong version + wrong export claim. | Do not edit during Stage 6 unless separately authorised. |
 | **B-3** | Backup scope gap (F-6) | `picklist_customers` is local-only, not in export/import/sync. | Preserve. Do not add it. |
@@ -131,7 +131,7 @@ A stop is not a failure of the audit; it is the gate doing its job.
 If Stage 6 is approved and executed, these residual risks remain accepted:
 
 | Residual risk | Why accepted |
-|---|---|
+| --- | --- |
 | `SyncPullApplier`/`CloudSyncPuller` still import sqflite in Stage 6 | Native-only; Stage 7 owns sync modularisation; the web graph is unaffected. |
 | Export snapshot gap (F-7) | Fixing it is a behaviour change outside the mandate. |
 | Fresh/upgraded index divergence (F-2) | Fixing it is a schema change outside the mandate. |

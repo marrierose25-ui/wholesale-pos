@@ -28,7 +28,7 @@ business write now also appends one row to a new local `sync_outbox` table,
 **inside the same database transaction**, recording "this entity changed and
 still needs pushing."
 
-```
+```text
 SaleRepository.saveSale()  ──►  BEGIN TRANSACTION
    insert sales row                │
    insert sale_items rows          │
@@ -39,7 +39,7 @@ SaleRepository.saveSale()  ──►  BEGIN TRANSACTION
 Files added (`frontend/lib/core/sync/`):
 
 | File | Responsibility |
-|------|----------------|
+| ------ | ---------------- |
 | `sync_outbox_entry.dart` | The queued-change model + the `SyncEntities` / `SyncOperations` vocabulary shared with any future backend. |
 | `sync_outbox.dart` | `upsert()` / `delete()` helpers that write an outbox row through a `DatabaseExecutor` so they can run **inside** the caller's transaction. |
 | `sync_outbox_repository.dart` | `pending(limit)`, `pendingCount()`, `markSynced(ids)`, `pruneSynced()` — read/compaction API for the queue. |
@@ -254,7 +254,7 @@ desktop builds — never in a distributable. The Phase-18 replacement reuses the
 trust primitive the licensing system already mints: the **signed v2 license**
 (Ed25519, device-bound, contains `customer_id`).
 
-```
+```text
 client (no keys)                    sync Edge Function (service role)
   outbox batch ───────────────────►  1. verify Ed25519 signature + expiry
   { action:'push',                   2. license row not revoked server-side
@@ -313,7 +313,7 @@ divergence, because nothing crashes — the other device simply keeps a differen
 opinion. The rules below are the ones that had to be made explicit; each is
 enforced in code and covered by a test.
 
-**Server**
+### Server
 
 * **An UPDATE must move the row forward** (`docs/supabase_sync_delta.sql`).
   The pull is a keyset walk over `(received_at, id)`, and `received_at` was a
@@ -325,19 +325,187 @@ enforced in code and covered by a test.
   mirror table, so *no* writer can forget. Moving later in the ordering is also
   safe for the walk: the worst case is a second delivery, and re-applying a
   known row is a no-op.
-* **State transitions are not content** (`terminalState` in
-  `supabase/functions/sync/index.ts`). `sync_mirror` is keyed per entity and
-  deliberately keeps the first payload, and `pos_sync_apply` can only INSERT a
-  sale — replaying an existing one through `pos_create_sale` is an idempotent
-  no-op. So a sale voided on a till never voided in the cloud and every other
-  device kept the revenue. The gateway now applies `VOIDED` sales and
-  `APPROVED`/`REJECTED` void requests through `pos_void_sale` /
-  `pos_approve_void` / `pos_reject_void`, after the apply pass (the sale has to
-  exist first). A refused repeat is a success: a retried entry looks exactly
-  like a repeat. A transition whose row is still queued behind a backlog is
-  reported retryable rather than acked, so it is attempted again.
+* **Device ≠ user (Request 3 actor grants).** The signed license proves the
+  DEVICE, never which person is at the till, so `pos_sync_apply` no longer
+  trusts actor ids inside pushed payloads (`cashier_id`, `user_id`,
+  `created_by`, `requested_by`). After a password sign-in the native client
+  calls pos-api's public `issue_actor_grant` action — which re-verifies the
+  password AND the signed license — and receives an opaque token bound to
+  (tenant, user, device). The sync gateway stores only its SHA-256 digest in
+  `sync_mirror.actor_grant_hash`; `pos_sync_apply` resolves the digest to a
+  live user and uses THAT user for every actor column, then enforces the
+  user's feature permissions (`pos`/`register`/`finance`/`warehouse`) through
+  permission-wrapped RPCs. A missing/expired/revoked grant leaves the row
+  PENDING (`ACTOR_AUTH_REQUIRED`) and the client reports it `deferred` — the
+  outbox entry stays queued, nothing is discarded or falsely acked. The
+  primary grant is always the entry's OWN actor: when the payload names an
+  actor whose grant is absent, the row defers rather than borrowing the
+  signed-in user's grant (Request 3 final corrections). Owner
+  accounts are never mutable through device sync: devices may provision
+  CASHIER accounts under an owner grant, but cannot create/promote owners or
+  change any existing credential — those go through live pos-api only.
+  Grants expire, are bound to the issuing device fingerprint, and die on a
+  `token_version` bump (password/status change) or explicit revocation.
+  Offline tills keep selling; authorization is proven at push time, and a
+  row that cannot yet be verified simply waits in the outbox.
+* **Explicit sync outcomes and durable quarantine** (Request 3 acceptance).
+  Every staged row resolves to `APPLIED`, `DEFERRED` (actor grant or
+  prerequisite missing — stays PENDING), `RETRYABLE` (transient
+  infrastructure failure — deadlock, serialization, connection loss — stays
+  PENDING with a `RETRYABLE:` marker and is never a verdict on the record),
+  or `REJECTED` (permanent validation/authorization refusal). The client
+  acks ONLY `applied`; deferred/retryable/stored rows stay queued. A
+  rejected row moves to a durable quarantine on the device (original
+  payload, entity identity, server error, timestamps — schema v24) that is
+  never auto-retried and never pruned; the operator reviews it under
+  Settings → Cloud Sync → Rejected sync records with deliberate retry or
+  confirmed discard. Retry is a real server-side recovery, not a local
+  requeue: the client calls the sync gateway's `recover` action, which runs
+  `pos_sync_recover` — it re-queues ONLY rows still marked `REJECTED` back to
+  `PENDING` (never `APPLIED`, never an already-`PENDING` row), writes a
+  `SYNC_RECOVERY` audit entry preserving the previous refusal, then re-runs
+  `pos_sync_apply` so grants, permissions and payloads are genuinely
+  re-validated. The apply RPCs' own idempotency (sale/movement ids, the
+  one-deposit/one-reversal-per-collection guards) means recovery cannot
+  duplicate an already-applied financial transaction. A record the gateway
+  refused before staging reports `missing` and stays quarantined; a backend
+  without recovery support tells the operator so honestly instead of
+  pretending the requeue did anything. Unchecked `*_unchecked` money RPCs
+  are not executable by `service_role` — only the permission-checked
+  wrappers are.
+* **Per-actor finance attribution** (Request 3 acceptance).
+  `sync_mirror.actor_grant_hashes` carries one grant digest per actor the
+  payload names (`created_by`, `completed_by`, `deleted_by`), so a finance
+  entry created by cashier A and completed by cashier B lands with
+  `created_by = A`, `completed_by = B`, and the cash deposit attributed to
+  the completer through the locked `pos_complete_finance` RPC. Payload actor
+  ids only SELECT which staged grant to resolve — the resolved user is what
+  is recorded, so a forged id cannot re-attribute the entry. The final
+  `DELETED` status is not treated as the whole history: `pos_sync_apply`
+  replays each independently authorized transition in order — insert PENDING
+  under the creator, `pos_complete_finance` under the completer (its own
+  audit row and cash deposit), `pos_delete_finance_entry` under the deleter
+  (its own audit row and reversal) — so a create+complete+delete that all
+  happened offline before first sync keeps every actor, and CASH
+  collections get exactly one deposit and one reversal because the device's
+  cash legs carry `source_finance_entry_id` and the server-side reversal
+  skips legs the device already posted. Since migration
+  `20261204000000_request3_financial_integrity` the dedup is atomic: a unique
+  index on `(customer_id, source_finance_entry_id, type)` lets one DEPOSIT and
+  one WITHDRAWAL exist per collection, and `pos_add_cash_movement` /
+  `pos_complete_finance` / `pos_delete_finance_entry` all insert with
+  `ON CONFLICT DO NOTHING`, so two devices racing different movement ids for
+  the same leg converge on one row — the loser is handed the existing
+  movement, never a financial failure.
+* **Legacy unlinked reversals** (Request 3 financial integrity, hardened by
+  `20261205000000_request3_legacy_reversal_safety`). Tills that queued a cash
+  reversal before `source_finance_entry_id` existed send a WITHDRAWAL with
+  no collection link. The server never matches on amount alone, and exact
+  reason text is not proof of uniqueness either. A legacy leg is adopted
+  only when ALL of these hold: the EXACT generated reason
+  (`Reversal: deleted cash collection from <category> (<source>)`), the
+  amount, AND actor evidence (movement user equals the entry's
+  `deleted_by`/`completed_by` or the delete-time actor — a missing
+  `deleted_by` no longer bypasses actor checking) point at exactly ONE
+  collection, AND the bidirectional check proves that movement could not
+  belong to any OTHER collection (strong and weak candidate counts both
+  equal one). Adoption is atomic (`UPDATE ... RETURNING`); a movement
+  claimed by a concurrent delete is re-read and candidates recomputed —
+  processing order never assigns the leg.
+  Everything less stays unresolved: two or more matching movements, one
+  movement matching multiple collections, a category rename that broke the
+  stored reason, a reason/source mismatch, or insufficient actor evidence
+  all leave the staged `finance_entry` PENDING with a durable
+  `LEGACY_REVERSAL_AMBIGUOUS` marker — the payload and every movement are
+  preserved, nothing is acknowledged, and NO server reversal is written
+  while a plausible old reversal (same amount, reversal-shaped reason)
+  might already exist. A genuinely absent reversal still produces exactly
+  one server-written leg.
+  **Late arrivals** (`20261206000000_request3_late_reversal_dedup`). An
+  old-format unlinked withdrawal can reach the cloud AFTER the collection's
+  reversal already exists — server-written, or device-written and adopted
+  at delete time — in a later batch or after the entry reached DELETED.
+  Before inserting an unlinked legacy withdrawal, the insert path checks
+  the recorded linked reversals: same reason text + amount + actor
+  evidence. Exactly one strong AND one weak candidate means it is the same
+  money already in the drawer — the existing movement id is returned as
+  `duplicate: true` and nothing new is written. Conflicting or ambiguous
+  evidence raises `LEGACY_REVERSAL_AMBIGUOUS`, which `pos_sync_apply`
+  defers as PENDING with the durable marker — the push is never
+  acknowledged and the payload stays in `sync_mirror` for review.
+  **Operator resolution:** there is no dedicated UI — resolution is a
+  deliberate database action via audited functions (never bare UPDATEs).
+  Two cases:
+  * The movement DOES belong to the collection: call
+    `SELECT pos_link_legacy_reversal('<tenant>', '<movement>',
+    '<entry>', '<operator>', '<note>');`. It validates the unlinked
+    WITHDRAWAL and the COMPLETED CASH collection, refuses a conflicting
+    existing leg, links atomically, and writes a `LEGACY_REVERSAL_LINKED`
+    audit row with the operator identity, both ids, timestamp and note.
+    An identical retry is a safe no-op. Then re-run sync apply — the
+    deferred entry converges. NOTE: `<operator>` is a SQL parameter —
+    operator-ATTESTED identity recorded for accountability, not
+    independently authenticated.
+  * The movement does NOT belong to that collection (e.g. an unrelated
+    same-amount reversal from another till): record an explicit, audited
+    verdict — `SELECT pos_mark_movement_unrelated('<tenant>',
+    '<movement>', '<entry>', '<operator>', '<note>');`. This writes a
+    `cash_movement_reconciliations` row (`resolution = 'UNRELATED'`,
+    operator, timestamp, note) plus a `LEGACY_REVERSAL_MARKED_UNRELATED`
+    audit entry. The movement itself is NEVER modified or deleted. The
+    verdict is scoped to the (movement, collection) pair: it unblocks only
+    that collection's delete, which then writes its own server reversal.
+    To reverse a mistaken verdict call
+    `SELECT pos_revoke_unrelated_verdict('<tenant>', '<movement>',
+    '<entry>', '<operator>', '<note>');` — it removes the verdict row AND
+    writes a `LEGACY_REVERSAL_UNRELATED_REVOKED` audit entry; the original
+    `MARKED_UNRELATED` audit event is preserved, never erased.
+  Devices with older pending outbox records do NOT need a special upgrade
+  step for the common case — uniquely attributable records reconcile
+  automatically on the next push, and late duplicates converge on the
+  existing linked reversal — but records that land in the ambiguous
+  states above wait for one of the two manual resolutions rather than
+  being silently reconciled.
+* **First-owner bootstrap** (Request 3 acceptance). A native install creates
+  its OWNER offline and reconciles through pos-api's `setup_owner` (activation
+  code + one-owner policy + rate limits), passing the local user id and its
+  cloud-format credential so local and cloud identities match.
+  `pos_setup_owner` is idempotent for the same id and serializes concurrent
+  attempts per tenant; a different existing owner yields a conflict, never a
+  silent overwrite. A same-id retry is idempotent ONLY when the submitted
+  username and credential (`pw_salt` + `pw_hash`) match the stored owner row
+  exactly. Pass-the-hash is closed (Request 3 final corrections): the
+  pre-hashed credential is a replayable verifier, not proof of the plaintext
+  password, so pre-hashed creation and pre-hashed same-id retry return a
+  SESSION-LESS success (`ok` + `user_id`, `created`/`reconciled`) and never
+  mint an OWNER JWT — `OwnerBootstrapService` marks reconciliation done on
+  that response without needing a token. Only the plaintext-password path
+  (web bootstrap, password verified server-side) issues a session; normal
+  OWNER login always goes through the real password verification flow.
+* **Privileged transitions are never applied from pushed payloads** (Stage
+  4.1 / audit H1). A license proves the device, never WHICH USER acted, so
+  the gateway stages and applies only data: `pos_create_sale` hardcodes
+  `COMPLETED` and `pos_sync_apply` inserts void requests as `PENDING`. A
+  pushed `VOIDED`/`APPROVED`/`REJECTED` payload can no longer mint an
+  authoritative transition. Owner-authorized voids recorded offline are
+  kept in the local `pending_owner_actions` store and released through
+  `pos-api`'s JWT-authenticated `void_sale`/`approve_void`/`reject_void`
+  actions, where `p_user` is carved from the verified token — see
+  `frontend/lib/core/sync/owner_action_reconciler.dart`.
+* **Cloud-side void invariants** (`backend/supabase/migrations/
+  20261125000000`–`20261127000000`). A `BEFORE INSERT` trigger on
+  `void_requests` takes `SELECT ... FOR UPDATE` on the sale row, which
+  serializes request insertion against `pos_void_sale`/`pos_approve_void`:
+  insert-first commits PENDING and the void's settle trigger approves it;
+  void-first makes the insert fail. An `AFTER UPDATE` trigger on `sales`
+  settles still-PENDING requests in the same transaction, attributed to
+  `voided_by` — and only when it is non-NULL, so no unattributed approval
+  can be manufactured. A composite FK `(customer_id, sale_id)` →
+  `sales(customer_id, id)` rejects requests for missing or cross-tenant
+  sales, and a partial unique index allows at most one PENDING request
+  per sale.
 
-**Client** (`lib/core/sync/sync_pull_applier.dart`)
+### Client (`lib/core/sync/sync_pull_applier.dart`)
 
 * **A pulled row is never dropped for a missing foreign key.** `sales` requires
   `cashier_id`, `shift_id` and `device_id`, and the till that made a sale may
@@ -375,11 +543,11 @@ Login attempts are rate-limited by an in-memory counter inside the
 `pos-api` Edge Function (see `loginThrottle` in `index.ts`). This is
 best-effort by design:
 
-- **Does not span isolates.** If Supabase scales the function to N
+* **Does not span isolates.** If Supabase scales the function to N
   containers, each container has its own counter. Effective rate limit
   is N × the configured maximum.
-- **Resets on container recycle.** A cold start zeroes the counter.
-- **Not durable.** No database, no Redis — only the process's memory.
+* **Resets on container recycle.** A cold start zeroes the counter.
+* **Not durable.** No database, no Redis — only the process's memory.
 
 The mitigation layered on top is PBKDF2-HMAC-SHA256 at 210,000
 iterations per attempt (~50ms of CPU on modest hardware). A brute-force

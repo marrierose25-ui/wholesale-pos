@@ -1,0 +1,1151 @@
+{
+  "user_version": 14,
+  "tables": {
+    "audit_logs": {
+      "sql": "CREATE TABLE audit_logs (id TEXT PRIMARY KEY, user_id TEXT, action TEXT NOT NULL, details TEXT, created_at TEXT NOT NULL)",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 1
+        },
+        {
+          "name": "user_id",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "action",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "details",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        }
+      ],
+      "foreign_keys": [],
+      "indexes": [
+        {
+          "name": "audit_logs_created_at",
+          "unique": false,
+          "partial": false,
+          "columns": [
+            "created_at"
+          ],
+          "sql": "CREATE INDEX audit_logs_created_at ON audit_logs(created_at)"
+        }
+      ],
+      "unique_constraints": []
+    },
+    "cash_movements": {
+      "sql": "CREATE TABLE cash_movements (id TEXT PRIMARY KEY, shift_id TEXT NOT NULL, type TEXT NOT NULL, amount_minor_units INTEGER NOT NULL, reason TEXT, created_at TEXT NOT NULL, user_id TEXT, photo TEXT, FOREIGN KEY(shift_id) REFERENCES shifts(id), FOREIGN KEY(user_id) REFERENCES users(id))",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 1
+        },
+        {
+          "name": "shift_id",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "type",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "amount_minor_units",
+          "type": "INTEGER",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "reason",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "user_id",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "photo",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        }
+      ],
+      "foreign_keys": [
+        {
+          "id": 0,
+          "seq": 0,
+          "table": "users",
+          "from": "user_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "NO ACTION",
+          "match": "NONE"
+        },
+        {
+          "id": 1,
+          "seq": 0,
+          "table": "shifts",
+          "from": "shift_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "NO ACTION",
+          "match": "NONE"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "cash_movements_shift_id",
+          "unique": false,
+          "partial": false,
+          "columns": [
+            "shift_id"
+          ],
+          "sql": "CREATE INDEX cash_movements_shift_id ON cash_movements(shift_id)"
+        }
+      ],
+      "unique_constraints": []
+    },
+    "counters": {
+      "sql": "CREATE TABLE counters (name TEXT PRIMARY KEY, value INTEGER NOT NULL)",
+      "columns": [
+        {
+          "name": "name",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 1
+        },
+        {
+          "name": "value",
+          "type": "INTEGER",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        }
+      ],
+      "foreign_keys": [],
+      "indexes": [],
+      "unique_constraints": []
+    },
+    "devices": {
+      "sql": "CREATE TABLE devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, platform TEXT NOT NULL, license_key TEXT, last_sync_at TEXT)",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 1
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "platform",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "license_key",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "last_sync_at",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        }
+      ],
+      "foreign_keys": [],
+      "indexes": [],
+      "unique_constraints": []
+    },
+    "finance_categories": {
+      "sql": "CREATE TABLE finance_categories (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT)",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 1
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "updated_at",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "deleted_at",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        }
+      ],
+      "foreign_keys": [],
+      "indexes": [],
+      "unique_constraints": []
+    },
+    "finance_entries": {
+      "sql": "CREATE TABLE finance_entries (id TEXT PRIMARY KEY, category_id TEXT NOT NULL, source TEXT NOT NULL, amount_minor_units INTEGER NOT NULL, description TEXT, status TEXT NOT NULL DEFAULT 'PENDING', entry_date TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL, completed_at TEXT, completed_by TEXT, updated_at TEXT NOT NULL, payment_method TEXT, FOREIGN KEY(category_id) REFERENCES finance_categories(id), FOREIGN KEY(created_by) REFERENCES users(id), FOREIGN KEY(completed_by) REFERENCES users(id))",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 1
+        },
+        {
+          "name": "category_id",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "source",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "amount_minor_units",
+          "type": "INTEGER",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "description",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": "'PENDING'",
+          "primary_key": 0
+        },
+        {
+          "name": "entry_date",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "created_by",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "completed_at",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "completed_by",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "updated_at",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "payment_method",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        }
+      ],
+      "foreign_keys": [
+        {
+          "id": 0,
+          "seq": 0,
+          "table": "users",
+          "from": "completed_by",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "NO ACTION",
+          "match": "NONE"
+        },
+        {
+          "id": 1,
+          "seq": 0,
+          "table": "users",
+          "from": "created_by",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "NO ACTION",
+          "match": "NONE"
+        },
+        {
+          "id": 2,
+          "seq": 0,
+          "table": "finance_categories",
+          "from": "category_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "NO ACTION",
+          "match": "NONE"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "finance_entries_category_id",
+          "unique": false,
+          "partial": false,
+          "columns": [
+            "category_id"
+          ],
+          "sql": "CREATE INDEX finance_entries_category_id ON finance_entries(category_id)"
+        },
+        {
+          "name": "finance_entries_entry_date",
+          "unique": false,
+          "partial": false,
+          "columns": [
+            "entry_date"
+          ],
+          "sql": "CREATE INDEX finance_entries_entry_date ON finance_entries(entry_date)"
+        },
+        {
+          "name": "finance_entries_status",
+          "unique": false,
+          "partial": false,
+          "columns": [
+            "status"
+          ],
+          "sql": "CREATE INDEX finance_entries_status ON finance_entries(status)"
+        }
+      ],
+      "unique_constraints": []
+    },
+    "products": {
+      "sql": "CREATE TABLE products (id TEXT PRIMARY KEY, name TEXT NOT NULL, code TEXT UNIQUE NOT NULL, category TEXT, unit TEXT NOT NULL, selling_price_minor_units INTEGER NOT NULL, is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 1
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "code",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "category",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "unit",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "selling_price_minor_units",
+          "type": "INTEGER",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "is_active",
+          "type": "INTEGER",
+          "not_null": 1,
+          "default": "1",
+          "primary_key": 0
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "updated_at",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        }
+      ],
+      "foreign_keys": [],
+      "indexes": [],
+      "unique_constraints": [
+        [
+          "code"
+        ]
+      ]
+    },
+    "sale_items": {
+      "sql": "CREATE TABLE sale_items (id TEXT PRIMARY KEY, sale_id TEXT NOT NULL, product_id TEXT NOT NULL, product_name_snapshot TEXT NOT NULL, unit_price_snapshot_minor_units INTEGER NOT NULL, quantity_text TEXT NOT NULL, billing_quantity_milliunits INTEGER, line_discount_minor_units INTEGER NOT NULL DEFAULT 0, line_total_minor_units INTEGER NOT NULL, notes TEXT, FOREIGN KEY(sale_id) REFERENCES sales(id) ON DELETE CASCADE)",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 1
+        },
+        {
+          "name": "sale_id",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "product_id",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "product_name_snapshot",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "unit_price_snapshot_minor_units",
+          "type": "INTEGER",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "quantity_text",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "billing_quantity_milliunits",
+          "type": "INTEGER",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "line_discount_minor_units",
+          "type": "INTEGER",
+          "not_null": 1,
+          "default": "0",
+          "primary_key": 0
+        },
+        {
+          "name": "line_total_minor_units",
+          "type": "INTEGER",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "notes",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        }
+      ],
+      "foreign_keys": [
+        {
+          "id": 0,
+          "seq": 0,
+          "table": "sales",
+          "from": "sale_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "CASCADE",
+          "match": "NONE"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "sale_items_sale_id",
+          "unique": false,
+          "partial": false,
+          "columns": [
+            "sale_id"
+          ],
+          "sql": "CREATE INDEX sale_items_sale_id ON sale_items(sale_id)"
+        }
+      ],
+      "unique_constraints": []
+    },
+    "sales": {
+      "sql": "CREATE TABLE sales (id TEXT PRIMARY KEY, receipt_number TEXT UNIQUE NOT NULL, cashier_id TEXT NOT NULL, device_id TEXT NOT NULL, shift_id TEXT NOT NULL, customer_name TEXT, payment_method TEXT NOT NULL DEFAULT 'CASH', subtotal_minor_units INTEGER NOT NULL, discount_minor_units INTEGER NOT NULL, total_minor_units INTEGER NOT NULL, amount_paid_minor_units INTEGER NOT NULL, change_minor_units INTEGER NOT NULL, status TEXT NOT NULL, void_reason TEXT, voided_at TEXT, voided_by TEXT, voided_shift_id TEXT, created_at TEXT NOT NULL, synced_at TEXT, FOREIGN KEY(cashier_id) REFERENCES users(id), FOREIGN KEY(device_id) REFERENCES devices(id), FOREIGN KEY(shift_id) REFERENCES shifts(id))",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 1
+        },
+        {
+          "name": "receipt_number",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "cashier_id",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "device_id",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "shift_id",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "customer_name",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "payment_method",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": "'CASH'",
+          "primary_key": 0
+        },
+        {
+          "name": "subtotal_minor_units",
+          "type": "INTEGER",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "discount_minor_units",
+          "type": "INTEGER",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "total_minor_units",
+          "type": "INTEGER",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "amount_paid_minor_units",
+          "type": "INTEGER",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "change_minor_units",
+          "type": "INTEGER",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "void_reason",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "voided_at",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "voided_by",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "voided_shift_id",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "synced_at",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        }
+      ],
+      "foreign_keys": [
+        {
+          "id": 0,
+          "seq": 0,
+          "table": "shifts",
+          "from": "shift_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "NO ACTION",
+          "match": "NONE"
+        },
+        {
+          "id": 1,
+          "seq": 0,
+          "table": "devices",
+          "from": "device_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "NO ACTION",
+          "match": "NONE"
+        },
+        {
+          "id": 2,
+          "seq": 0,
+          "table": "users",
+          "from": "cashier_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "NO ACTION",
+          "match": "NONE"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "sales_created_at",
+          "unique": false,
+          "partial": false,
+          "columns": [
+            "created_at"
+          ],
+          "sql": "CREATE INDEX sales_created_at ON sales(created_at)"
+        },
+        {
+          "name": "sales_shift_id",
+          "unique": false,
+          "partial": false,
+          "columns": [
+            "shift_id"
+          ],
+          "sql": "CREATE INDEX sales_shift_id ON sales(shift_id)"
+        }
+      ],
+      "unique_constraints": [
+        [
+          "receipt_number"
+        ]
+      ]
+    },
+    "settings": {
+      "sql": "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+      "columns": [
+        {
+          "name": "key",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 1
+        },
+        {
+          "name": "value",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        }
+      ],
+      "foreign_keys": [],
+      "indexes": [],
+      "unique_constraints": []
+    },
+    "shifts": {
+      "sql": "CREATE TABLE shifts (id TEXT PRIMARY KEY, cashier_id TEXT NOT NULL, opening_cash_minor_units INTEGER NOT NULL, closing_cash_minor_units INTEGER, expected_cash_minor_units INTEGER, status TEXT NOT NULL, opened_at TEXT NOT NULL, closed_at TEXT)",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 1
+        },
+        {
+          "name": "cashier_id",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "opening_cash_minor_units",
+          "type": "INTEGER",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "closing_cash_minor_units",
+          "type": "INTEGER",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "expected_cash_minor_units",
+          "type": "INTEGER",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "opened_at",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "closed_at",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        }
+      ],
+      "foreign_keys": [],
+      "indexes": [
+        {
+          "name": "one_open_shift",
+          "unique": true,
+          "partial": true,
+          "columns": [
+            "status"
+          ],
+          "sql": "CREATE UNIQUE INDEX one_open_shift ON shifts(status) WHERE status = 'OPEN'"
+        }
+      ],
+      "unique_constraints": []
+    },
+    "sync_outbox": {
+      "sql": "CREATE TABLE sync_outbox (id TEXT PRIMARY KEY, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, operation TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL, synced_at TEXT)",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 1
+        },
+        {
+          "name": "entity_type",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "entity_id",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "operation",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "payload",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "synced_at",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        }
+      ],
+      "foreign_keys": [],
+      "indexes": [
+        {
+          "name": "sync_outbox_pending",
+          "unique": false,
+          "partial": false,
+          "columns": [
+            "synced_at"
+          ],
+          "sql": "CREATE INDEX sync_outbox_pending ON sync_outbox(synced_at)"
+        }
+      ],
+      "unique_constraints": []
+    },
+    "users": {
+      "sql": "CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, salt TEXT NOT NULL, role TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 1, permissions TEXT NOT NULL DEFAULT '[]', is_demo INTEGER NOT NULL DEFAULT 0, deleted_at TEXT, created_at TEXT NOT NULL)",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 1
+        },
+        {
+          "name": "username",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "password_hash",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "salt",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "role",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "is_active",
+          "type": "INTEGER",
+          "not_null": 1,
+          "default": "1",
+          "primary_key": 0
+        },
+        {
+          "name": "permissions",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": "'[]'",
+          "primary_key": 0
+        },
+        {
+          "name": "is_demo",
+          "type": "INTEGER",
+          "not_null": 1,
+          "default": "0",
+          "primary_key": 0
+        },
+        {
+          "name": "deleted_at",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        }
+      ],
+      "foreign_keys": [],
+      "indexes": [],
+      "unique_constraints": [
+        [
+          "username"
+        ]
+      ]
+    },
+    "void_requests": {
+      "sql": "CREATE TABLE void_requests (id TEXT PRIMARY KEY, sale_id TEXT NOT NULL, requested_by TEXT NOT NULL, reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', created_at TEXT NOT NULL, decided_by TEXT, decided_at TEXT, FOREIGN KEY(sale_id) REFERENCES sales(id), FOREIGN KEY(requested_by) REFERENCES users(id), FOREIGN KEY(decided_by) REFERENCES users(id))",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 1
+        },
+        {
+          "name": "sale_id",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "requested_by",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "reason",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": "'PENDING'",
+          "primary_key": 0
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "decided_by",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "decided_at",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        }
+      ],
+      "foreign_keys": [
+        {
+          "id": 0,
+          "seq": 0,
+          "table": "users",
+          "from": "decided_by",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "NO ACTION",
+          "match": "NONE"
+        },
+        {
+          "id": 1,
+          "seq": 0,
+          "table": "users",
+          "from": "requested_by",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "NO ACTION",
+          "match": "NONE"
+        },
+        {
+          "id": 2,
+          "seq": 0,
+          "table": "sales",
+          "from": "sale_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "NO ACTION",
+          "match": "NONE"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "void_requests_sale_id",
+          "unique": false,
+          "partial": false,
+          "columns": [
+            "sale_id"
+          ],
+          "sql": "CREATE INDEX void_requests_sale_id ON void_requests(sale_id)"
+        },
+        {
+          "name": "void_requests_status",
+          "unique": false,
+          "partial": false,
+          "columns": [
+            "status"
+          ],
+          "sql": "CREATE INDEX void_requests_status ON void_requests(status)"
+        }
+      ],
+      "unique_constraints": []
+    }
+  },
+  "triggers": {
+    "prevent_second_open_shift_insert": "CREATE TRIGGER prevent_second_open_shift_insert BEFORE INSERT ON shifts WHEN NEW.status = 'OPEN' AND EXISTS (SELECT 1 FROM shifts WHERE status = 'OPEN') BEGIN SELECT RAISE(ABORT, 'A shift is already open'); END",
+    "prevent_second_open_shift_update": "CREATE TRIGGER prevent_second_open_shift_update BEFORE UPDATE OF status ON shifts WHEN NEW.status = 'OPEN' AND EXISTS (SELECT 1 FROM shifts WHERE status = 'OPEN' AND id != NEW.id) BEGIN SELECT RAISE(ABORT, 'A shift is already open'); END"
+  }
+}

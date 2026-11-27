@@ -30,7 +30,7 @@ The system is classified as **CONDITIONALLY COMMERCIAL READY**. Two precondition
 **Change:** 12 → 19 tests (+7)
 
 | New Group | Tests Added | Purpose |
-|-----------|-------------|---------|
+| ----------- | ------------- | --------- |
 | `frontend boundaries` | 3 | Verify raw Database handles in feature widgets; guard platform-specific engine imports from navigation layer; confirm nav tabs match shell routes |
 | `native/web symmetry` | 2 | Ensure every AppBackend getter has concrete providers in both backends; isolate cloud backend from native/engine imports |
 | `backend parity` | 2 | Confirm identical repository count across `NativeBackend` and `CloudBackend`; verify every domain repo maps to both local and cloud implementations |
@@ -42,7 +42,7 @@ The system is classified as **CONDITIONALLY COMMERCIAL READY**. Two precondition
 #### Architecture Reports (3)
 
 | Document | Path | Key Content |
-|----------|------|-------------|
+| ---------- | ------ | ------------- |
 | Final Integrity Audit | `docs/architecture/final-integrity-audit.md` | Schema v22 audit, 18-table ownership matrix, 38 transaction sites inventory, F-1–F-13 known behaviors verified against current state, commercial readiness acceptance criteria table |
 | Synchronization Integrity Report | `docs/architecture/synchronization-integrity-report.md` | Push behavior (37 outbox enqueue call sites across 6 repos + 3 internal), pull behavior (dependency-ordered page application, cursor storage), offline behavior, cross-device behavior, L-1–L-4 limitations |
 | Commercial Readiness Report | `docs/architecture/commercial-readiness-report.md` | 9 quality gates evaluated (Architecture ✓, Database Safety ✓, Auth & Authz ✓, Licensing ✓, Sync ✓, Security ✓, Test Coverage ✓, Build ✓, Documentation ✓), overall verdict CONDITIONALLY COMMERCIAL READY, deployment risk table with likelihood/impact/mitigation |
@@ -50,7 +50,7 @@ The system is classified as **CONDITIONALLY COMMERCIAL READY**. Two precondition
 #### User Guides (6)
 
 | Document | Audience | Scope |
-|----------|----------|-------|
+| ---------- | ---------- | ------- |
 | `user-guide/README.md` | — | Index with links to all guides |
 | `user-guide/getting-started.md` | Everyone | Install, activate license, create owner account, add cashiers, configure sync, import data |
 | `user-guide/owner-guide.md` | Shop owners | Users/permissions matrix, reports, sync config, licensing/device management, backup/restore |
@@ -62,7 +62,7 @@ The system is classified as **CONDITIONALLY COMMERCIAL READY**. Two precondition
 #### API Reference (6)
 
 | Document | Path | Scope |
-|----------|------|-------|
+| ---------- | ------ | ------- |
 | `api/README.md` | `docs/api/README.md` | Base URL, request/response shape, auth header, rate limits |
 | `api/authentication.md` | `docs/api/authentication.md` | `login`, `setup_owner`, `has_users`, token revocation, password policy, phone canonicalization |
 | `api/pos-api.md` | `docs/api/pos-api.md` | Full action inventory: 61 actions across 9 modules with HTTP methods and auth requirements |
@@ -73,7 +73,7 @@ The system is classified as **CONDITIONALLY COMMERCIAL READY**. Two precondition
 ### 3. Existing Documentation Updated
 
 | Document | Changes Made |
-|----------|--------------|
+| ---------- | -------------- |
 | `final-architecture-overview.md` | Version bumped to Stage 10 completion; Section 9 added documenting the documentation ecosystem with Mermaid diagram and full artifact index |
 | `verification-history.md` | Version bumped to Stage 10; "Stage 10 Specific Verifications" section added with exact test counts, new test groups table, documentation artifact inventory; summary updated with 10-item verification checklist |
 | `architecture-rules.md` | Verification checklist expanded to include `flutter test test/architecture_test.dart` (19 tests), updated api-action-inventory reference from 60 to 61 actions |
@@ -81,6 +81,7 @@ The system is classified as **CONDITIONALLY COMMERCIAL READY**. Two precondition
 ### 4. Source Protection Compliance
 
 Per the STRICT SOURCE PROTECTION constraint, **zero production code was modified**:
+
 - No changes to `frontend/lib/core/` business logic
 - No changes to `supabase/functions/` TypeScript handlers
 - No changes to SQL migrations or schema definitions
@@ -92,7 +93,7 @@ Per the STRICT SOURCE PROTECTION constraint, **zero production code was modified
 ## Verification Evidence
 
 | Check | Command / Method | Result |
-|-------|-----------------|--------|
+| ------- | ----------------- | -------- |
 | Flutter unit tests | `flutter test` | 684 passed, 1 skipped |
 | Architecture tests | `flutter test test/architecture_test.dart` | 19 passed |
 | Static analysis | `flutter analyze test/architecture_test.dart` | No issues found |
@@ -108,7 +109,7 @@ Per the STRICT SOURCE PROTECTION constraint, **zero production code was modified
 ## Commercial Readiness Verdict
 
 | Gate | Status | Notes |
-|------|--------|-------|
+| ------ | -------- | ------- |
 | Architecture layers | ✅ PASS | Four-package Dart architecture, two-entry-point shell, AppBackend seam all enforced |
 | Database safety | ✅ PASS | Schema v22 stable; backups before migration; FK integrity preserved |
 | Auth & authorization | ✅ PASS | JWT with HMAC-SHA256, PBKDF2-HMAC-SHA256 passwords, feature-gate authorization, tenant isolation |
@@ -119,7 +120,7 @@ Per the STRICT SOURCE PROTECTION constraint, **zero production code was modified
 | Build | ✅ PASS | Web and Windows builds succeed; deno check clean |
 | Documentation | ✅ PASS | 16 new documents created; 3 existing documents updated with Stage 10 evidence |
 
-**Overall verdict: CONDITIONALLY COMMERCIAL READY**
+### Overall verdict: CONDITIONALLY COMMERCIAL READY
 
 ### Conditions Before Release
 
@@ -131,7 +132,7 @@ Per the STRICT SOURCE PROTECTION constraint, **zero production code was modified
 
 ## Documentation Map
 
-```
+```text
 docs/
 ├── architecture/
 │   ├── final-architecture-overview.md      ← Updated (Stage 10)
@@ -176,7 +177,7 @@ The following categories were left untouched per STRICT SOURCE PROTECTION:
 
 ## Final State
 
-```
+```text
 684 unit tests     ✅ passing (stable since Stage 7)
   19 architecture  ✅ passing (extended from 12 in Stage 10)
     0 analyze      ✅ warnings/errors on the test file

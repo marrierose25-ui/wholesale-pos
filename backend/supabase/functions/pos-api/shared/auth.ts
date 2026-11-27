@@ -1,9 +1,27 @@
 import type { Ctx } from "./types.ts";
 import { audit, json, str, userStamp } from "./helpers.ts";
 import { JWT_SECRET } from "./env.ts";
+import { verifyStandaloneDeviceLicense } from "./license_proof.ts";
 
 const PBKDF2_ITERATIONS = 210000;
 const SESSION_TTL_SECONDS = 3650 * 24 * 3600; // ~10 years; matches SessionStore.defaultLifetime
+
+// Verification accepts only these cost factors. A malformed or hostile stored
+// value can no longer force an unbounded PBKDF2 run (CPU denial of service) or
+// silently downgrade below the 10k floor. Legacy 210k hashes keep working.
+const PBKDF2_SUPPORTED_ITERATIONS = new Set([10000, 210000, 300000]);
+
+// Request/credential input bounds. These cap the work a single public request
+// can ask for before any hashing or database lookup.
+const MAX_PASSWORD_LENGTH = 256;
+const MAX_USERNAME_LENGTH = 64;
+const MAX_ACTIVATION_CODE_LENGTH = 128;
+const MAX_LICENSE_LENGTH = 8192;
+
+// Actor grants are delegated, device-bound credentials for the sync gateway.
+// 30 days balances a shop till that may be offline for weeks against the value
+// of an eventually stale token; the DB also invalidates on token_version.
+const ACTOR_GRANT_TTL_SECONDS = 30 * 24 * 3600;
 
 const OWNER = "OWNER";
 const CASHIER = "CASHIER";
@@ -33,6 +51,8 @@ const OWNER_ONLY = new Set([
   "set_user_permissions",
   "set_user_phone",
   "delete_user",
+  "list_devices",
+  "deactivate_device",
 ]);
 
 const ACTION_FEATURES: Record<string, string[]> = {
@@ -85,35 +105,160 @@ const ACTION_FEATURES: Record<string, string[]> = {
   list_cash_movements: ["register_history"],
 };
 
-// --- Best-effort login throttle (audit #14) --------------------------------
+// --- Durable login throttle (audit #14, Request 2) -------------------------
+// The old limiter was an in-memory Map: every cold start (and every extra
+// function instance) reset it, so it never actually bounded a distributed
+// attacker. Limits now live in `rate_limit_buckets` behind the atomic
+// `rate_limit_hit` / `rate_limit_reset` RPCs — they survive restarts,
+// concurrent hits cannot bypass them, and bucket keys are HMAC-SHA256
+// digests so no raw username, activation code, or IP is stored.
 const LOGIN_MAX_ATTEMPTS = 10;
-const LOGIN_WINDOW_MS = 60_000;
-const LOGIN_LOCKOUT_MS = 300_000;
-type LoginBucket = { fails: number; first: number; lockedUntil: number };
-const loginAttempts = new Map<string, LoginBucket>();
-function loginThrottleKey(customerId: string, username: string): string {
-  return `${customerId}|${username.toLowerCase()}`;
-}
-function loginBlocked(key: string): number {
-  const b = loginAttempts.get(key);
-  if (!b) return 0;
-  const now = Date.now();
-  if (b.lockedUntil > now) return b.lockedUntil - now;
-  if (now - b.first > LOGIN_WINDOW_MS) loginAttempts.delete(key);
-  return 0;
-}
-function loginRecordFail(key: string) {
-  const now = Date.now();
-  const b = loginAttempts.get(key);
-  if (!b || now - b.first > LOGIN_WINDOW_MS) {
-    loginAttempts.set(key, { fails: 1, first: now, lockedUntil: 0 });
-    return;
+const LOGIN_WINDOW_SECONDS = 60;
+// Public-endpoint probing bound: every unauthenticated action is also
+// throttled per activation code BEFORE the license lookup, so enumerating
+// valid codes is bounded even when the code itself is wrong.
+const PROBE_LIMIT = 60;
+const PROBE_WINDOW_SECONDS = 60;
+const SETUP_LIMIT = 5;
+const SETUP_WINDOW_SECONDS = 300;
+// Source-hint bound for the UNAUTHENTICATED actions (login, setup_owner,
+// has_users). The per-code probe limit cannot stop an attacker rotating
+// through many activation codes or usernames from one address; this bucket
+// adds a bound keyed on a best-effort XFF hint (see
+// bestEffortSourceAddress — the hosted ingress contract is unverified, so
+// this is NOT a trusted identity and a header-forging client can rotate
+// buckets). The global bucket is the actual backstop and applies whether or
+// not a usable hint exists.
+const PUBLIC_SOURCE_LIMIT = 240;
+const PUBLIC_GLOBAL_LIMIT = 5000;
+const PUBLIC_WINDOW_SECONDS = 60;
+
+// The global bucket is sharded so every unauthenticated request in the fleet
+// does not contend on one `rate_limit_buckets` row. The total ceiling is still
+// PUBLIC_GLOBAL_LIMIT per window; each shard carries an equal share. Residual:
+// a caller that rotates its source hint spreads across shards, so this bounds
+// a single shard rather than the whole fleet in one counter. The per-source
+// and per-code limits remain the tighter, identity-keyed bounds.
+const PUBLIC_GLOBAL_SHARDS = 8;
+const PUBLIC_GLOBAL_LIMIT_PER_SHARD = Math.ceil(
+  PUBLIC_GLOBAL_LIMIT / PUBLIC_GLOBAL_SHARDS,
+);
+
+/// Stable, non-cryptographic shard pick. Only distributes load; it is not an
+/// identity or a security boundary.
+function shardOf(value: string, shards: number): number {
+  let h = 0;
+  for (let i = 0; i < value.length; i++) {
+    h = (h * 31 + value.charCodeAt(i)) >>> 0;
   }
-  b.fails += 1;
-  if (b.fails >= LOGIN_MAX_ATTEMPTS) b.lockedUntil = now + LOGIN_LOCKOUT_MS;
+  return h % shards;
 }
-function loginClear(key: string) {
-  loginAttempts.delete(key);
+
+async function rateLimitKey(scope: string, subject: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(JWT_SECRET),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(`${scope}|${subject}`),
+  );
+  return Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function rateLimitAllow(
+  db: any,
+  scope: string,
+  subject: string,
+  limit: number,
+  windowSeconds: number,
+  charge: boolean,
+): Promise<{ allowed: boolean; retryAfter: number }> {
+  const { data, error } = await db.rpc("rate_limit_hit", {
+    p_key: await rateLimitKey(scope, subject),
+    p_limit: limit,
+    p_window_seconds: windowSeconds,
+    p_charge: charge,
+  });
+  if (error) throw new Error(error.message);
+  const r = (data ?? {}) as Record<string, unknown>;
+  return {
+    allowed: r.allowed !== false,
+    retryAfter: Number(r.retry_after_seconds ?? windowSeconds),
+  };
+}
+
+async function rateLimitClear(db: any, scope: string, subject: string) {
+  try {
+    await db.rpc("rate_limit_reset", {
+      p_key: await rateLimitKey(scope, subject),
+    });
+  } catch { /* a stale bucket is harmless */ }
+}
+
+function tooManyAttempts(retryAfter: number): Response {
+  return json({
+    ok: false,
+    error: `Too many attempts. Retry in ${retryAfter}s.`,
+    retry_after_seconds: retryAfter,
+  }, 429);
+}
+
+// Durable per-source-hint + global throttle applied to every
+// unauthenticated action BEFORE dispatch. Charged on each call; the
+// per-code probe limits inside the handlers still apply on top. The source
+// bucket is best-effort (unverified XFF hint) — the global bucket is the
+// guarantee.
+async function publicSourceAllowed(
+  db: any,
+  source: string | null,
+): Promise<Response | null> {
+  const src = await rateLimitAllow(
+    db,
+    "posapi:pubsrc",
+    source ?? "unknown",
+    PUBLIC_SOURCE_LIMIT,
+    PUBLIC_WINDOW_SECONDS,
+    true,
+  );
+  if (!src.allowed) return tooManyAttempts(src.retryAfter);
+  const shard = shardOf(source ?? "unknown", PUBLIC_GLOBAL_SHARDS);
+  const glob = await rateLimitAllow(
+    db,
+    `posapi:pubany:${shard}`,
+    "*",
+    PUBLIC_GLOBAL_LIMIT_PER_SHARD,
+    PUBLIC_WINDOW_SECONDS,
+    true,
+  );
+  if (!glob.allowed) return tooManyAttempts(glob.retryAfter);
+  return null;
+}
+
+// Probe bound applied BEFORE the license lookup on every unauthenticated
+// action: bounds activation-code enumeration regardless of whether the code
+// resolves. Every call is charged — these endpoints are rare in legitimate
+// use, so the per-code ceiling is the enumeration bound.
+async function probeAllowed(
+  db: any,
+  scope: string,
+  activationCode: string,
+): Promise<Response | null> {
+  const chk = await rateLimitAllow(
+    db,
+    scope,
+    activationCode,
+    PROBE_LIMIT,
+    PROBE_WINDOW_SECONDS,
+    true,
+  );
+  return chk.allowed ? null : tooManyAttempts(chk.retryAfter);
 }
 
 // --- Phone-number identity ---------------------------------------------------
@@ -178,13 +323,34 @@ async function verifyPassword(
   salt: string,
   stored: string,
 ): Promise<boolean> {
-  const [iterStr, b64Hash] = stored.split("$");
-  const iterations = Number(iterStr);
-  if (!Number.isFinite(iterations) || iterations < 1000 || !b64Hash) {
+  // Bound the input before doing any work. A multi-megabyte password would
+  // otherwise be fed straight into PBKDF2.
+  if (typeof password !== "string" || password.length > MAX_PASSWORD_LENGTH) {
     return false;
   }
-  const derived = await derive(password, unB64(salt), iterations);
-  return timingSafeEqualStr(b64(derived), b64Hash);
+  if (typeof salt !== "string" || typeof stored !== "string") return false;
+  // Exact legacy format: `<iterations>$<base64-hash>`. Anything else is a
+  // malformed credential, not a reason to guess an iteration count.
+  const match = /^(\d{1,7})\$([A-Za-z0-9+/]+={0,2})$/.exec(stored);
+  if (!match) return false;
+  const iterations = Number(match[1]);
+  if (!PBKDF2_SUPPORTED_ITERATIONS.has(iterations)) return false;
+  const expected = match[2];
+  if (expected.length > 128) return false;
+  let saltBytes: Uint8Array;
+  try {
+    saltBytes = unB64(salt);
+  } catch {
+    return false;
+  }
+  if (saltBytes.length === 0 || saltBytes.length > 64) return false;
+  let derived: Uint8Array;
+  try {
+    derived = await derive(password, saltBytes, iterations);
+  } catch {
+    return false;
+  }
+  return timingSafeEqualStr(b64(derived), expected);
 }
 
 async function derive(
@@ -423,6 +589,11 @@ async function ensureDemoUser(
 // --- Has users check (unauthenticated) ---------------------------------------
 async function hasUsers(db: any, body: any): Promise<Response> {
   const code = str(body.activation_code);
+  if (code.length > MAX_ACTIVATION_CODE_LENGTH) {
+    return json({ ok: false, error: "Invalid activation code." }, 400);
+  }
+  const blocked = await probeAllowed(db, "posapi:hasusers", code);
+  if (blocked) return blocked;
   const lic = await licenseForActivationCode(db, code);
   if (!lic.ok) return json({ ok: false, error: lic.error }, 403);
   const customerId = lic.customerId;
@@ -440,18 +611,29 @@ async function login(db: any, body: any): Promise<Response> {
   if (!code || !username || !password) {
     return json({ ok: false, error: "Missing fields" }, 400);
   }
+  if (
+    code.length > MAX_ACTIVATION_CODE_LENGTH ||
+    username.length > MAX_USERNAME_LENGTH ||
+    password.length > MAX_PASSWORD_LENGTH
+  ) {
+    return json({ ok: false, error: "Invalid credentials." }, 400);
+  }
+  const blocked = await probeAllowed(db, "posapi:login", code);
+  if (blocked) return blocked;
   const lic = await licenseForActivationCode(db, code);
   if (!lic.ok) return json({ ok: false, error: lic.error }, 403);
   const customerId = lic.customerId;
 
-  const tkey = loginThrottleKey(customerId, username);
-  const retryAfter = loginBlocked(tkey);
-  if (retryAfter > 0) {
-    return json({
-      ok: false,
-      error: `Too many attempts. Retry in ${Math.ceil(retryAfter / 1000)}s.`,
-    }, 429);
-  }
+  const tkey = `${customerId}|${username.toLowerCase()}`;
+  const pre = await rateLimitAllow(
+    db,
+    "posapi:loginfail",
+    tkey,
+    LOGIN_MAX_ATTEMPTS,
+    LOGIN_WINDOW_SECONDS,
+    false,
+  );
+  if (!pre.allowed) return tooManyAttempts(pre.retryAfter);
 
   const needle = username.toLowerCase().replace(/[%_]/g, "");
   const { data: user } = await db.from("pos_users")
@@ -463,16 +645,30 @@ async function login(db: any, body: any): Promise<Response> {
       "AAAAAAAAAAAAAAAAAAAAAA==",
       "210000$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
     );
-    loginRecordFail(tkey);
+    await rateLimitAllow(
+      db,
+      "posapi:loginfail",
+      tkey,
+      LOGIN_MAX_ATTEMPTS,
+      LOGIN_WINDOW_SECONDS,
+      true,
+    );
     return json({ ok: false, error: "Invalid credentials." }, 401);
   }
 
   const ok = await verifyPassword(password, user.pw_salt, user.pw_hash);
   if (!ok) {
-    loginRecordFail(tkey);
+    await rateLimitAllow(
+      db,
+      "posapi:loginfail",
+      tkey,
+      LOGIN_MAX_ATTEMPTS,
+      LOGIN_WINDOW_SECONDS,
+      true,
+    );
     return json({ ok: false, error: "Invalid credentials." }, 401);
   }
-  loginClear(tkey);
+  await rateLimitClear(db, "posapi:loginfail", tkey);
 
   let demoPassword: string | null = null;
   try {
@@ -500,29 +696,295 @@ async function login(db: any, body: any): Promise<Response> {
   });
 }
 
+// --- Actor grants (delegated sync credentials) ------------------------------
+// A device licence proves the DEVICE, never the person. The sync gateway
+// therefore refuses to attribute a staged sale/cash/finance row to a payload
+// `cashier_id`/`created_by`. Instead the native client signs in with a
+// password and asks for an opaque grant bound to (tenant, user, device); only
+// its SHA-256 digest is stored. This action is the sole mint.
+async function issueActorGrant(db: any, body: any): Promise<Response> {
+  const license = String(body.license ?? "");
+  const username = loginIdentifier(str(body.username));
+  const password = String(body.password ?? "");
+  if (!license || !username || !password) {
+    return json({ ok: false, error: "Missing fields" }, 400);
+  }
+  if (
+    license.length > MAX_LICENSE_LENGTH ||
+    username.length > MAX_USERNAME_LENGTH ||
+    password.length > MAX_PASSWORD_LENGTH
+  ) {
+    return json({ ok: false, error: "Invalid credentials." }, 400);
+  }
+
+  // The signed licence is verified end-to-end (signature, expiry, licence row,
+  // active seat). A copied licence is a bearer document, but the PASSWORD is
+  // still required below, so a stolen file alone cannot mint an actor grant.
+  let proof;
+  try {
+    proof = await verifyStandaloneDeviceLicense(db, license);
+  } catch (err) {
+    console.error("grant licence verification error:", err);
+    return json({ ok: false, error: "Internal error." }, 500);
+  }
+  if (!proof.ok) return json({ ok: false, error: proof.error }, proof.status);
+  const customerId = proof.customerId;
+
+  const blocked = await probeAllowed(db, "posapi:grant", proof.activationCode);
+  if (blocked) return blocked;
+
+  const tkey =
+    `${customerId}|${proof.deviceFingerprint}|${username.toLowerCase()}`;
+  const pre = await rateLimitAllow(
+    db,
+    "posapi:grantfail",
+    tkey,
+    LOGIN_MAX_ATTEMPTS,
+    LOGIN_WINDOW_SECONDS,
+    false,
+  );
+  if (!pre.allowed) return tooManyAttempts(pre.retryAfter);
+
+  const needle = username.toLowerCase().replace(/[%_]/g, "");
+  const { data: user } = await db.from("pos_users")
+    .select("*").eq("customer_id", customerId).ilike("username", needle)
+    .eq("active", true).is("deleted_at", null).maybeSingle();
+  if (!user) {
+    // Same constant-work dummy verify as login: a missing account and a wrong
+    // password must not be distinguishable by timing.
+    await verifyPassword(
+      password,
+      "AAAAAAAAAAAAAAAAAAAAAA==",
+      "210000$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    );
+    await rateLimitAllow(
+      db,
+      "posapi:grantfail",
+      tkey,
+      LOGIN_MAX_ATTEMPTS,
+      LOGIN_WINDOW_SECONDS,
+      true,
+    );
+    return json({ ok: false, error: "Invalid credentials." }, 401);
+  }
+
+  const ok = await verifyPassword(password, user.pw_salt, user.pw_hash);
+  if (!ok) {
+    await rateLimitAllow(
+      db,
+      "posapi:grantfail",
+      tkey,
+      LOGIN_MAX_ATTEMPTS,
+      LOGIN_WINDOW_SECONDS,
+      true,
+    );
+    return json({ ok: false, error: "Invalid credentials." }, 401);
+  }
+  await rateLimitClear(db, "posapi:grantfail", tkey);
+
+  const rpc = await db.rpc("pos_issue_actor_grant", {
+    p_customer: customerId,
+    p_user: user.id,
+    p_device_fingerprint: proof.deviceFingerprint,
+    p_ttl_seconds: ACTOR_GRANT_TTL_SECONDS,
+  });
+  if (rpc.error) throw new Error(rpc.error.message);
+  const data = (rpc.data ?? {}) as Record<string, unknown>;
+  if (!data.grant) throw new Error("Grant was not issued.");
+  await audit(
+    db,
+    customerId,
+    user.id,
+    "ACTOR_GRANT_ISSUED",
+    `Sync actor grant issued for device ${
+      proof.deviceFingerprint.slice(0, 8)
+    }…`,
+  );
+  return json({
+    ok: true,
+    grant: data.grant,
+    expires_at: data.expires_at,
+    user_id: user.id,
+    role: user.role,
+    customer_id: customerId,
+  });
+}
+
+/// Best-effort grant revocation. Token-version bumps already invalidate grants
+/// for credential/status changes; this reclaims the rows and covers device
+/// deactivation, which does not change token_version.
+async function revokeActorGrants(
+  db: any,
+  customerId: string,
+  userId: string | null,
+  deviceFingerprint: string | null,
+): Promise<void> {
+  try {
+    const { error } = await db.rpc("pos_revoke_actor_grants", {
+      p_customer: customerId,
+      p_user: userId,
+      p_device_fingerprint: deviceFingerprint,
+    });
+    if (error) console.error("actor grant revoke failed:", error.message);
+  } catch (err) {
+    console.error("actor grant revoke threw:", err);
+  }
+}
+
 // --- Owner bootstrap (unauthenticated) ---------------------------------------
 async function setupOwner(db: any, body: any): Promise<Response> {
   const code = str(body.activation_code);
   const rawName = str(body.username);
   const password = String(body.password ?? "");
-  if (!code || !rawName || !password) {
+  // A native till bootstraps its first owner OFFLINE and reconciles later: it
+  // already minted a local user id and a cloud-format credential, so it sends
+  // `user_id` + `pw_salt`/`pw_hash` instead of a plaintext password. The id
+  // keeps local SQLite and cloud identity identical; `pos_setup_owner` is
+  // idempotent for the same id and refuses a second owner atomically. The
+  // pre-hashed credential is a replayable verifier, NOT proof of the
+  // plaintext password: it may create the first owner and reconcile an
+  // existing same-id owner, but it NEVER mints an OWNER JWT — both outcomes
+  // are session-less. Everything is still gated by the activation code +
+  // the one-owner policy inside pos_setup_owner. The pre-hashed fields are
+  // read BEFORE the password requirement so a valid pre-hashed request is
+  // not rejected for lacking a plaintext password.
+  const requestedId = str(body.user_id);
+  const preSalt = str(body.pw_salt);
+  const preHash = str(body.pw_hash);
+  const hasPreHashed = preSalt !== "" && preHash !== "";
+  if (!code || !rawName || (!hasPreHashed && !password)) {
     return json({ ok: false, error: "Missing fields" }, 400);
+  }
+  if (
+    code.length > MAX_ACTIVATION_CODE_LENGTH ||
+    rawName.length > MAX_USERNAME_LENGTH ||
+    password.length > MAX_PASSWORD_LENGTH
+  ) {
+    return json({ ok: false, error: "Invalid account details." }, 400);
+  }
+  if (requestedId && !/^[0-9a-fA-F-]{16,64}$/.test(requestedId)) {
+    return json({ ok: false, error: "Invalid account details." }, 400);
   }
   const username = normalizePhone(rawName);
   if (!username) return json({ ok: false, error: PHONE_INVALID }, 400);
+  const blocked = await probeAllowed(db, "posapi:setup", code);
+  if (blocked) return blocked;
   const lic = await licenseForActivationCode(db, code);
   if (!lic.ok) return json({ ok: false, error: lic.error }, 403);
   const customerId = lic.customerId;
 
-  const minLen = 12;
-  if (password.length < minLen) {
-    return json({
-      ok: false,
-      error: `Password must be at least ${minLen} characters.`,
-    }, 400);
+  let salt: string;
+  let hash: string;
+  if (hasPreHashed) {
+    // Accept only the exact `<iterations>$<base64>` cloud credential format
+    // pos-api itself issues, with a supported cost factor and a decodable
+    // salt — anything else is refused rather than stored verbatim.
+    const m = /^(\d{1,7})\$([A-Za-z0-9+/]+={0,2})$/.exec(preHash);
+    const iterations = m ? Number(m[1]) : 0;
+    let saltBytes: Uint8Array | null = null;
+    try {
+      saltBytes = unB64(preSalt);
+    } catch { /* fall through to refusal */ }
+    if (
+      !m || !PBKDF2_SUPPORTED_ITERATIONS.has(iterations) ||
+      m[2].length > 128 || !saltBytes || saltBytes.length === 0 ||
+      saltBytes.length > 64
+    ) {
+      return json({ ok: false, error: "Invalid account details." }, 400);
+    }
+    salt = preSalt;
+    hash = preHash;
+  } else {
+    const minLen = 12;
+    if (password.length < minLen) {
+      return json({
+        ok: false,
+        error: `Password must be at least ${minLen} characters.`,
+      }, 400);
+    }
+    const hashed = await hashPassword(password);
+    salt = hashed.salt;
+    hash = hashed.hash;
   }
-  const { salt, hash } = await hashPassword(password);
-  const id = crypto.randomUUID();
+  // Owner bootstrap is the highest-value public action: a tight per-code
+  // ceiling on top of the generic probe bound.
+  const setupChk = await rateLimitAllow(
+    db,
+    "posapi:setupowner",
+    code,
+    SETUP_LIMIT,
+    SETUP_WINDOW_SECONDS,
+    true,
+  );
+  if (!setupChk.allowed) return tooManyAttempts(setupChk.retryAfter);
+
+  // Same-id retry: an existing account under the requested id is NOT proof of
+  // anything by itself. A pre-hashed retry proves possession of a replayable
+  // verifier, NOT the plaintext password — it may reconcile identity but must
+  // NEVER mint an OWNER JWT. It gets a session-less success carrying the
+  // matching owner id. A plaintext retry has actually verified the password,
+  // so it earns the same session a fresh bootstrap would; anything else is a
+  // visible conflict.
+  if (requestedId) {
+    const { data: existing } = await db.from("pos_users")
+      .select(
+        "id, username, role, active, deleted_at, pw_salt, pw_hash, token_version",
+      )
+      .eq("customer_id", customerId).eq("id", requestedId).maybeSingle();
+    if (existing) {
+      const credMatch = hasPreHashed
+        ? existing.pw_salt === preSalt &&
+          timingSafeEqualStr(String(existing.pw_hash ?? ""), preHash) &&
+          String(existing.username ?? "") === username
+        : (await verifyPassword(
+          password,
+          String(existing.pw_salt ?? ""),
+          String(existing.pw_hash ?? ""),
+        )) && String(existing.username ?? "") === username;
+      const usable = existing.role === OWNER && existing.active === true &&
+        existing.deleted_at == null;
+      if (credMatch && usable) {
+        if (hasPreHashed) {
+          return json({
+            ok: true,
+            reconciled: true,
+            user_id: requestedId,
+            username,
+            role: OWNER,
+            customer_id: customerId,
+          });
+        }
+        let demoPassword: string | null = null;
+        try {
+          demoPassword = await ensureDemoUser(db, customerId, true);
+        } catch { /* non-fatal */ }
+        const token = await signJwt({
+          sub: requestedId,
+          cid: customerId,
+          role: OWNER,
+          tv: Number(existing.token_version ?? 0),
+        });
+        return json({
+          ok: true,
+          token,
+          user_id: requestedId,
+          username,
+          role: OWNER,
+          permissions: [],
+          customer_id: customerId,
+          ...(demoPassword ? { demo_password: demoPassword } : {}),
+        });
+      }
+      return json({
+        ok: false,
+        error: "Owner already exists.",
+        owner_id: existing.id ?? null,
+        owner_username: existing.username ?? null,
+      }, 409);
+    }
+  }
+
+  const id = requestedId || crypto.randomUUID();
   const rpc = await db.rpc("pos_setup_owner", {
     p_customer: customerId,
     p_id: id,
@@ -532,7 +994,19 @@ async function setupOwner(db: any, body: any): Promise<Response> {
   });
   if (rpc.error) {
     if (/already exists/i.test(rpc.error.message)) {
-      return json({ ok: false, error: "Owner already exists." }, 409);
+      // Tell the caller WHO the existing owner is so a native till can tell
+      // "my own bootstrap already landed" (same id -> done) apart from a real
+      // second-owner conflict. The activation code is already a tenant-wide
+      // credential, so this reveals nothing a code-holder could not pull.
+      const { data: existing } = await db.from("pos_users")
+        .select("id, username").eq("customer_id", customerId)
+        .eq("role", OWNER).is("deleted_at", null).maybeSingle();
+      return json({
+        ok: false,
+        error: "Owner already exists.",
+        owner_id: existing?.id ?? null,
+        owner_username: existing?.username ?? null,
+      }, 409);
     }
     throw new Error(rpc.error.message);
   }
@@ -543,6 +1017,20 @@ async function setupOwner(db: any, body: any): Promise<Response> {
     "OWNER_CREATED",
     `Web owner "${username}" created.`,
   );
+  // A pre-hashed native bootstrap CREATES the first cloud owner but proves
+  // only possession of a replayable verifier — it gets a session-less
+  // success. The till logs in later through the real password flow. Only
+  // the plaintext path (password actually verified above) earns a session.
+  if (hasPreHashed) {
+    return json({
+      ok: true,
+      created: true,
+      user_id: id,
+      username,
+      role: OWNER,
+      customer_id: customerId,
+    });
+  }
   let demoPassword: string | null = null;
   try {
     demoPassword = await ensureDemoUser(db, customerId, true);
@@ -568,6 +1056,11 @@ async function changePassword(db: any, ctx: Ctx, body: any): Promise<Response> {
   if (!user) return json({ ok: false, error: "User not found." }, 404);
   const current = String(body.current_password ?? "");
   const next = String(body.new_password ?? "");
+  if (
+    current.length > MAX_PASSWORD_LENGTH || next.length > MAX_PASSWORD_LENGTH
+  ) {
+    return json({ ok: false, error: "Password is too long." }, 400);
+  }
   if (!(await verifyPassword(current, user.pw_salt, user.pw_hash))) {
     return json({ ok: false, error: "Current password is incorrect." }, 401);
   }
@@ -588,6 +1081,9 @@ async function changePassword(db: any, ctx: Ctx, body: any): Promise<Response> {
   )
     .eq("customer_id", ctx.customerId).eq("id", ctx.userId);
   if (up.error) throw new Error(up.error.message);
+  // The token_version bump already makes every outstanding grant fail to
+  // resolve; reclaim the rows as well.
+  await revokeActorGrants(db, ctx.customerId, ctx.userId, null);
   await audit(
     db,
     ctx.customerId,
@@ -615,20 +1111,23 @@ export {
   hashPassword,
   hasUsers,
   hmac,
+  issueActorGrant,
   licenseForActivationCode,
   loadActiveUser,
   login,
-  loginBlocked,
-  loginClear,
   loginIdentifier,
-  loginRecordFail,
-  loginThrottleKey,
   markDemoVersion,
   normalizePhone,
   OWNER,
   OWNER_ONLY,
   PBKDF2_ITERATIONS,
+  PBKDF2_SUPPORTED_ITERATIONS,
+  publicSourceAllowed,
   randomDemoPassword,
+  rateLimitAllow,
+  rateLimitClear,
+  rateLimitKey,
+  revokeActorGrants,
   SESSION_TTL_SECONDS,
   setupOwner,
   signJwt,

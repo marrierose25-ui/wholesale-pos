@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -17,20 +16,31 @@ import 'schema_snapshot.dart';
 /// (and its index/trigger helpers) from the historical commits recorded in a
 /// fixture's `fixture.json`.
 ///
-/// Finding recorded by this test: on the current build a pre-v6 file cannot
-/// reach v22. The `<6` upgrade step calls `_createIndexesAndTriggers`, which
-/// creates indexes on `finance_entries` (first created at `<7`) and fails with
-/// "no such table". This is a pre-existing limitation, so Stage 6.0 preserves
-/// it and only characterises it: the migration is atomic, rolls back cleanly
-/// and leaves the original file (and its `.bak` safety copy) untouched.
+/// Stage 0 repaired the pre-v6 upgrade defect this file used to characterise:
+/// the `<6` upgrade step called `_createIndexesAndTriggers` while
+/// `finance_entries`, `void_requests` and `sync_outbox` did not exist yet, so
+/// every pre-v6 file failed with "no such table". Index creation is now gated
+/// on verified table existence and deferred to the later step that creates
+/// each table, so v2-v5 fixtures upgrade to the current schema like every
+/// other version.
+///
+/// Before the repair the failure was atomic: the whole `onUpgrade` transaction
+/// rolled back, `user_version` stayed put, and the `.bak` safety copy
+/// preserved the original file.
 void main() {
   setUpAll(() {
     sqfliteFfiInit();
   });
 
-  final allVersions = <int>[2, 3, 4, 12, 19, 20, 21, 22];
-  final upgradeableVersions = <int>[12, 19, 20, 21, 22];
-  final blockedVersions = <int>[2, 3, 4];
+  // Every schema version that was actually stamped by a shipped build has a
+  // fixture. v1 predates the first commit and v5/v7/v11/v18 were never
+  // released as a schemaVersion — those upgrade boundaries are exercised by
+  // the neighbouring fixtures instead (see fixtures README and the migration
+  // log).
+  final allVersions = <int>[
+    2, 3, 4, 5, 6, 8, 9, 10, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22,
+  ];
+  final upgradeableVersions = allVersions;
 
   for (final version in allVersions) {
     group('genuine v$version fixture', () {
@@ -76,7 +86,8 @@ void main() {
       });
 
       if (upgradeableVersions.contains(version)) {
-        test('migrates to v22 and preserves historical data', () async {
+        test('migrates to the current schema and preserves historical data',
+            () async {
           final db = await LocalDatabase.openAt(copy.path);
           try {
             expect(
@@ -113,95 +124,19 @@ void main() {
             );
           }
 
-          // F-2, fully characterised:
-          //  * v19 and older take the `<20` branch, which creates the index.
-          //  * v20 and v21 were created without it and their upgrade skips the
-          //    `<20` branch, so they still lack it at v22.
-          //  * a fresh v22 install has never had it.
+          // Stage 0: `picklist_items_picklist_id` is created on every path —
+          // by the `<20` branch for older files, by the v23 convergence
+          // migration for v20+ files, and by `_onCreate` for fresh installs.
           final indexes = (await _indexNames(copy.path)).toSet();
-          if (version < 20) {
-            expect(
-              indexes,
-              contains('picklist_items_picklist_id'),
-              reason: 'the v20 upgrade creates this index',
-            );
-          } else {
-            expect(
-              indexes,
-              isNot(contains('picklist_items_picklist_id')),
-              reason: 'F-2: v20/v21/v22 never create the picklist index',
-            );
-          }
+          expect(
+            indexes,
+            contains('picklist_items_picklist_id'),
+            reason: 'every supported path must end with the picklist index',
+          );
         });
-      }
-
-      if (blockedVersions.contains(version)) {
-        test(
-          'known limitation: pre-v6 upgrade fails at <6 and rolls back '
-          'atomically',
-          () async {
-            await expectLater(
-              LocalDatabase.openAt(copy.path),
-              throwsA(isA<DatabaseException>()),
-              reason:
-                  'the <6 step creates indexes on finance_entries, which does '
-                  'not exist until <7; Stage 6.0 must not fix this',
-            );
-
-            // Whole-migration rollback: same schema, same version, same rows.
-            final db = await databaseFactoryFfi.openDatabase(
-              copy.path,
-              options: OpenDatabaseOptions(readOnly: true),
-            );
-            try {
-              final after = await SchemaSnapshot.capture(db);
-              expect(after['user_version'], version);
-              expect(
-                after,
-                equals(await _readSnapshot('v${version}_pre')),
-                reason: 'a failed onUpgrade must not leave a partial schema',
-              );
-              expect(await db.rawQuery('PRAGMA foreign_key_check'), isEmpty);
-              expect(
-                (await db.rawQuery('PRAGMA integrity_check'))
-                    .first
-                    .values
-                    .first,
-                'ok',
-              );
-              await _expectPreMigrationData(version, copy.path);
-            } finally {
-              await db.close();
-            }
-
-            // The safety copy was taken before the attempt and is intact.
-            final bak = File('${copy.path}${LocalDatabase.backupSuffix}');
-            expect(bak.existsSync(), isTrue);
-            expect(bak.readAsBytesSync(), orderedEquals(fixtureBytesBefore));
-
-            // The fixture itself was never touched.
-            expect(
-              fixture.readAsBytesSync(),
-              orderedEquals(fixtureBytesBefore),
-            );
-          },
-        );
       }
     });
   }
-}
-
-Future<Map<String, dynamic>> _readSnapshot(String name) async {
-  // Snapshot comparison helper lives in schema_snapshot.dart; this local read
-  // keeps the rollback assertion explicit without rewriting the golden file.
-  final file = File('${SchemaSnapshot.snapshotDir}/$name.json');
-  final decoded = jsonDecodeFile(file);
-  return (decoded as Map).cast<String, dynamic>();
-}
-
-Map<String, dynamic> jsonDecodeFile(File file) {
-  final text = file.readAsStringSync();
-  return (const JsonDecoder().convert(text) as Map).cast<String, dynamic>();
 }
 
 Future<Set<String>> _indexNames(String path) async {
@@ -251,7 +186,7 @@ Future<void> _expectPreMigrationData(int version, String path) async {
     final items = await db.query('sale_items');
     expect(items, hasLength(2));
 
-    if (version < 12) {
+    if (version < 8) {
       expect(
         (await db.rawQuery('PRAGMA table_info(sale_items)'))
             .map((row) => row['name']),
@@ -310,20 +245,33 @@ Future<void> _expectHistoricalDataPreserved(int version, Database db) async {
     'CLOSED',
   );
 
-  // Sales. payment_method is the only v2->v3 change; existing v2 rows receive
-  // the 'CASH' default rather than being dropped.
+  // Sales. payment_method arrives at v3, so v2 rows all read the 'CASH'
+  // default; shift_id and void_reason arrive at v4 and stay NULL on older
+  // files rather than being guessed at.
   final sales = await db.query('sales', orderBy: 'id');
   expect(sales, hasLength(2));
   final sale1 = sales.firstWhere((row) => row['id'] == 'SALE-1');
   final sale2 = sales.firstWhere((row) => row['id'] == 'SALE-2');
   expect(sale1['payment_method'], 'CASH');
-  expect(sale2['payment_method'], 'BANK');
+  expect(
+    sale2['payment_method'],
+    version >= 3 ? 'BANK' : 'CASH',
+    reason: 'v$version payment_method',
+  );
   expect(sale1['status'], 'COMPLETED');
   expect(sale1['total_minor_units'], 24000);
   expect(sale2['status'], 'VOIDED');
   expect(sale2['total_minor_units'], 3500);
-  expect(sale1['shift_id'], 'S-closed');
-  expect(sale2['void_reason'], 'Customer changed mind');
+  expect(
+    sale1['shift_id'],
+    version >= 4 ? 'S-closed' : isNull,
+    reason: 'v$version shift_id',
+  );
+  expect(
+    sale2['void_reason'],
+    version >= 4 ? 'Customer changed mind' : isNull,
+    reason: 'v$version void_reason',
+  );
   if (version < 5) {
     expect(sale2['voided_at'], isNull);
   } else {
@@ -340,7 +288,7 @@ Future<void> _expectHistoricalDataPreserved(int version, Database db) async {
   expect(item1['quantity_text'], '2');
   expect(item1['billing_quantity_milliunits'], 2000);
   expect(item1['line_total_minor_units'], 24000);
-  if (version < 12) {
+  if (version < 8) {
     expect(item1['notes'], isNull);
   } else {
     expect(
@@ -354,8 +302,9 @@ Future<void> _expectHistoricalDataPreserved(int version, Database db) async {
   expect(audit, hasLength(2));
   expect(audit.first['action'], 'SALE_CREATED');
 
-  // Cash movements: the table appears at v4, user_id is added at v5 without a
-  // backfill, and the v6 rebuild adds the missing user foreign key.
+  // Cash movements: the table appears at v4, user_id is added at v5, and the
+  // v6 rebuild adds the missing user foreign key. The v5 fixture carries the
+  // values a v5 till wrote; v4 rows upgraded without the column stay NULL.
   final movements = await db.query('cash_movements', orderBy: 'id');
   if (version < 4) {
     expect(movements, isEmpty);
@@ -364,12 +313,12 @@ Future<void> _expectHistoricalDataPreserved(int version, Database db) async {
     final movement2 = movements.firstWhere((row) => row['id'] == 'CM-2');
     expect(movement2['amount_minor_units'], 2500);
     expect(movement2['type'], 'EXPENSE');
-    if (version < 12) {
-      expect(movement2['user_id'], isNull);
-    } else {
-      expect(movement2['user_id'], 'U-owner');
-    }
-    if (version >= 19) {
+    expect(
+      movement2['user_id'],
+      version >= 5 ? 'U-owner' : isNull,
+      reason: 'v$version user_id',
+    );
+    if (version >= 17) {
       expect(movement2['source_finance_entry_id'], 'FE-2');
     } else {
       expect(movement2['source_finance_entry_id'], isNull);
@@ -385,7 +334,7 @@ Future<void> _expectHistoricalDataPreserved(int version, Database db) async {
 
   // Proof photos: schema 16 moves base64 TEXT into the BLOB table.
   final photos = await db.query('cash_movement_photos');
-  if (version >= 19) {
+  if (version >= 16) {
     expect(photos, hasLength(1));
     expect(photos.single['movement_id'], 'CM-2');
     expect(photos.single['jpeg_bytes'], isA<List<int>>());
@@ -398,7 +347,7 @@ Future<void> _expectHistoricalDataPreserved(int version, Database db) async {
   final categories = await db.query('finance_categories', orderBy: 'id');
   final entries = await db.query('finance_entries', orderBy: 'id');
   final voidRequests = await db.query('void_requests', orderBy: 'id');
-  if (version < 12) {
+  if (version < 8) {
     expect(categories, isEmpty);
     expect(entries, isEmpty);
     expect(voidRequests, isEmpty);
@@ -406,12 +355,17 @@ Future<void> _expectHistoricalDataPreserved(int version, Database db) async {
     expect(categories, hasLength(2));
     expect(
       categories.firstWhere((row) => row['id'] == 'FC-2')['deleted_at'],
-      '2024-02-01T00:00:00.000Z',
+      version >= 10 ? '2024-02-01T00:00:00.000Z' : isNull,
+      reason: 'v$version category tombstone',
     );
     expect(entries, hasLength(2));
     final completed = entries.firstWhere((row) => row['id'] == 'FE-2');
     expect(completed['status'], 'COMPLETED');
-    expect(completed['payment_method'], 'CASH');
+    expect(
+      completed['payment_method'],
+      version >= 10 ? 'CASH' : isNull,
+      reason: 'v$version payment_method',
+    );
     expect(voidRequests, hasLength(1));
     expect(voidRequests.single['status'], 'APPROVED');
   }
@@ -422,7 +376,7 @@ Future<void> _expectHistoricalDataPreserved(int version, Database db) async {
     for (final row in await db.query('settings'))
       row['key'] as String: row['value'],
   };
-  if (version < 12) {
+  if (version < 6) {
     expect(settings, isEmpty);
   } else {
     expect(settings['theme_mode'], 'dark');
@@ -431,7 +385,7 @@ Future<void> _expectHistoricalDataPreserved(int version, Database db) async {
     expect(settings['legacy_probe'], 'preserved-through-migration');
   }
   final outbox = await db.query('sync_outbox', orderBy: 'id');
-  if (version < 12) {
+  if (version < 9) {
     expect(outbox, isEmpty);
   } else {
     expect(outbox, hasLength(2));
@@ -439,7 +393,7 @@ Future<void> _expectHistoricalDataPreserved(int version, Database db) async {
     expect(outbox.last['synced_at'], isNull);
   }
   final counters = await db.query('counters');
-  if (version < 12) {
+  if (version < 6) {
     expect(counters, isEmpty);
   } else {
     expect(counters.single['name'], 'receipt_number');

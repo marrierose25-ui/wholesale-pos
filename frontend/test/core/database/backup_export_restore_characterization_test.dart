@@ -88,6 +88,9 @@ void main() {
       'devices': devices,
       'counters': <dynamic>[],
       'settings': <dynamic>[],
+      'picklists': <dynamic>[],
+      'picklist_items': <dynamic>[],
+      'picklist_customers': <dynamic>[],
     };
   }
 

@@ -1,5 +1,19 @@
 # Database Migration Log — Stage 6.0
 
+## Current migration follow-up — 2026-11-27
+
+The old upgrade matrix below is a historical record of the pre-Stage-0 defect and is superseded by the current test/source state:
+
+- `LocalDatabase.schemaVersion` is now **24**.
+- `frontend/test/core/database/historical_fixture_migration_test.dart` runs genuine historical SQLite fixtures for versions 2, 3, 4, 5, 6, 8, 9, 10, 12–17, and 19–22 through the current schema. Each upgrade test checks the resulting schema snapshot, preserved representative records, `PRAGMA integrity_check`, `PRAGMA foreign_key_check`, and the pre-migration backup. The latest historical fixture is v22; it upgrades to v24. There are not separate v23 or v24 historical fixture files yet.
+- The previous pre-v6 index-creation ordering defect is repaired: index/trigger creation is guarded by actual table existence and deferred until the corresponding table exists. CI run [#39](https://github.com/marrierose25-ui/wholesale-pos/actions/runs/45895098268) passed the Flutter test suite, including the historical fixture tests.
+- Schema v17 adds `cash_movements.source_finance_entry_id` but does not infer historical links. Old cash movements can therefore retain a null source ID. The current remediation PR #1 makes deletion of a completed CASH finance entry fail closed unless exactly one linked deposit of the exact amount exists. It deliberately does not guess which legacy movement belongs to which collection.
+
+These statements describe the checked source and CI baseline, not a test against any customer database. Historical fixtures are copied to temporary paths; never run migration tests against a production data file.
+
+---
+
+
 **Status:** characterisation only. No production file, SQL statement, migration
 branch, schema version, index, trigger, constraint, or foreign key was changed to
 produce this document, its fixtures, or its tests.
@@ -28,7 +42,7 @@ Every file is a real SQLite database whose DDL came from the commit named in its
 columns.
 
 | Fixture | Source commit | Provenance | Tables |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `v2` | `f644ceb` | **Reconstructed** from the v3 initial-commit `_onCreate` with `sales.payment_method` removed. The `<3` upgrade step adds exactly that column and is the only difference between v2 and v3. | 7 |
 | `v3` | `f644ceb` | Verbatim `_onCreate` of the first committed schema. | 7 |
 | `v4` | `0d071dd` | Verbatim `_onCreate` of v4. | 8 |
@@ -56,7 +70,7 @@ of weakening the assertion.
 ## 2. Upgrade matrix actually executed
 
 | From | Result on this build | Evidence |
-|---|---|---|
+| --- | --- | --- |
 | v2 | **Blocked** at `<6`; whole upgrade rolls back | `historical_fixture_migration_test.dart` |
 | v3 | **Blocked** at `<6`; whole upgrade rolls back | same |
 | v4 | **Blocked** at `<6`; whole upgrade rolls back | same |
@@ -94,7 +108,7 @@ it does not fix it.
 (line 322). `_createIndexesAndTriggers` emits indexes on `finance_entries`, so
 SQLite raises:
 
-```
+```text
 no such table: main.finance_entries
 ```
 
@@ -128,7 +142,7 @@ The missing `picklist_items_picklist_id` index exists on **more** paths than the
 original risk-register entry described:
 
 | Database origin | Has the index at v22? | Why |
-|---|---|---|
+| --- | --- | --- |
 | Fresh v22 install | **No** | `_onCreate` never creates it. |
 | Upgrade from v20 | **No** | v20's `_onCreate` omits it, and the `<20` branch does not run. |
 | Upgrade from v21 | **No** | same. |
@@ -150,7 +164,7 @@ fresh-install behaviour and invalidate the approved schema.
 `SchemaSnapshot.differences(freshV22, upgradedV22)` produced these goldens:
 
 | Source | Differences from fresh v22 |
-|---|---|
+| --- | --- |
 | v22 | none — a genuine v22 file needs no migration |
 | v21 | none |
 | v20 | `picklist_items` physical column order and `sqlite_master.sql` text only |
@@ -239,3 +253,41 @@ Stage 6.0 did **not** verify, and this log does not claim:
 - performance or duration of the pre-v6 failure on a full-size shop database.
 
 Those remain risk-register items.
+
+---
+
+## 9. Stage 0 repair addendum (2026-11-23)
+
+The limitations recorded in §3 and §4 above were **repaired** by the Stage 0
+SQLite integrity-hardening stage; they are kept here as history, not current
+behaviour.
+
+- **§3 pre-v6 blockage — fixed.** `_createIndexesAndTriggers` now gates every
+  index/trigger on verified table existence (`sqlite_master`), so the `<6`
+  through `<10` calls create only what exists and later steps in the same
+  atomic upgrade create the deferred indexes. Genuine v2, v3, v4 and a newly
+  reconstructed v5 fixture all migrate to the current schema with data
+  preserved.
+- **§4 F-2 missing index — fixed.** `schemaVersion` is now `23`; the `<23>`
+  step runs `CREATE INDEX IF NOT EXISTS picklist_items_picklist_id`, and
+  `_createIndexesAndTriggers`/`_onCreate` create it on fresh installs. Every
+  supported path converges on the index.
+- **Downgrade protection — added.** `onDowngrade` throws
+  `UnsupportedDatabaseVersionException` before sqflite can stamp a newer
+  file with the lower `user_version`; the file is left untouched.
+- **v5 fixture — added.** Reconstructed from the v4 `_onCreate` (0d071dd)
+  plus the v5 upgrade DDL in ea2dc36's `_onUpgrade`; no commit ever stamped
+  `schemaVersion = 5`.
+- **Trigger/index idempotency — hardened.** The `<5` step's
+  `prevent_second_open_shift_*` triggers and `sales_shift_id` index now use
+  `IF NOT EXISTS`, matching the rest of the chain, so a mis-stamped database
+  cannot fail recreation.
+
+Current coverage: `historical_fixture_migration_test.dart` exercises every
+schema version a shipped build ever stamped — v2, v3, v4, v5 (reconstructed),
+v6, v8, v9, v10, v12, v13, v14, v15, v16, v17, v19, v20, v21 and v22 —
+through the real `LocalDatabase.openAt`. v1 predates the first commit and
+v5/v7/v11/v18 were never released as a `schemaVersion`; their migration
+steps are covered inside the neighbouring fixtures' upgrade chains.
+`downgrade_protection_test.dart` covers the newer-version refusal; goldens
+were regenerated for schema v23.

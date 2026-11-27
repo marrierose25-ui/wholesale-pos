@@ -7,7 +7,7 @@ name: CI
 # gate: analyze, test, then build the artefact we actually ship.
 on:
   push:
-    branches: [main]
+    branches: [main, 'stage0/**', 'stage5/**', 'stage6/**']
   pull_request:
   workflow_dispatch:
 
@@ -46,3 +46,280 @@ jobs:
       # never distributed.
       - name: Build web (PWA entry point)
         run: flutter build web --release -t lib/main_web.dart
+
+  # Edge Function gate: the Deno suites (licensing activation + rate limits,
+  # pos-api router/auth/device authorization, sync push security) previously
+  # only ran locally, so a regression could reach the branch green. Format,
+  # typecheck, and every test file must pass — same commands as
+  # docs/DEVELOPMENT.md, no credentials needed (tests use in-memory mocks).
+  deno:
+    name: Edge Functions (Deno)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Format check
+        run: deno fmt --check backend/supabase/functions
+
+      - name: Type check entry points
+        run: |
+          deno check backend/supabase/functions/licensing/index.ts
+          deno check backend/supabase/functions/pos-api/index.ts
+          deno check backend/supabase/functions/sync/index.ts
+
+      - name: Deno tests (licensing + pos-api + sync)
+        run: >-
+          deno test --allow-env --allow-read
+          backend/supabase/functions/licensing/tests/
+          backend/supabase/functions/pos-api/tests/
+          backend/supabase/functions/sync/tests/
+
+  # Stage 0: native SQLite verification. FFI tests cannot prove the sqflite
+  # plugin path on Android/iOS; these jobs run the same migration/downgrade
+  # suite on real emulator/simulator SQLite. Synthetic fixture only.
+  android-database:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Resolve dependencies
+        run: flutter pub get
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Android database integration tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          working-directory: ./frontend
+          script: flutter test integration_test -d emulator-5554
+
+  ios-database:
+    runs-on: macos-15
+    # Bounded so a hung `flutter test` (flutter/flutter#181771: the iOS log
+    # reader can miss the VM service URL and wait forever) fails in minutes,
+    # not at the 6-hour default. Fix merged upstream in flutter/flutter#193142
+    # but is NOT in stable 3.50.1 yet.
+    timeout-minutes: 100
+    defaults:
+      run:
+        working-directory: ./frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      # device_info_plus calls NSProcessInfo.isiOSAppOnVision, which only
+      # exists in the iOS 26.1 SDK (Xcode 26.1+). The macos-15 image defaults
+      # to Xcode 16.4, so select the newest installed Xcode 26.x instead of
+      # pinning a version that disappears on the next image update.
+      # Simulator images change between runner releases, so the device is
+      # discovered at runtime: fail loudly (the available list is printed
+      # above) rather than silently skipping the test.
+      - name: Select Xcode and discover simulator
+        id: sim
+        timeout-minutes: 10
+        run: |
+          APP=$(ls -d /Applications/Xcode_26.*.app 2>/dev/null | sed 's|.*/Xcode_||; s|\.app$||' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+          if [ -z "$APP" ]; then
+            echo "No Xcode 26.x found; installed Xcodes:"
+            ls -d /Applications/Xcode*.app
+            exit 1
+          fi
+          echo "Selecting /Applications/Xcode_${APP}.app"
+          sudo xcode-select -s "/Applications/Xcode_${APP}.app"
+          sudo xcodebuild -runFirstLaunch
+          xcodebuild -version
+          xcrun simctl list devices available
+          UDID=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          for runtime, devs in devices.items():
+              for d in devs:
+                  if d.get("isAvailable") and d.get("name", "").startswith("iPhone 16"):
+                      print(d["udid"])
+                      sys.exit(0)
+          sys.exit("No available iPhone 16 simulator found")
+          ')
+          echo "Using simulator UDID: $UDID"
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+
+      - name: Boot simulator
+        timeout-minutes: 15
+        run: |
+          xcrun simctl boot "${{ steps.sim.outputs.udid }}"
+          xcrun simctl bootstatus "${{ steps.sim.outputs.udid }}" -b
+
+      # Host-level POSIX check: the interruption test spawns a real `dart run`
+      # worker and kills it mid-migration. It runs on the macOS host VM, not
+      # inside the simulator — the same code path CI uses on Linux/Windows.
+      - name: POSIX interrupted-migration test (host)
+        timeout-minutes: 15
+        run: flutter test test/core/database/interrupted_migration_test.dart --reporter expanded
+
+      # bash runs steps with -eo pipefail, so tee cannot mask a build/test
+      # failure; verbose output is preserved for the diagnostics artifact.
+      - name: iOS simulator build
+        timeout-minutes: 40
+        run: flutter build ios --simulator --no-codesign --verbose 2>&1 | tee ios-build.log
+
+      - name: iOS integration tests
+        timeout-minutes: 40
+        run: flutter test integration_test -d "${{ steps.sim.outputs.udid }}" --reporter expanded --verbose 2>&1 | tee ios-integration.log
+
+      # Runs even when an earlier step fails or times out: captures simulator
+      # state and the last 30 minutes of unified-log entries for the test
+      # process so a hang is diagnosable after the fact.
+      - name: Collect iOS diagnostics
+        if: always()
+        timeout-minutes: 10
+        run: |
+          UDID="${{ steps.sim.outputs.udid }}"
+          {
+            echo "=== xcodebuild ==="; xcodebuild -version
+            echo "=== booted devices ==="; xcrun simctl list devices booted
+            if [ -n "$UDID" ]; then
+              echo "=== device state ==="; xcrun simctl list devices | grep "$UDID" || true
+              echo "=== unified log (Runner/Flutter, last 30m) ==="
+              xcrun simctl spawn "$UDID" log show --last 30m --style compact \
+                --predicate 'process == "Runner" OR processImagePath CONTAINS "wholesalePosApp"' 2>/dev/null \
+                | tail -300 || true
+            fi
+          } | tee ios-sim-diagnostics.log
+
+      - name: Upload iOS diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-database-diagnostics
+          path: |
+            frontend/ios-build.log
+            frontend/ios-integration.log
+            frontend/ios-sim-diagnostics.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  supabase-replay:
+    name: Supabase cold migration replay
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Replay baseline-to-head migrations on empty PostgreSQL 17
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: bash backend/supabase/scripts/replay_migrations.sh
+      # Every SQL gate runs with ON_ERROR_STOP=1 and explicit assertions —
+      # no || true masking. Any unexpected error or failed assertion exits
+      # non-zero and fails this job.
+      - name: H1 void invariants on the replayed schema
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/h1_void_invariants/h1_void_invariants_test.sql
+      - name: H1 void concurrency (two sessions, both orderings + race)
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: bash backend/supabase/tests/h1_void_invariants/concurrency.sh
+      - name: Request 2 licensing + rate-limit invariants
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request2_licensing/request2_licensing_test.sql
+      - name: Request 2 licensing concurrency
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: bash backend/supabase/tests/request2_licensing/concurrency.sh
+      - name: Request 3 actor-authorization invariants
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request3_actor_authorization/request3_actor_authorization_test.sql
+
+      # Request 3 acceptance: unchecked-RPC ACL closure, retryable-vs-
+      # permanent sync classification, two-actor finance attribution, and
+      # first-owner bootstrap invariants on the same replayed schema.
+      - name: Request 3 acceptance SQL tests
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request3_acceptance/request3_acceptance_test.sql
+      # Request 3 bootstrap concurrency: two real sessions race
+      # pos_setup_owner — different ids serialize to one owner, identical
+      # retries converge, mismatched credentials never overwrite.
+      - name: Request 3 owner bootstrap concurrency
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: bash backend/supabase/tests/request3_acceptance/concurrency.sh
+      # Request 3 financial integrity: atomic cash-leg dedup (one
+      # deposit + one withdrawal per collection), safe legacy-reversal
+      # reconciliation, and ambiguity deferral — all asserted in SQL.
+      - name: Request 3 financial integrity SQL tests
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request3_financial_integrity/request3_financial_integrity_test.sql
+      # Two real sessions race different movement ids for the same
+      # collection leg: exactly one deposit and one withdrawal may exist.
+      - name: Request 3 cash-movement concurrency
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: bash backend/supabase/tests/request3_financial_integrity/concurrency.sh

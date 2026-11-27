@@ -26,7 +26,7 @@ and the database/sync/backup tests; plus the checks listed in §10.
 
 ## 1. Runtime topology (as implemented today)
 
-```
+```text
 main.dart  (native composition root)
   └─ LocalDatabase.open()                         ← single Database handle
        ├─ registerCurrentDevice(db)               → devices row + device_id.txt
@@ -63,7 +63,7 @@ lifetime. Repositories do not open their own connections.
 ## 2. Database lifecycle inventory
 
 | Phase | Location | Behaviour | Preservation requirement |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Factory selection | `local_database.dart:26-36` | On Windows/Linux/macOS (and the test host) installs `sqflite_common_ffi` as the global `databaseFactory`. Android/iOS keep the plugin default. | Exact platform condition and global-factory semantics must survive; tests rely on the FFI factory. |
 | Open (production) | `local_database.dart:38-42` | Resolves `getApplicationSupportDirectory()` and opens `<support>/wholesale_pos.db`. | Filename and directory unchanged. |
 | Open (explicit path) | `local_database.dart:46-49` | Test/migration entry point (`openAt`). | Keep for migration tests and recovery tooling. |
@@ -87,7 +87,7 @@ schema-version change.
 ## 3. Component responsibility inventory
 
 | Component | File | DB responsibility | Direct SQL? | Receives `Database`? |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `LocalDatabase` | `core/database/local_database.dart` | Factory, open, lifecycle, schema, all migrations, indexes, triggers, safety backup, settings helpers, device registration | Yes (DDL, PRAGMA, settings CRUD) | Yes (all statics) |
 | `SqfliteProductRepository` | `core/repositories/product_repository.dart` | Catalog writes/reads + outbox | Yes (via sqflite API) | Yes (`_db`) |
 | `SqfliteSaleRepository` | `core/repositories/sale_repository.dart` | Sales, line items, voids, receipts, audit, outbox; reporting delegates | Yes | Yes |
@@ -126,7 +126,7 @@ meaning, not the only code allowed to touch it — several cross-module writes
 are deliberate and transaction-bound (§7).
 
 | Table | Owning module | Primary writer(s) | Other writers / readers | Key constraints |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `users` | Users / Identity | `SqfliteUserRepository` | `SyncPullApplier` (upsert), `DataImporter`, `requireFeature` (read), `SyncOutbox` (demo check) | PK `id`; `username UNIQUE`; FKs from sales/shifts/movements/finance/voids |
 | `products` | Catalog | `SqfliteProductRepository` | `SyncPullApplier`, `DataImporter`, warehouse screens read via repository | PK `id`; `code UNIQUE` |
 | `devices` | Licensing / Device | `LocalDatabase.registerCurrentDevice` | `SyncPullApplier` placeholder/merge, `DataImporter`, `DataExporter`, sales FK | PK `id`; `sales.device_id` FK |
@@ -175,7 +175,7 @@ No file under `lib/features/` imports sqflite or references `Database`
 SQL shape observed (counts are occurrence counts, not unique statements):
 
 | File | `rawQuery`/`rawInsert`/`rawUpdate`/`rawDelete`/`execute` | `query`/`insert`/`update`/`delete` |
-|---|---:|---:|
+| --- | ---: | ---: |
 | `local_database.dart` | 102 | 8 |
 | `sale_repository.dart` | 4 | 36 |
 | `shift_repository.dart` | 12 | 18 |
@@ -199,7 +199,7 @@ SQL shape observed (counts are occurrence counts, not unique statements):
 Production (`app/lib`):
 
 | Receiver | Kind |
-|---|---|
+| --- | --- |
 | `NativeBackend({required Database db})` and `_db` | constructor field |
 | `Sqflite{Product,Sale,Reporting,Shift,Finance,Picklist,User}Repository(this._db)` | constructor field |
 | `SettingsSessionStore(this._db)` | constructor field |
@@ -228,7 +228,7 @@ transaction; partial commits are not possible.
 ### Sales — `sale_repository.dart`
 
 | Method | Tables written | Atomic guarantee |
-|---|---|---|
+| --- | --- | --- |
 | `saveSale` | `sales`, `sale_items`, `audit_logs`, `sync_outbox` | Sale + lines + audit + outbox commit or roll back together (`:106-161`). |
 | `nextReceiptNumber` | `counters` (read `sales`) | Per-day counter read/increment is serialized (`:228-256`). |
 | `voidSale` | `sales`, `void_requests`, `audit_logs`, `sync_outbox` | Void + auto-closing a pending request + audit + two outbox rows (`:262-353`). |
@@ -239,7 +239,7 @@ transaction; partial commits are not possible.
 ### Register — `shift_repository.dart`
 
 | Method | Tables written | Atomic guarantee |
-|---|---|---|
+| --- | --- | --- |
 | `ensureActiveShift` | `shifts`, `sync_outbox` | Drawer creation + outbox (`:124-137`). |
 | `openShift` | `shifts`, `audit_logs`, `sync_outbox` | Open + audit + outbox (`:188-206`). |
 | `addCashMovement` | `cash_movements`, `cash_movement_photos`, `audit_logs`, `sync_outbox` | Movement + optional photo BLOB + audit + outbox (`:225-277`). |
@@ -248,7 +248,7 @@ transaction; partial commits are not possible.
 ### Finance — `finance_repository.dart`
 
 | Method | Tables written | Atomic guarantee |
-|---|---|---|
+| --- | --- | --- |
 | `createCategory` | `finance_categories`, `sync_outbox` | Row + outbox (`:236-251`). |
 | `renameCategory` / `deleteCategory` / `restoreCategory` | `finance_categories`, `sync_outbox` | Row + outbox (`:259-355`). |
 | `permanentlyDeleteCategory` | `finance_entries`, `finance_categories` | Entries + category removed together (`:369-400`). |
@@ -260,7 +260,7 @@ transaction; partial commits are not possible.
 ### Users — `user_repository.dart`
 
 | Method | Tables written | Atomic guarantee |
-|---|---|---|
+| --- | --- | --- |
 | `_upgradePasswordHash` | `users`, `sync_outbox` | Hash migration + outbox (`:359-378`). |
 | `createFirstOwner` | `users`, `sync_outbox` | First-owner check + insert + outbox (`:613-628`). |
 | `createUser` | `users`, `sync_outbox` | Optional phone-replacement + insert + outbox (`:725-764`). |
@@ -272,7 +272,7 @@ transaction; partial commits are not possible.
 ### Catalog / Warehouse
 
 | Method | Tables written | Atomic guarantee |
-|---|---|---|
+| --- | --- | --- |
 | `ProductRepository.save/update/deactivate/reactivate` | `products`, `sync_outbox` | Each pair atomic (`:43,54,115,128`). |
 | `PicklistRepository.createPicklist` | `picklists`, `picklist_items`, `sync_outbox` | Header + lines + per-item outbox + header outbox (`:139-160`). |
 | `updateItemQuantities` | `picklist_items`, `picklists`, `sync_outbox` | Lines + re-derived header + outboxes (`:173-220`). |
@@ -284,7 +284,7 @@ transaction; partial commits are not possible.
 ### Restore / sync
 
 | Method | Tables written | Atomic guarantee |
-|---|---|---|
+| --- | --- | --- |
 | `DataImporter.importFromJson` | **every table** + `sync_outbox` purge + `audit_logs` | One transaction deletes and re-inserts the whole dataset, then `PRAGMA foreign_key_check`; any failure rolls the whole restore back (`data_importer.dart:218-325`). |
 | `SyncPullApplier.apply` | 11 synced tables + placeholders | One transaction applies the whole page in dependency order (`sync_pull_applier.dart:156-203`); conflicts are handled inside. |
 
@@ -297,7 +297,7 @@ and every read query.
 ## 8. Settings keys and device identity
 
 | Key | Written by | Read by | Purpose | In JSON backup? |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `theme_mode` | Shell via `NativeBackend.setSetting` | `main.dart` at startup | Dark/light choice | Yes |
 | `remember_login` | Settings screens via `LocalDataOps`/`AppBackend` | `app_shell.dart` | Stay-signed-in preference | Yes |
 | `auth_session` | `SettingsSessionStore` | `SettingsSessionStore` | Opaque local session | **No** (stripped) |
@@ -381,7 +381,7 @@ module.
 Database-focused tests:
 
 | File | Tests | Coverage |
-|---|---:|---|
+| --- | ---: | --- |
 | `test/core/database/local_database_test.dart` | 2 | Fresh schema creates core tables; device id is stable. |
 | `test/core/database/migration_test.dart` | 11 | v5→6, v6→7, v7→8, v8→9, v9→10, v10→11, v13→14, v15→16, v16→17, v17→18 (+v19 backfill), device re-registration. |
 | `test/core/database/pre_migration_backup_test.dart` | 4 | Fresh install no backup; upgrade copies bytes; current file does not clobber; newer file is copied. |
@@ -398,7 +398,7 @@ outbox atomicity, demo-account isolation, pull ordering and idempotency.
 `docs/architecture/database-migration-log.md` for provenance):
 
 | File | Tests | Coverage |
-|---|---:|---|
+| --- | ---: | --- |
 | `test/core/database/schema_characterization_test.dart` | 8 | Fresh v22 schema golden (18 tables); F-2 breadth (fresh, v19, v20, v21); frozen fresh-vs-upgraded diffs for v12/v19/v20/v21/v22. |
 | `test/core/database/historical_fixture_migration_test.dart` | 15 | Genuine v2/v3/v4/v12/v19/v20/v21/v22 fixtures: pre-shape golden + data, upgrade to v22 with data preservation + post golden + integrity/FK checks + `.bak` byte equality, fixture immutability; pre-v6 blocked versions roll back atomically. |
 | `test/core/database/transaction_rollback_test.dart` | 9 | Failure-injection rollback evidence for `saveSale`, `voidSale`, `approveVoidRequest`, `markCompleted`, `deleteEntry`, `addCashMovement`, `closeShift`, restore (induced failure) and restore (FK violation). |
@@ -412,7 +412,7 @@ claim as unverified rather than assuming the fixture chain.
 **Baseline re-measured after the Stage 6.0 additions:**
 
 | Check | Result |
-|---|---|
+| --- | --- |
 | `flutter analyze --fatal-infos` (`app/`) | re-run with Stage 6.0 tests present |
 | `flutter test` (`app/`) | baseline was **643 passed, 1 skipped, 0 failed**; Stage 6.0 adds 35 tests (8 + 15 + 9 + 3) |
 | `dart analyze` (`pos_core`) | **0 issues** (re-run) |
@@ -435,7 +435,6 @@ claim as unverified rather than assuming the fixture chain.
 The graph is recorded, not fixed: Stage 6.0 deliberately keeps sqflite in the
 web compile graph as it is today and changes no composition root.
 
-
 ---
 
 ## 11. Audit findings
@@ -443,7 +442,7 @@ web compile graph as it is today and changes no composition root.
 Findings are recorded, not fixed. None authorize a production change.
 
 | ID | Severity | Finding |
-|---|---|---|
+| --- | --- | --- |
 | **F-1** | High (boundary) | **The web compile graph still contains sqflite.** `main_web.dart` → `app_shell.dart` → `app_backend.dart` imports all seven `Sqflite*Repository` implementations, each importing `package:sqflite/sqflite.dart`. `app_shell.dart` also imports `core/auth/session_store.dart`, which imports sqflite. `cloud_backend.dart` and `web_settings_screen.dart` import the same mixed port/implementation files. The build succeeds because sqflite is web-compilable, but the stated web-protection rule ("web dependency graph free of sqflite") is not literally satisfied. `sqflite_common_ffi`, `path_provider`, `dart:io` and `LocalDatabase` are *not* in the web graph. Fixing this requires separating repository/session contracts from SQLite implementations (Stage 6 target). |
 | **F-2** | Low (schema drift) | **Fresh v22 installs lack `picklist_items_picklist_id`.** The index is created only inside the v20 upgrade branch (`local_database.dart:568-571`); `_createIndexesAndTriggers` does not create it and `_onCreate` calls only that helper. Upgraded databases have the index; fresh databases do not. No data/constraint difference — query performance only. Do not fix during the audit; candidate for a future authorized schema-alignment stage. |
 | **F-3** | Medium (test gap) | Migration tests start from the **current** schema and rewind selected parts, rather than from true historical fixtures. v2–v4, v12, v19 (standalone), v20, v21 and v22 have no dedicated upgrade assertion. A Stage 6 pure move must therefore be verified by schema-diff tests (fresh vs upgraded) before and after, not just by the existing suite. |

@@ -18,7 +18,7 @@ any implementation yet.
 
 ## 2. Flutter application — target layering
 
-```
+```text
 frontend/lib/
 ├── main.dart / main_web.dart        # thin entry points only
 ├── app/                             # composition root
@@ -67,9 +67,9 @@ Rules:
   helpers (`getSetting`, `registerCurrentDevice`) move to the owning module
   or a small `core/database` support API.
 - Each business module owns its repository interface + SQLite implementation
-  + (where applicable) cloud implementation:
+  - (where applicable) cloud implementation:
 
-```
+```text
 features-or-modules/
   sales/       SaleRepository (writes, void workflow) + SaleReportRepository (reads/analytics)
   register/    ShiftRepository (shifts, cash movements, drawer math)
@@ -115,7 +115,7 @@ Internal organization may improve:
 `pos-api/index.ts` (2399 lines) splits into internal modules WITHOUT changing
 the deployed function or its action contract:
 
-```
+```text
 supabase/functions/pos-api/
 ├── index.ts            # Deno.serve, CORS, auth/JWT/feature gating, dispatch
 ├── lib/

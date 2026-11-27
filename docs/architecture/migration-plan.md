@@ -91,7 +91,7 @@ keep if still referenced by tests/private flag).
 ## Risks register
 
 | Risk | Mitigation |
-|---|---|
+| --- | --- |
 | Model move breaks serialization symmetry (local `toMap` vs cloud JSON) | Move is path-only; both sides update in one commit; repo + cloud tests cover round-trips |
 | Shell convergence changes nav behavior/permissions | `kFeatures` filtering already centralized; widget/layout matrix + back-button tests are the gate |
 | `AppBackend` seam leaks sqflite types into web graph | Web build in CI is the hard gate; conditional imports preserved |

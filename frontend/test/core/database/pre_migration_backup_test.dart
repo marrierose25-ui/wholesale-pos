@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart'
+    show databaseFactoryFfi, sqfliteFfiInit;
 import 'package:pos_local_engine/pos_local_engine.dart';
 
 /// The recovery hook this file exists for: a migration that completes and is
@@ -104,22 +106,53 @@ void main() {
     },
   );
 
-  test('a database newer than this build is backed up before the stamp down', () async {
-    // Nothing in this app downgrades on purpose, but sqflite with
-    // onDowngrade == null silently writes the lower version without the
-    // migration, which is a real-data hazard when a beta build has touched the
-    // file. The backup must happen before that write.
-    final db = await LocalDatabase.openAt(dbPath);
-    await db.execute(
-      'PRAGMA user_version = ${LocalDatabase.schemaVersion + 1}',
-    );
-    await db.close();
+  test(
+    'a database newer than this build is refused, not stamped down',
+    () async {
+      // A till that last ran a newer build (or a beta that touched the file).
+      // sqflite with no onDowngrade handler silently rewrote user_version to
+      // the lower number while leaving the newer schema in place; Stage 0
+      // replaces that with an explicit refusal before any metadata write.
+      final db = await LocalDatabase.openAt(dbPath);
+      await db.insert('users', {
+        'id': 'u-newer',
+        'username': 'newer',
+        'password_hash': 'hash',
+        'salt': 'salt',
+        'role': 'OWNER',
+        'is_active': 1,
+        'created_at': '2026-11-23T08:00:00.000Z',
+      });
+      await db.execute(
+        'PRAGMA user_version = ${LocalDatabase.schemaVersion + 1}',
+      );
+      await db.close();
 
-    final before = await File(dbPath).readAsBytes();
-    final reopened = await LocalDatabase.openAt(dbPath);
-    expect(await reopened.getVersion(), LocalDatabase.schemaVersion);
-    await reopened.close();
+      final before = await File(dbPath).readAsBytes();
 
-    expect(await File(backupPath()).readAsBytes(), before);
-  });
+      await expectLater(
+        LocalDatabase.openAt(dbPath),
+        throwsA(isA<UnsupportedDatabaseVersionException>()),
+      );
+
+      // The version was never rewritten and the rows are all still there.
+      sqfliteFfiInit();
+      final check = await databaseFactoryFfi.openDatabase(
+        dbPath,
+        options: OpenDatabaseOptions(readOnly: true),
+      );
+      try {
+        expect(
+          (await check.rawQuery('PRAGMA user_version')).first.values.first,
+          LocalDatabase.schemaVersion + 1,
+        );
+        expect((await check.query('users')).single['id'], 'u-newer');
+      } finally {
+        await check.close();
+      }
+
+      // The safety copy still preserves the newer file's bytes.
+      expect(await File(backupPath()).readAsBytes(), before);
+    },
+  );
 }

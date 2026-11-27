@@ -12,14 +12,14 @@ The single monolithic Edge Function (`index.ts`) was restructured into independe
 
 ### Before
 
-```
+```text
 supabase/functions/pos-api/
 └── index.ts           # ~2399 lines, ~60 action handlers
 ```
 
 ### After
 
-```
+```text
 supabase/functions/pos-api/
 ├── index.ts                        # ~434 lines (router only)
 ├── shared/
@@ -62,7 +62,7 @@ Barrel exports in each `modules/*/index.ts` re-export every action handler so ex
 ## Files changed
 
 | File | Lines before | Lines after | Change |
-|------|-------------|------------|--------|
+| ------ | ------------- | ------------ | -------- |
 | `index.ts` | ~2399 | 434 | −1965 |
 | `shared/auth.ts` | (extracted) | 641 | new |
 | `shared/authorization.ts` | (extracted) | ~50 | new |
@@ -178,7 +178,7 @@ Deno.serve(async (req) => {
 ### Shared layer
 
 | Module | Purpose |
-|--------|---------|
+| -------- | --------- |
 | `auth.ts` | PBKDF2 password hashing, JWT sign/verify, login throttle, demo user seeding, `hasUsers`, `login`, `setupOwner`, `changePassword` |
 | `authorization.ts` | `checkAuthorization` middleware that enforces owner-vs-cashier roles and per-feature permission gates |
 | `helpers.ts` | `json()`, `str()`, `audit()`, `rpcFailure()`, `strip()`, `deSnake()`, `pageLimit()`, `demoUserIds()`, `excludeDemoRows()` |
@@ -188,6 +188,7 @@ Deno.serve(async (req) => {
 ### Module layout per domain
 
 Each domain module follows the same pattern:
+
 - Domain-specific `.ts` file(s) containing the exported async handler functions
 - An `index.ts` barrel that re-exports everything for convenient import by the router
 

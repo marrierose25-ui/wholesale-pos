@@ -97,7 +97,7 @@ class SyncGatewayBackend implements SyncBackend {
   bool get isConfigured => _fnUrl.isNotEmpty;
 
   @override
-  Future<Set<String>> push(List<SyncOutboxEntry> entries) async {
+  Future<SyncPushOutcome> push(List<SyncOutboxEntry> entries) async {
     final license = await _licenseProvider();
     if (license == null || license.trim().isEmpty) {
       // Not activated yet: throw so SyncService leaves rows queued. Selling
@@ -171,27 +171,36 @@ class SyncGatewayBackend implements SyncBackend {
       // No per-entry verdict means nothing is confirmed; leave every row
       // queued and retry. Returning empty (vs ack-all) is fail-safe:
       // retries are cheap, losing a sale is not.
-      return const <String>{};
+      return SyncPushOutcome.empty;
     }
     final idsByEntity = <String, List<String>>{};
     for (final e in entries) {
       (idsByEntity[e.entityId] ??= <String>[]).add(e.id);
     }
     final known = entries.map((e) => e.id).toSet();
+    final entityOf = {for (final e in entries) e.id: e.entityId};
     final acked = <String>{};
+    final rejected = <SyncPushRejection>[];
+    var deferred = 0;
     for (final r in results.whereType<Map>()) {
       final status = '${r['status']}';
-      if (status != 'applied' && status != 'stored' && status != 'rejected') {
-        continue;
-      }
       final entryId = '${r['entryId'] ?? ''}';
-      if (entryId.isNotEmpty && known.contains(entryId)) {
-        acked.add(entryId);
-      } else {
-        acked.addAll(idsByEntity['${r['entityId']}'] ?? const <String>[]);
+      final resolvedId = entryId.isNotEmpty && known.contains(entryId)
+          ? entryId
+          : (idsByEntity['${r['entityId']}'] ?? const <String>[]).firstOrNull;
+      if (resolvedId == null) continue;
+      if (status == 'deferred') deferred++;
+      if (status == 'applied') {
+        acked.add(resolvedId);
+      } else if (status == 'rejected') {
+        rejected.add(SyncPushRejection(
+          entryId: resolvedId,
+          entityId: entityOf[resolvedId] ?? '${r['entityId'] ?? ''}',
+          error: '${r['error'] ?? 'rejected by server'}',
+        ));
       }
     }
-    return acked;
+    return SyncPushOutcome(acked: acked, rejected: rejected, deferred: deferred);
   }
 
   /// Fetches every transaction recorded after [cursor] — including the ones

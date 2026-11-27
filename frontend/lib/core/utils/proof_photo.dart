@@ -1,5 +1,5 @@
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'proof_photo_io.dart'
     if (dart.library.js_interop) 'proof_photo_web.dart'

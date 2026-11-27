@@ -84,10 +84,17 @@ dependencies:
   # the dashboard redesign. Included as a font asset here so they are baked into
   # the web bundle rather than relying on the SDK-internal transitive copy.
   cupertino_icons: ^1.0.8
+  # Material/Cupertino widget libraries, decoupled from the Flutter SDK in
+  # Flutter 3.50 (package:flutter/material.dart and cupertino.dart are
+  # deprecated). All UI imports use these packages directly.
+  material_ui: ^1.11.0
+  cupertino_ui: ^1.1.7
   # Direction B typography: Geist (body) and Geist Mono (data/monetary values).
   # The TTFs are bundled under assets/fonts and declared below, so no runtime
   # fetch or google_fonts dependency is involved.
 dev_dependencies:
+  integration_test:
+    sdk: flutter
   flutter_test:
     sdk: flutter
 
@@ -114,6 +121,7 @@ flutter:
 
   assets:
     - assets/sounds/warehouse_alert.wav
+    - integration_test/fixtures/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

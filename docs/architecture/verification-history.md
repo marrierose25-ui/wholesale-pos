@@ -1,5 +1,33 @@
 # Verification History — Wholesale POS
 
+## Current verified CI — 2026-11-27
+
+**Commit:** `81960c34d30f78733e1f3bfc9b0d834b19bf84ca` (`fix(request3): require amount equality in manual legacy-reversal link`).
+
+**GitHub Actions run:** [#39, attempt 2](https://github.com/marrierose25-ui/wholesale-pos/actions/runs/45895098268) — completed successfully on 2026-11-27. All five jobs passed.
+
+| Job / gate | Verified result |
+|---|---|
+| Flutter verify | `flutter analyze --fatal-infos`: no issues; **768 tests passed, 1 skipped**; web release build passed |
+| Edge Functions (Deno) | Formatting and entry-point type checks passed; **81 tests passed, 0 failed** |
+| Android database | Integration tests passed |
+| iOS database | POSIX interrupted-migration test, iOS simulator build, and integration tests passed |
+| Supabase cold replay | **14 migrations** applied to an empty PostgreSQL 17 database; H1 invariants/concurrency, Request 2 licensing/rate limits/concurrency, Request 3 actor authorization/acceptance/bootstrap concurrency/financial integrity/cash-movement concurrency all passed |
+
+The skipped test is `frontend/test/integration/sync_matrix_live_test.dart`; it requires `MATRIX_CODE`, `MATRIX_USER`, and `MATRIX_PASS`. Therefore the run does **not** establish live multi-device synchronization against a staging tenant. The cold replay proves the migration chain builds from empty PostgreSQL; it does not prove which versions are installed in the production Supabase project. The cited run tests the baseline commit above, not subsequent remediation PR commits; see PR #1 and its own checks for those changes.
+
+## Remediation PR verification — 2026-11-27
+
+The source fixes are being reviewed on [PR #1](https://github.com/marrierose25-ui/wholesale-pos/pull/1), head `8905f6fae6d49652e459a0a0ebfa2b72b3565de2`. The latest PR-triggered workflow runs observed for this head are:
+
+- [Verify / Deno / Supabase checks](https://github.com/marrierose25-ui/wholesale-pos/actions/runs/45938015669): Deno formatting/type/tests and Supabase cold migration replay completed successfully; Flutter `verify`, Android database, and iOS database jobs were still running at last inspection.
+- [SonarQube](https://github.com/marrierose25-ui/wholesale-pos/actions/runs/45938015661): still running at last inspection.
+
+Therefore the PR's final verification is **pending**, not passed. Earlier workflow runs on intermediate PR commits were cancelled or superseded; they are not treated as final-head evidence. This section must be updated from the final head's completed run before merging.
+
+---
+
+
 **Date:** 2026-11-21
 **Version:** Stage 10 completion
 **Purpose:** Record exact test counts, commands, and verification evidence across Stages 1–10.
@@ -11,10 +39,10 @@
 The following test counts have been reported at different stages:
 
 | Stage | Date | Location | Claimed Count | Actual Count | Notes |
-|-------|------|----------|---------------|--------------|-------|
+| ------- | ------ | ---------- | --------------- | -------------- | ------- |
 | Stage 6 | 2026-10-20 | `docs/DEVELOPMENT.md` line 77 | 741 | — | PWA build verification mentioned |
 | Stage 7 | 2026-10-24 | `docs/DEVELOPMENT.md` | 684 | — | After sync fixes |
-| Stage 8 | 2026-11-18 | `docs/DEVELOPMENT.md` line 87 | 684 passed, 1 skipped | To be verified |
+| Stage 8 | 2026-11-18 | `docs/DEVELOPMENT.md` line 87 | 684 passed, 1 skipped | — | To be verified |
 | Current (Stage 9) | 2026-11-21 | `docs/architecture/architecture-rules.md` line 211 | 684 passed, 1 skipped | — | Verified |
 
 ### Discrepancy Explanation
@@ -36,13 +64,15 @@ The variation between 678, 682, and 684 counts is due to:
 ### Flutter Test Suite
 
 **Command (as documented in docs/DEVELOPMENT.md):**
+
 ```powershell
 cd frontend
 flutter test
 ```
 
 **Expected output (per Stage 8 verification):**
-```
+
+```text
 684 passed, 1 skipped
 ```
 
@@ -51,6 +81,7 @@ flutter test
 ### Flutter Analyze
 
 **Command:**
+
 ```powershell
 cd frontend
 flutter analyze
@@ -63,6 +94,7 @@ flutter analyze
 ### Flutter Build Web
 
 **Command:**
+
 ```powershell
 cd frontend
 flutter build web --release -t lib/main_web.dart
@@ -75,6 +107,7 @@ flutter build web --release -t lib/main_web.dart
 ### Windows Build
 
 **Command:**
+
 ```powershell
 cd frontend
 powershell -File tools\build_release.ps1 windows
@@ -87,6 +120,7 @@ powershell -File tools\build_release.ps1 windows
 ### Deno Type Check
 
 **Command:**
+
 ```powershell
 cd supabase/functions
 deno check "pos-api"
@@ -95,6 +129,7 @@ deno check "pos-api"
 **Expected output:** Exit code 0, all 29 files pass
 
 **Verification evidence:**
+
 - From commit `9145a9f`: `deno check "supabase/functions/pos-api"` exit code 0
 - From `docs/architecture/architecture-rules.md` line 214
 - From `docs/DEVELOPMENT.md` line 84
@@ -112,11 +147,13 @@ deno check "pos-api"
 The web entry graph must not reach `sqflite`, `dart:io`, `path_provider`, or `LocalDatabase`.
 
 **Evidence:**
+
 - `docs/architecture/architecture-rules.md` Rule L2: Verified by architecture test - PASS
 - `docs/DEVELOPMENT.md` line 83: "Web graph has zero sqflite/dart:io/path_provider/LocalDatabase imports from main_web.dart entry point"
 - Architecture test `'web entry graph never reaches the native engine or SQLite'` - PASS
 
 **Actual imports in web path:**
+
 - `main_web.dart` → `app_shell.dart` → `pos_contracts/AppBackend`
 - No imports from `pos_local_engine`, `sqflite`, `dart:io`
 - Cloud HTTP clients used instead
@@ -126,12 +163,14 @@ The web entry graph must not reach `sqflite`, `dart:io`, `path_provider`, or `Lo
 **Verification status:** PASS
 
 `pos_cloud_engine` has zero imports of:
+
 - `sqflite`
 - `dart:io`
 - `path_provider`
 - Any Flutter-specific SDK packages
 
 **Allowed imports only:**
+
 - `http`
 - `uuid`
 - Package imports from `pos_contracts` and `pos_core`
@@ -163,6 +202,7 @@ static const int schemaVersion = 22;
 **Verification status:** PASS
 
 Per `docs/architecture/api-action-inventory.md`:
+
 - All 60 API actions documented
 - Modularization complete: ~2399 lines → ~434 lines router + 28 module files
 - `deno check` passed for all 29 files
@@ -170,7 +210,7 @@ Per `docs/architecture/api-action-inventory.md`:
 ### Action Verification by Module
 
 | Module | Actions | Status |
-|--------|---------|--------|
+| -------- | --------- | -------- |
 | auth | 4 | ✅ Verified |
 | catalog | 4 | ✅ Verified |
 | sales | 7 | ✅ Verified |
@@ -192,7 +232,7 @@ Per `docs/architecture/api-action-inventory.md`:
 **Verification status:** PASS
 
 | Migration | Date | Tables Affected |
-|-----------|------|-----------------|
+| ----------- | ------ | ----------------- |
 | v15 | 2026-11-05 | picklists, picklist_items, picklist_customers |
 | v16 | 2026-11-06 | finance_entries.payment_method |
 | v17 | 2026-11-06 | users.username (unique) |
@@ -209,7 +249,7 @@ Per `docs/architecture/api-action-inventory.md`:
 **Reference:** `docs/architecture/feature-ownership.md` Table Ownership Map
 
 | Table | Owning Repo | Sync | Export | Cross-Module Deps |
-|-------|-------------|------|--------|-------------------|
+| ------- | ------------- | ------ | -------- | ------------------- |
 | users | pos_local_engine | ✅ | ✅ (strips pw_hash/salt) | sale, shift, audit |
 | products | pos_local_engine | ✅ | ✅ | - |
 | sales | pos_local_engine | ✅ | ✅ | finance, audit |
@@ -234,7 +274,7 @@ Per `docs/architecture/api-action-inventory.md`:
 From `docs/architecture/architecture-rules.md` Section "Verification Checklist":
 
 | Item | Status | Notes |
-|------|--------|-------|
+| ------ | -------- | ------- |
 | `flutter analyze --fatal-infos` | PASS | No infos |
 | `flutter test` | 684 passed, 1 skipped | To be independently verified |
 | `flutter build web --release -t lib/main_web.dart` | PASS | |
@@ -253,7 +293,7 @@ From `docs/architecture/architecture-rules.md` Section "Verification Checklist":
 
 ### deno check result
 
-```
+```bash
 $ deno check "supabase/functions/pos-api"
 Check file:///path/to/supabase/functions/pos-api/index.ts
 # Exit code: 0
@@ -262,7 +302,7 @@ Check file:///path/to/supabase/functions/pos-api/index.ts
 
 ### Flutter test result (documented)
 
-```
+```bash
 $ flutter test
 00:00 + 684: All tests passed!
 1: skipped
@@ -270,7 +310,7 @@ $ flutter test
 
 ### Windows release build
 
-```
+```bash
 $ powershell -File tools/build_release.ps1 windows
 # Build succeeds at: build\windows\x64\runner\Release
 # WholesalePOS_Windows_Release.zip (16 entries, no licence, no local DB)
@@ -281,7 +321,7 @@ $ powershell -File tools/build_release.ps1 windows
 ## Known Test Counts by Source
 
 | Source | Count | Context |
-|--------|-------|---------|
+| -------- | ------- | --------- |
 | `docs/DEVELOPMENT.md` line 77 | ~741 | PWA build verification (differing methodology) |
 | `docs/DEVELOPMENT.md` line 87 | 684 passed, 1 skipped | Stage 8 Flutter test |
 | `docs/architecture/architecture-rules.md` line 211 | 684 passed, 1 skipped | Current verification checklist |
@@ -306,6 +346,7 @@ $ powershell -File tools/build_release.ps1 windows
 ### Architecture Test Extension
 
 **Command:**
+
 ```powershell
 cd frontend
 flutter test test/architecture_test.dart
@@ -316,7 +357,7 @@ flutter test test/architecture_test.dart
 **New test groups added:**
 
 | Group | Tests | Description |
-|-------|-------|-------------|
+| ------- | ------- | ------------- |
 | `frontend boundaries` | 3 | raw Database handles check, platform-specific engine import guard, nav tab presence |
 | `native/web symmetry` | 2 | AppBackend getter completeness, cloud backend import isolation |
 | `backend parity` | 2 | equal repo count across backends, domain-to-cloud mapping verification |
@@ -326,7 +367,7 @@ flutter test test/architecture_test.dart
 ### Documentation Artifacts Created
 
 | Artifact | Location | Status |
-|----------|----------|--------|
+| ---------- | ---------- | -------- |
 | Final Integrity Audit | `docs/architecture/final-integrity-audit.md` | ✅ Created |
 | Synchronization Integrity Report | `docs/architecture/synchronization-integrity-report.md` | ✅ Created |
 | Commercial Readiness Report | `docs/architecture/commercial-readiness-report.md` | ✅ Created |
@@ -347,7 +388,7 @@ flutter test test/architecture_test.dart
 ### Existing Docs Updated with Stage 10 Evidence
 
 | Document | Changes |
-|----------|---------|
+| ---------- | --------- |
 | `final-architecture-overview.md` | Version bumped to Stage 10; documentation artifact index added |
 | `verification-history.md` | Stage 10 section added with test counts, new tests, doc inventory |
 | `architecture-rules.md` | Rule list extended with architecture-test evidence references |
@@ -357,7 +398,7 @@ flutter test test/architecture_test.dart
 ## Verification Artifacts
 
 | Artifact | Location | Verification Method |
-|----------|----------|---------------------|
+| ---------- | ---------- | --------------------- |
 | Flutter test results | `frontend/test/` | `flutter test` |
 | Analysis results | `frontend/lib/` | `flutter analyze` |
 | Web build output | `app/build/web/` | `flutter build web` |
@@ -387,7 +428,8 @@ The current architecture has been verified through:
 9. **Migration verification:** 10 migrations, v22 is latest
 10. **Documentation:** 16 new docs created, 3 existing docs updated with Stage 10 evidence
 
-**All verification checks PASS.** Stage 10 — FINAL ARCHITECTURE ENFORCEMENT, VERIFICATION AND DOCUMENTATION — is complete.
+**All verification checks PASS.** Stage 10 — FINAL ARCHITECTURE ENFORCEMENT, VERIFICATION AND DOCUMENTATION — is complete
+
 ---
 
 ## Post-Migration Verification — Batches 1–6, Audit, Governance (2026-11-22)
@@ -396,7 +438,7 @@ The `app/` → `frontend/` + `backend/` directory migration and the six test-mig
 batches completed. All figures below are from commands actually executed on `main`.
 
 | Check | Command | Result |
-|---|---|---|
+| --- | --- | --- |
 | Flutter analyzer | `flutter analyze` (from `frontend/`) | **exit 0 — "No issues found!"** (was 482 issues / 321 errors at migration start; 41 lint diagnostics resolved via `dart fix`) |
 | Flutter test suite | `flutter test` (from `frontend/`) | **exit 0 — 689 passed, ~1 skipped** (`sync_matrix_live_test` self-skips without `MATRIX_*` env), 0 failed |
 | Package analysis | `dart analyze` in each `backend/dart/*` | pos_core, pos_contracts, pos_local_engine, pos_cloud_engine — **all clean** |
@@ -426,3 +468,358 @@ batches completed. All figures below are from commands actually executed on `mai
 - `docs/DATABASE.md` corrected to schema v22 with full v2–v22 migration list;
   `docs/DEVELOPMENT.md` corrected to the `frontend/`+`backend/` layout,
   `backend/supabase/` paths, 10 migrations, and current test/build results.
+
+---
+
+## Stage 0 — SQLite Data Integrity Hardening (2026-11-23)
+
+Branch `stage0/sqlite-integrity-hardening` from HEAD `ec47ff4`.
+
+### Schema version
+
+`LocalDatabase.schemaVersion` is now **23** (was 22). The `<23>` step adds
+`CREATE INDEX IF NOT EXISTS picklist_items_picklist_id`, converging the
+missing picklist index (finding F-2) onto fresh installs and onto v20/v21/v22
+databases that never ran the `<20` branch.
+
+### Repairs verified
+
+| Defect | Fix | Evidence |
+| --- | --- | --- |
+| No downgrade protection — sqflite silently stamped `user_version` down | `onDowngrade` throws `UnsupportedDatabaseVersionException` inside the version transaction, before `setVersion`; file untouched | `downgrade_protection_test.dart` (3 tests) |
+| v2–v5 upgrades failed (`no such table: finance_entries` at `<6`) | `_createIndexesAndTriggers` gates each index/trigger on verified table existence; deferred indexes are created by later steps in the same atomic upgrade | `historical_fixture_migration_test.dart` — genuine v2/v3/v4/v5 fixtures now reach v23 with data preserved |
+| `picklist_items_picklist_id` missing on fresh and v20+ installs | v23 convergence migration + guarded creation in `_createIndexesAndTriggers`/`_onCreate` | `PRAGMA index_list` assertions in fixture + characterization tests |
+| `<5` trigger/index recreation not idempotent | `IF NOT EXISTS` on `prevent_second_open_shift_*` and `sales_shift_id` | shift-integrity tests still pass; reopening is a no-op |
+
+### Fixture coverage
+
+- New deterministic `v5` fixture (reconstructed: v4 `_onCreate` @0d071dd +
+  v5 upgrade DDL @ea2dc36; no commit ever stamped v5).
+- Upgrade matrix now exercised end-to-end: **v2, v3, v4, v5, v12, v19, v20,
+  v21, v22 → v23**, each asserting `user_version`, golden schema snapshot,
+  `integrity_check`, `foreign_key_check`, row-level data preservation, `.bak`
+  byte-identity, and the picklist index.
+- Schema goldens regenerated for v23 (`fresh_v23.json`, `v*_post.json`,
+  `fresh_vs_upgraded_v*.json`); `fresh_v22.json` removed.
+
+### Test results (this branch)
+
+- `flutter test test/core/database/` — **61 passed, 0 failed** (includes the
+  3 new downgrade tests and 9 fixture versions × migration+pre-shape).
+- `flutter analyze` / `flutter test` (full suite) — see below.
+
+- `flutter analyze` (from `frontend/`) — **exit 0, "No issues found!"**
+- `dart analyze` (pos_local_engine) — **clean**
+- `flutter test` (full suite, from `frontend/`) — **698 passed, 1 skipped
+  (`sync_matrix_live_test` self-skips without `MATRIX_*` env), 0 failed**
+- Targeted regression areas all green inside that run: migration tests,
+  historical fixture tests (9 versions), transaction rollback tests,
+  schema characterization, pre-migration backup, backup/export/restore
+  characterization, sale repository, shift/register and picklist repository
+  tests.
+
+### Stage 0 closure addendum (2026-11-23, commits c92b1fc..a5b0aa6)
+
+- `test: cover historical SQLite migrations` — genuine/reconstructed fixtures
+  for every shipped schema version: v2, v3, v4, v5(recon), v6, v8, v9, v10,
+  v12, v13, v14, v15, v16, v17, v19, v20, v21, v22 → v23. v1 predates git;
+  v5/v7/v11/v18 never shipped as schemaVersion.
+- `test: verify interrupted SQLite migration recovery` — real OS process
+  kill at `start`/`mid`/`late` checkpoints inside the upgrade transaction;
+  DB verified still at complete v12, `.bak` byte-identical, next open
+  completes to v23. 3/3 passed.
+- `feat: improve unsupported database recovery guidance` — dedicated
+  `UnsupportedDatabaseVersionView` (versions, backup status, recovery
+  steps); 2 widget tests passed.
+- `test: verify native SQLite migration platforms` —
+  `integration_test/database_migration_test.dart` + CI jobs
+  `android-database`/`ios-database` added. **Not yet executed**: no Android
+  emulator or iOS toolchain on the dev machine; first CI run pending.
+
+### Stage 1 addendum — cloud repository consolidation (2026-11-23)
+
+- `pos_cloud_engine` confirmed canonical owner of cloud repositories and
+  `pos-api` transport. The seven `frontend/lib/core/cloud/*.dart` duplicates
+  were verified line-by-line equivalent to the package implementations
+  (identical action strings, payloads, response mapping, error handling);
+  `CloudSaleRepository` differs only by delegating its six reporting methods
+  to `CloudReportingRepository`, whose bodies are byte-identical to the former
+  inline implementations.
+- `CloudBackend` now imports `package:pos_cloud_engine/pos_cloud_engine.dart`
+  only; all frontend-local cloud files deleted. `reporting` remains `null`;
+  session/device/activation wiring unchanged.
+- Architecture test extended: deleted-file list now includes the seven cloud
+  duplicates, and a new `cloud backend composition` test asserts
+  `CloudBackend` imports the package barrel and no `../cloud/` paths.
+- Verification: see Stage 1 report — `flutter analyze`, `flutter test`,
+  `dart analyze` (pos_cloud_engine), and web/windows/android release builds.
+
+### Stage 4.1 / H1 closure addendum (2026-11-24)
+
+- Supabase schema verified against a real export: `supabase db pull
+  --remote --declarative` (read-only) + local `postgres:17` Docker replica.
+  Migrations `20261125000000`–`20261127000000` applied cleanly; new
+  `20261127000000` adds the missing `void_requests(customer_id, sale_id)`
+  FK and a one-PENDING-request-per-sale unique index.
+- Six void-invariant scenarios executed as live SQL (settle, post-void
+  insert refusal, both concurrency orderings, missing/cross-tenant sale
+  FK, unattributed-void fail-visible, sync_apply rejection + privilege
+  checks). Script: `backend/supabase/tests/h1_void_invariants/`.
+- `interrupted_migration_test` flake fixed via process-tree kill
+  (`taskkill /T`); no tests skipped or weakened.
+- Full report: `docs/architecture/stage4-h1-closure.md`.
+
+## Stage 5 Request 2 — Acceptance Repair & Verification (2026-11-24)
+
+Branch `stage5/licensing-and-server-schema`. All commands run locally on
+Windows; PostgreSQL 17 via Docker (`postgres:17`, port 55432) with a
+`psql` shim into the container.
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Deno format | `deno fmt functions/` (cwd `backend/supabase`) | exit 0 (4 files formatted) |
+| Deno check | `deno check functions/{licensing,pos-api,sync}/index.ts` | exit 0 |
+| Deno tests | `deno test --allow-env --allow-read functions/{licensing,pos-api,sync}/tests/` | **67 passed, 0 failed** |
+| Flutter analyze | `flutter analyze --fatal-infos` (cwd `frontend`) | **exit 0 — no issues** (61.5s) |
+| Flutter test | `flutter test` (cwd `frontend`) | **746 passed, 1 skipped, 0 failed** (~9min; one pre-existing architecture-test defect fixed — see below) |
+| Architecture test | `flutter test test/architecture_test.dart` | 20 passed (re-run after fix) |
+| PG cold replay | `bash backend/supabase/scripts/replay_migrations.sh` | **exit 0 — 6 migrations applied**, all object/grant/RLS assertions pass |
+| H1 invariants | `psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/h1_void_invariants/h1_void_invariants_test.sql` | **ALL H1 INVARIANT CHECKS PASSED** |
+| H1 concurrency | `bash backend/supabase/tests/h1_void_invariants/concurrency.sh` | **ALL PASSED** (both orderings + true race) |
+| Request 2 invariants | `psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request2_licensing/request2_licensing_test.sql` | **ALL REQUEST-2 LICENSE/RATE-LIMIT CHECKS PASSED** |
+| Request 2 concurrency | `bash backend/supabase/tests/request2_licensing/concurrency.sh` | **ALL PASSED** (same/different fingerprint, revocation race, rate-limit atomicity: exactly `limit` allowed of N) |
+| Web release | `flutter build web --release -t lib/main_web.dart` | **PASS** — `√ Built build\web` (380.9s) |
+| Windows release | `flutter build windows --release` | **PASS** — `√ Built wholesale_pos_app.exe` (300.3s) |
+
+Request 2 corrections in this commit: `register_device` now checks the
+ACTIVE (code, fingerprint) row before any revoked row and reactivates the
+deterministically-latest revoked row (fixes the
+`device_reg_active_unique` collision); activation + pos-api public actions
+are additionally throttled per trusted source address (rightmost
+platform-appended `X-Forwarded-For` entry, HMAC'd) plus a global bucket;
+`deactivate_device` requires a verified Ed25519 device-license proof
+(`shared/license_proof.ts`, `POS_API_LICENSE_PUBLIC_KEY`) and fails closed
+for unbound sessions; `replay_migrations.sh` asserts exact function
+signatures; H1/Request-2 SQL suites assert outcomes with `ON_ERROR_STOP=1`
+and include two-session concurrency runners; CI triggers on `stage5/**`
+with unmasked gates.
+
+Note: `test/architecture_test.dart` previously asserted zero
+`pos_cloud_engine` imports from `lib/features/` while its own contract
+states pos_cloud_engine is permitted — corrected to forbid NEW
+`pos_local_engine` imports outside the two tracked legacy files.
+
+## Stage 5 — Final Acceptance Correction (2026-11-24)
+
+Branch `stage5/licensing-and-server-schema`. Corrections after independent
+review of `e1a3849`. All commands run locally on Windows; PostgreSQL 17 via
+the `pg17-replay` Docker container (`psql` shimmed through `docker exec`).
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Deno format | `deno fmt --check backend/supabase/functions` | exit 0 (44 files) |
+| Deno check | `deno check functions/{licensing,pos-api,sync}/index.ts` | exit 0 |
+| Deno tests | `deno test --allow-env --allow-read functions/{licensing,pos-api,sync}/tests/` | **72 passed, 0 failed** (was 67; +5 new: 2 source-hint parsing/trust tests on licensing, 2 on pos-api public throttle, 1 copied-license bearer test) |
+| Flutter analyze | `flutter analyze --fatal-infos` (cwd `frontend`) | **exit 0 — no issues** (113.1s) |
+| Flutter test run 1 | `flutter test` (cwd `frontend`) | **747 passed, 1 skipped, 0 failed** (~10.7min) |
+| Flutter test run 2 | `flutter test` (cwd `frontend`) | **747 passed, 1 skipped, 0 failed** (~9.8min) |
+| Interrupted-migration test | `flutter test test/core/database/interrupted_migration_test.dart` ×2 standalone | **3/3 checkpoints pass both runs** |
+| PG cold replay | `bash backend/supabase/scripts/replay_migrations.sh` | **exit 0 — 6 migrations applied** |
+| H1 invariants | `psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/h1_void_invariants/h1_void_invariants_test.sql` | **ALL H1 INVARIANT CHECKS PASSED** |
+| H1 concurrency | `bash backend/supabase/tests/h1_void_invariants/concurrency.sh` | **ALL PASSED** |
+| Request 2 invariants | `psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request2_licensing/request2_licensing_test.sql` | **ALL REQUEST-2 LICENSE/RATE-LIMIT CHECKS PASSED** |
+| Request 2 concurrency | `bash backend/supabase/tests/request2_licensing/concurrency.sh` | **ALL PASSED** |
+| Web release | `flutter build web --release -t lib/main_web.dart` | **PASS** — `√ Built build\web` (269.8s) |
+| Windows release | `flutter build windows --release` | **PASS** — `√ Built wholesale_pos_app.exe` (109.6s) |
+
+Corrections in this commit:
+
+- **Windows kill-test flake:** `interrupted_migration_test` raced the OS —
+  `taskkill /T /F` returns before the kernel finishes reaping the worker's
+  process tree, so the read-only reopen could hit `SQLITE_BUSY`
+  ("database is locked") on `PRAGMA user_version`. The reopen now polls
+  with a bounded 60s deadline until the lock clears; every rollback,
+  backup-integrity and recovery assertion is unchanged, and a lock that
+  never clears still fails.
+- **Client-IP trust:** the rightmost `X-Forwarded-For` entry is now
+  classified as a **best-effort hint**, not a trusted identity —
+  Supabase's hosted-ingress contract for that header is unverified
+  (Supabase's own examples read the header, but no published doc
+  guarantees sanitization, and a client may control the whole value).
+  `trustedSourceAddress` renamed to `bestEffortSourceAddress` in
+  `pos-api/shared/helpers.ts` and the self-contained `licensing` copy;
+  comments in `licensing/index.ts`, `pos-api/shared/auth.ts`, and
+  `pos-api/index.ts` state the guarantee is carried by the durable global
+  + per-code buckets. New tests pin parsing behaviour separately from the
+  trust assumption: rotating the rightmost entry mints fresh buckets
+  (served, not throttled) while a missing header shares the bounded
+  "unknown" bucket — on both `licensing` and `pos-api` public actions.
+- **Device-proof semantics:** `shared/license_proof.ts`,
+  `modules/licensing/index.ts`, and `sync/index.ts` now state plainly
+  that the signed license is a **bearer document** — no device-held key,
+  no challenge-response, so a copied `license_code` from another active
+  device verifies identically. New `devices_test` case proves a copied
+  license lets a request assert another device's identity (self-
+  deactivation follows the license's fingerprint). Recorded as a security
+  limitation in `docs/LICENSING.md` "Limitations" for the Request 3
+  threat-model review.
+- **CI:** new `deno` job in `ci.yml` runs `deno fmt --check`,
+  `deno check` on all three entry points, and `deno test` over the
+  licensing/pos-api/sync suites — previously local-only. The
+  `supabase-replay` PostgreSQL 17 job is unchanged.
+
+GitHub Actions verification (Windows verify + Deno + supabase-replay +
+android/ios migration jobs) is reported on the push run, not here.
+
+## Stage 6 Request 3 — final financial-integrity and authentication corrections
+
+Branch `stage6/request3-security-hardening`. Corrections after independent
+review of `1ffcf9a`. All commands run locally on Windows; PostgreSQL 17 via
+the `pg17-replay` Docker container (`psql` shimmed through `docker exec`).
+
+| Check | Command | Result |
+| --- | --- | --- |
+| PG cold replay | `bash backend/supabase/scripts/replay_migrations.sh` | **exit 0 — 10 migrations applied** (incl. `20261204000000_request3_financial_integrity`) |
+| Request 3 financial integrity | `psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request3_financial_integrity/request3_financial_integrity_test.sql` | **ALL PASSED** — 15 assertions (F1–F6) |
+| Cash-leg concurrency | `bash backend/supabase/tests/request3_financial_integrity/concurrency.sh` | **ALL PASSED** — two-session WITHDRAWAL + DEPOSIT races, one leg each |
+| Request 3 bootstrap concurrency | `bash backend/supabase/tests/request3_acceptance/concurrency.sh` | **ALL PASSED** |
+| Request 3 acceptance SQL | `psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request3_acceptance/request3_acceptance_test.sql` | **ALL PASSED** |
+| Request 3 actor authorization | `psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request3_actor_authorization/request3_actor_authorization_test.sql` | **ALL PASSED** |
+| Request 2 licensing | `psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/request2_licensing/request2_licensing_test.sql` | **ALL PASSED** |
+| H1 void invariants | `psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/h1_void_invariants/h1_void_invariants_test.sql` | **ALL PASSED** (13 assertions) |
+| Deno format | `deno fmt --check backend/supabase/functions` | exit 0 (45 files) |
+| Deno check | `deno check functions/{licensing,pos-api,sync}/index.ts` | exit 0 |
+| Deno tests | `deno test --allow-env --allow-read functions/{licensing,pos-api,sync}/tests/` | **81 passed, 0 failed** |
+| Flutter analyze | `flutter analyze --fatal-infos` (cwd `frontend`) | **exit 0 — no issues** (83.3s) |
+| Flutter test | `flutter test` (cwd `frontend`) | **768 passed, 1 skipped, 0 failed** (~6.5min) |
+| Owner bootstrap service | `flutter test test/core/sync/owner_bootstrap_service_test.dart` | **6/6 passed** (incl. session-less reconciliation) |
+| Web release | `flutter build web --release -t lib/main_web.dart` | reported below |
+
+Corrections in this commit:
+
+- **Atomic cash-leg dedup (P0).** Migration
+  `20261204000000_request3_financial_integrity` replaces the deposit-only
+  guard with `cash_movements_one_per_finance_leg` — unique
+  `(customer_id, source_finance_entry_id, type)` — after a non-destructive
+  duplicate diagnostic that aborts with a remediation hint instead of
+  deleting money rows. `pos_add_cash_movement`,
+  `pos_complete_finance_unchecked` and `pos_delete_finance_entry_unchecked`
+  all write legs with `ON CONFLICT DO NOTHING`, so concurrent different-id
+  pushes for the same leg converge on one row; the loser is returned the
+  existing movement (`duplicate: true`), never an error.
+- **Legacy reversal reconciliation (P0).** Unlinked pre-20261204 reversals
+  are adopted only on exact generated-reason + amount + actor evidence for
+  ONE collection (`pos_legacy_reversal_candidates` /
+  `pos_legacy_reversal_entry_candidates` — never amount alone). Unique
+  matches are linked and audited (`LEGACY_REVERSAL_LINKED`); ambiguous
+  matches refuse the delete and leave the staged `finance_entry` PENDING
+  with `LEGACY_REVERSAL_AMBIGUOUS`, preserving payload and movements for
+  operator resolution. `pos_sync_apply` classifies the ambiguity as a
+  deferral, not a rejection.
+- **Pass-the-hash closure (P0).** `setup_owner` no longer mints an OWNER
+  JWT for pre-hashed credentials: first-owner creation returns
+  `{ok, created}` and same-id retry returns `{ok, reconciled, user_id}` —
+  both session-less. Only the plaintext path (password verified) issues a
+  token. `OwnerBootstrapService` already keyed completion on `ok`, never on
+  a JWT; a new Flutter suite pins session-less reconciliation, conflict,
+  lost-response and retry behaviour.
+- **CI.** The `supabase-replay` PostgreSQL 17 job now also runs the Request
+  3 owner-bootstrap concurrency script, the new financial-integrity SQL
+  suite, and the cash-movement concurrency script — previously local-only.
+
+### Legacy reversal safety follow-up (same branch)
+
+| Check | Command | Result |
+| --- | --- | --- |
+| PG cold replay | `replay_migrations.sh` | **exit 0 — 11 migrations applied** (incl. `20261205000000_request3_legacy_reversal_safety`) |
+| Request 3 financial integrity | `psql -f request3_financial_integrity_test.sql` | **ALL PASSED** — 23 assertions (F1–F6 + G1/G4/G5/G6) |
+| Financial-integrity concurrency | `concurrency.sh` | **ALL PASSED** — incl. competing deletes (C) and claim-before-update race (D) |
+| H1 / Request 2 / actor-auth / acceptance SQL + all four concurrency scripts | as in CI | **ALL PASSED** |
+| Deno fmt/check/tests | as in CI | fmt clean, **81 passed, 0 failed** |
+| Flutter analyze / test / web build | as in CI | **0 issues**, **768 passed, 1 skipped**, web build PASS |
+
+Corrections in this commit:
+
+- **Bidirectional uniqueness.** A legacy reversal is adopted only when it
+  strongly matches one collection AND that collection is the movement's
+  only possible owner (strong and weak entry-candidate counts both one).
+- **Actor evidence enforced.** `pos_legacy_actor_ok` requires the movement
+  user to equal a non-null `deleted_by`, `completed_by`, or delete-time
+  actor; the `deleted_by IS NULL` bypass is removed — missing evidence is
+  ambiguity, not a match.
+- **Safe link adoption.** `UPDATE ... RETURNING` detects lost races; the
+  real association is re-read and candidates recomputed (bounded loop).
+- **Fail-safe text matching.** Zero exact candidates no longer implies no
+  reversal: plausible unlinked reversals (same amount, reversal-shaped
+  reason) defer the delete with `LEGACY_REVERSAL_AMBIGUOUS` instead of
+  risking a duplicate server-written leg.
+
+### Late legacy reversal dedup + operator resolution (same branch)
+
+| Check | Command | Result |
+| --- | --- | --- |
+| PG cold replay | `replay_migrations.sh` | **exit 0 — 12 migrations applied** (incl. `20261206000000_request3_late_reversal_dedup`) |
+| Request 3 financial integrity | `psql -f request3_financial_integrity_test.sql` | **ALL PASSED** — 34 assertions (F/G/H/I sections) |
+| All four concurrency scripts | as in CI | **ALL PASSED** |
+| H1 / Request 2 / actor-auth / acceptance SQL | as in CI | **ALL PASSED** |
+| Deno fmt/check/tests | as in CI | fmt clean, **81 passed, 0 failed** |
+| Flutter analyze / test / web build | as in CI | **0 issues**, **768 passed, 1 skipped**, web build PASS |
+
+Corrections in this commit:
+
+- **Late-arrival dedup.** `pos_add_cash_movement_unchecked` now checks
+  LINKED reversals before inserting an unlinked legacy withdrawal: same
+  reason text + amount + actor evidence, strong AND weak counts both one
+  returns the existing movement as `duplicate: true`; anything weaker
+  raises `LEGACY_REVERSAL_AMBIGUOUS` so `pos_sync_apply` defers the row
+  PENDING instead of acknowledging an uncertain outcome.
+- **Operator resolution.** New `cash_movement_reconciliations` table +
+  `pos_mark_movement_unrelated` record an audited per-(movement,
+  collection) `UNRELATED` verdict; the plausible-reversal blocker honours
+  it, the movement row is never modified, and manual source-linking
+  remains for genuine matches.
+
+### Reason-drift late dedup + audited manual link (same branch)
+
+| Check | Command | Result |
+| --- | --- | --- |
+| PG cold replay | `replay_migrations.sh` | **exit 0 — 13 migrations applied** (incl. `20261207000000_request3_reason_drift_audited_link`) |
+| Request 3 financial integrity | `psql -f request3_financial_integrity_test.sql` | **ALL PASSED** — 45 assertions (F/G/H/I/J sections) |
+| All four concurrency scripts | as in CI | **ALL PASSED** |
+| H1 / Request 2 / actor-auth / acceptance SQL | as in CI | **ALL PASSED** |
+| Deno fmt/check/tests | as in CI | fmt clean, **81 passed, 0 failed** |
+| Flutter analyze / test / web build | as in CI | **0 issues**, **768 passed, 1 skipped**, web build PASS |
+
+Corrections in this commit:
+
+- **Reason-drift deferral.** When exact reason-text candidates fail, the
+  insert path now checks plausible LINKED reversals (same amount,
+  reversal-shaped reason, verified actor via `pos_legacy_actor_ok`). Any
+  hit raises `LEGACY_REVERSAL_AMBIGUOUS` so `pos_sync_apply` defers the
+  row PENDING — a category rename can no longer produce a second drawer
+  withdrawal. Actor-conflicting movements are not plausible and record
+  normally.
+- **Audited manual link.** `pos_link_legacy_reversal` replaces the
+  documented bare `UPDATE`: validates unlinked WITHDRAWAL + COMPLETED
+  CASH collection + deposit leg, refuses conflicting legs, links
+  atomically, writes `LEGACY_REVERSAL_LINKED` with operator-attested
+  identity. Idempotent identical retry writes no second audit.
+- **Audited verdict revocation.** `pos_revoke_unrelated_verdict` replaces
+  "delete the reconciliation row": removes the verdict AND writes
+  `LEGACY_REVERSAL_UNRELATED_REVOKED`, preserving the original
+  `MARKED_UNRELATED` audit event.
+
+### Manual-link amount integrity (same branch)
+
+| Check | Command | Result |
+| --- | --- | --- |
+| PG cold replay | `replay_migrations.sh` | **exit 0 — 14 migrations applied** (incl. `20261208000000_request3_manual_link_amount`) |
+| Request 3 financial integrity | `psql -f request3_financial_integrity_test.sql` | **ALL PASSED** — 51 assertions (incl. J3–J5) |
+| All four concurrency scripts | as in CI | **ALL PASSED** |
+| H1 / Request 2 / actor-auth / acceptance SQL | as in CI | **ALL PASSED** |
+| Deno fmt/check/tests | as in CI | fmt clean, **81 passed, 0 failed** |
+| Flutter analyze / test / web build | as in CI | **0 issues**, **768 passed, 1 skipped**, web build PASS |
+
+Correction: `pos_link_legacy_reversal` now requires exact amount equality
+between the withdrawal and the COMPLETED CASH collection before linking —
+mismatch refuses with no link, no audit, both records untouched (J3–J5).

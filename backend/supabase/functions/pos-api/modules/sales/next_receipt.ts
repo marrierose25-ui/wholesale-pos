@@ -1,6 +1,5 @@
 import type { Ctx } from "../../shared/types.ts";
-import { json, str, strip } from "../../shared/helpers.ts";
-import { shopDay } from "../../shared/helpers.ts";
+import { json, shopDay } from "../../shared/helpers.ts";
 
 export async function nextReceiptNumber(db: any, ctx: Ctx) {
   const day = shopDay();

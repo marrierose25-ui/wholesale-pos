@@ -5,7 +5,7 @@ Reference documentation for the POS API, synchronization endpoints, licensing se
 ## Modules
 
 | Document | Description |
-|----------|-------------|
+| ---------- | ------------- |
 | [Authentication](authentication.md) | Login, setup_owner, session management, JWT claims |
 | [pos-api Endpoints](pos-api.md) | Full action inventory across 8 modules (catalog, sales, register, finance, warehouse, reporting, users, auth) |
 | [Synchronization API](synchronization-api.md) | Push/pull protocol, outbox schema, cursor semantics |
@@ -16,7 +16,7 @@ Reference documentation for the POS API, synchronization endpoints, licensing se
 
 All endpoints are behind a single Supabase Edge Function:
 
-```
+```text
 https://<YOUR_PROJECT>.supabase.co/functions/v1/pos-api
 ```
 
@@ -38,16 +38,19 @@ Read-only actions may use `GET` where documented.
 ## Response Shape
 
 **Success:**
+
 ```json
 { "ok": true, "data": { ... } }
 ```
 
 **Business error (client-resolvable):**
+
 ```json
 { "ok": false, "error": "Sale not found.", "code": "NOT_FOUND" }
 ```
 
 **Server error (retry-safe):**
+
 ```json
 { "ok": false, "error": "Internal error." }
 ```
@@ -58,7 +61,7 @@ HTTP status codes: `200` for success, `400`–`403` for client errors, `405` for
 
 Include a JWT in the `Authorization` header:
 
-```
+```text
 Authorization: Bearer <jwt_token>
 ```
 

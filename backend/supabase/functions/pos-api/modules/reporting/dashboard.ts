@@ -1,7 +1,5 @@
 import type { Ctx } from "../../shared/types.ts";
-import { json, strip } from "../../shared/helpers.ts";
-
-import { cashierPerformance } from "./revenue.ts";
+import { computeExpectedCash, json } from "../../shared/helpers.ts";
 
 export async function dashboardSummary(
   db: any,
@@ -47,17 +45,4 @@ export async function dashboardSummary(
       pending_void_requests: Number(t.pending_void_requests ?? 0),
     },
   });
-}
-
-async function computeExpectedCash(
-  db: any,
-  customerId: string,
-  shift: any,
-): Promise<number> {
-  const { data, error } = await db.rpc("pos_expected_cash", {
-    p_customer: customerId,
-    p_shift_id: shift.id,
-  });
-  if (error) throw new Error(error.message);
-  return Promise.resolve(Number(data ?? 0));
 }

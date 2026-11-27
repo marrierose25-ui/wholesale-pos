@@ -1,5 +1,8 @@
 # Final Architecture Overview — Wholesale POS
 
+> **Historical snapshot warning (2026-11-27):** This architecture overview describes the Stage 10 repository state from **2026-11-21**. It uses the previous `app/` and `supabase/` paths and SQLite schema v22. It is retained as a historical record, not as the current implementation map or production sign-off. Current source paths are `frontend/`, `backend/dart/`, and `backend/supabase/`; current SQLite schema is v24, and the active server migration chain has 14 SQL files. For current implementation facts, use [current-state.md](current-state.md), [CLOUD_SYNC.md](../CLOUD_SYNC.md), [DATABASE.md](../DATABASE.md), and [the migration-chain README](../../backend/supabase/migrations/README.md).
+
+
 **Date:** 2026-11-21
 **Version:** Stage 10 completion (FINAL ARCHITECTURE ENFORCEMENT, VERIFICATION AND DOCUMENTATION)
 **Scope:** Unified view of the entire Wholesale POS architecture across all repositories and platforms.
@@ -87,7 +90,7 @@ graph TD
 ### Key Repository Modules
 
 | Module | Purpose | Location |
-|--------|---------|----------|
+| -------- | --------- | ---------- |
 | **pos_core** | Pure Dart domain entities | `backend/dart/pos_core/` |
 | **pos_contracts** | Abstract interfaces and contracts | `backend/dart/pos_contracts/` |
 | **pos_local_engine** | SQLite implementations | `backend/dart/pos_local_engine/` |
@@ -328,7 +331,7 @@ erDiagram
 ### Local Database Schema v22
 
 | Table | Purpose | Sync | Export |
-|-------|---------|------|--------|
+| ------- | --------- | ------ | -------- |
 | `users` | Auth, roles | ✅ | ✅ (strips pw_hash/salt) |
 | `products` | Catalog | ✅ | ✅ |
 | `devices` | Device identity | ✅ (id only) | ✅ |
@@ -417,15 +420,18 @@ graph TD
 ### Supabase Architecture
 
 **Edge Functions:** Two functions deployed
+
 - `pos-api`: Primary API handler (router + 28 modules)
 - `licensing`: Ed25519 license verification
 
 **Database:** Postgres with Supabase extensions
+
 - Schema managed via `supabase/migrations/` (10 files, v22)
 - Row Level Security (RLS) enabled
 - Service role bypasses RLS for edge functions
 
 **Sync Gateway:** `sync/index.ts` (Phase 18)
+
 - Authenticates via Ed25519 license
 - Idempotent push via outbox
 - Tenant isolation via `customer_id`
@@ -478,7 +484,7 @@ sequenceDiagram
 ### Sync Components
 
 | Component | Location | Purpose |
-|-------------|----------|---------|
+| ------------- | ---------- | --------- |
 | `SyncOutbox` | `frontend/lib/core/sync/` | Transactional queue |
 | `SyncService` | `frontend/lib/core/sync/` | Background sync loop |
 | `SyncPullApplier` | `pos_local_engine/` | Cloud→local reconciliation |
@@ -486,6 +492,7 @@ sequenceDiagram
 | `SyncOutboxRepository` | `pos_local_engine/` | Queue management |
 
 ### Sync Invariant
+
 Every business write enqueues to `sync_outbox` **in the same transaction**. This guarantees atomicity between business state and sync queue.
 
 ---
@@ -538,46 +545,54 @@ graph TD
 
 ### API Modules
 
-**modules/auth/**
+#### modules/auth/
+
 - `login` - Authenticate user, return JWT
 - `setup_owner` - Bootstrap owner account
 - `has_users` - Check if tenant has users
 
-**modules/catalog/**
+#### modules/catalog/
+
 - `list_products` - Product catalog
 - `save_product` - Create/update product
 - `update_product` - Partial update
 - `setProductActive` - Activate/deactivate
 
-**modules/sales/**
+#### modules/sales/
+
 - `insert_sale` - Record sale
 - `search_sales` - History search
 - `next_receipt_number` - Get counter
 - `voidSale` / `requestVoid` / `listVoidRequests` / `decideVoid` - Void workflow
 
-**modules/register/**
+#### modules/register/
+
 - `openShift` / `closeShift` / `getActiveShift` / `ensureShift` - Shift management
 - `addCashMovement` / `listCashMovements` - Cash tracking
 - `registerSnapshot` / `shiftSummary` - Reporting
 
-**modules/finance/**
+#### modules/finance/
+
 - Category CRUD + recycle bin
 - Entry CRUD + status lifecycle
 - Financial summaries
 
-**modules/warehouse/**
+#### modules/warehouse/
+
 - Picklist CRUD
 - Picklist item management
 - Customer/supplier management
 - Status derivation (`derivePicklistStatus`)
 
-**modules/reporting/**
+#### modules/reporting/
+
 - `dashboardSummary` - KPIs
 - `revenueTrend` - Time series
 - `reportSummary` - Detailed report
 - `listAudit` - Audit log
 
-**modules/users/**
+#### modules/users/
+
 - User CRUD (OWNER_ONLY for mutations)
 - Permission management
 - Phone updates
@@ -660,29 +675,34 @@ graph LR
 ### Business Flow Patterns
 
 **Sale Completion Flow:**
+
 1. `insert_sale` (POS screen) → `SqfliteSaleRepository.saveSale()`
 2. Creates sale row + sale_items in transaction
 3. Enqueues `sync_outbox` entry
 4. Cloud: `pos_create_sale` RPC applies with `customer_id` stamp
 
 **Shift Close Flow:**
+
 1. Cashier enters `closingCash`
 2. `closeShift` computes `expectedCashMinorUnits`
 3. Records `SHIFT_CLOSED` audit log
 4. Enqueues shift for sync
 
 **Void Request Flow:**
+
 1. Cashier calls `requestVoid`
 2. Creates `VOID_REQUEST` with `PENDING` status
 3. Owner calls `approveVoid` or `rejectVoid`
 4. `approveVoid` runs normal void (sale marked VOIDED)
 
 **Finance Entry Flow:**
+
 1. Create `FINANCE_ENTRY` with `PENDING` status
 2. Call `markCompleted` moves to `COMPLETED`
 3. Never affects revenue reports
 
 **Picklist Status Derivation:**
+
 - `PENDING`: no items taken
 - `PARTIAL`: some items taken
 - `COMPLETED`: all items fully taken
@@ -743,7 +763,7 @@ graph LR
 ### Architecture Documents
 
 | Document | Purpose |
-|----------|---------|
+| ---------- | --------- |
 | `final-architecture-overview.md` | Unified view of all components, dependency flows, schema, sync, API modules |
 | `architecture-rules.md` | Enforceable layering rules, sync invariants, security policies, verification checklist |
 | `final-integrity-audit.md` | Deep-dive audit of schema v22, transaction sites, F-series known behaviors, commercial acceptance criteria |
@@ -754,7 +774,7 @@ graph LR
 ### User Guide Documents
 
 | Document | Audience |
-|----------|----------|
+| ---------- | ---------- |
 | `user-guide/README.md` | Index / quick-start pointer |
 | `user-guide/getting-started.md` | Install, activate license, create owner account, import data |
 | `user-guide/owner-guide.md` | Users, reports, sync config, licensing, backups |
@@ -766,7 +786,7 @@ graph LR
 ### API Reference Documents
 
 | Document | Content |
-|----------|---------|
+| ---------- | --------- |
 | `api/README.md` | Base URL, request/response shape, auth header, rate limits |
 | `api/authentication.md` | `login`, `setup_owner`, `has_users`, token revocation, password policy |
 | `api/pos-api.md` | Full action inventory: 61 actions across 9 modules with auth requirements |
@@ -779,7 +799,7 @@ graph LR
 ## Appendix: Mermaid Diagram Index
 
 | Diagram | File | Description |
-|---------|------|-------------|
+| --------- | ------ | ------------- |
 | 1. Full Repository Architecture | `final-architecture-overview.md` | All components and their relationships |
 | 2. Native App Dependency Flow | `final-architecture-overview.md` | How native app initializes and depends |
 | 3. Web App Dependency Flow | `final-architecture-overview.md` | How PWA initializes and depends |

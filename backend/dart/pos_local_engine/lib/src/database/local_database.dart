@@ -3,16 +3,47 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
-import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_common/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart' as ffi;
 import 'package:uuid/uuid.dart';
 
 import 'package:pos_contracts/pos_contracts.dart';
 
+/// Thrown when the on-disk database carries a `user_version` newer than
+/// [LocalDatabase.schemaVersion] — it was last written by a newer build of
+/// the app (for example after a rollback to an older installer).
+///
+/// The open is refused inside sqflite's version transaction, before
+/// `user_version` is rewritten, so the file, its tables, indexes, triggers and
+/// rows are left byte-for-byte intact. There is no automatic repair: an older
+/// build cannot know what the newer schema means, and guessing is how data
+/// gets destroyed.
+class UnsupportedDatabaseVersionException implements Exception {
+  const UnsupportedDatabaseVersionException({
+    required this.foundVersion,
+    required this.supportedVersion,
+  });
+
+  /// The `PRAGMA user_version` found on disk.
+  final int foundVersion;
+
+  /// The newest schema this build knows how to migrate.
+  final int supportedVersion;
+
+  @override
+  String toString() {
+    return 'This database was created by a newer version of Wholesale POS '
+        '(schema v$foundVersion); this build only supports up to schema '
+        'v$supportedVersion. The app will not open it rather than risk '
+        'damaging your data. Install the newer version of the app (or restore '
+        'the previous installation), then open the database again. The file '
+        'was not modified.';
+  }
+}
+
 class LocalDatabase {
   static const String databaseName = 'wholesale_pos.db';
-  static const int schemaVersion = 22;
+  static const int schemaVersion = 24;
   static const String deviceIdFileName = 'device_id.txt';
   static const String themeSettingKey = 'theme_mode';
 
@@ -22,7 +53,9 @@ class LocalDatabase {
 
   LocalDatabase._();
 
-  static void _configureFactory() {
+  /// Selects the SQLite factory for the current platform. Called by
+  /// [openAt]/[openInMemory] and by the Flutter-side `openApplicationDatabase`.
+  static void configureFactoryForPlatform() {
     // On desktop (and in `flutter test`, which runs on the host VM) use the
     // pure-Dart FFI engine. On Android/iOS the native sqflite plugin is already
     // the default factory, so nothing is overridden there.
@@ -32,21 +65,15 @@ class LocalDatabase {
     }
   }
 
-  static Future<Database> open() async {
-    _configureFactory();
-    final dir = await getApplicationSupportDirectory();
-    return _openAt(p.join(dir.path, databaseName));
-  }
-
   /// Opens a database at an explicit path. Used by tests that need to exercise
   /// migrations against a real file.
   static Future<Database> openAt(String path) async {
-    _configureFactory();
+    configureFactoryForPlatform();
     return _openAt(path);
   }
 
   static Future<Database> openInMemory() async {
-    _configureFactory();
+    configureFactoryForPlatform();
     return databaseFactory.openDatabase(
       inMemoryDatabasePath,
       options: OpenDatabaseOptions(
@@ -54,6 +81,7 @@ class LocalDatabase {
         onConfigure: (db) async => await db.execute('PRAGMA foreign_keys = ON'),
         onCreate: _onCreate,
         onUpgrade: _onUpgrade,
+        onDowngrade: _onDowngrade,
       ),
     );
   }
@@ -72,7 +100,28 @@ class LocalDatabase {
         },
         onCreate: _onCreate,
         onUpgrade: _onUpgrade,
+        onDowngrade: _onDowngrade,
       ),
+    );
+  }
+
+  /// Refuses to open a database written by a newer build.
+  ///
+  /// sqflite calls this inside the version transaction, before it stamps
+  /// `user_version` with this build's version. Throwing rolls the transaction
+  /// back, so the on-disk version — and everything else in the file — is
+  /// preserved exactly. Without this callback sqflite would silently rewrite
+  /// `user_version` to the lower number while leaving the newer schema in
+  /// place, and every later open by the newer build would see a database it
+  /// no longer recognises.
+  static Future<void> _onDowngrade(
+    Database db,
+    int oldVersion,
+    int newVersion,
+  ) async {
+    throw UnsupportedDatabaseVersionException(
+      foundVersion: oldVersion,
+      supportedVersion: newVersion,
     );
   }
 
@@ -93,12 +142,10 @@ class LocalDatabase {
   ///     it to save, and `onCreate` is not a migration.
   ///   * An already-current file is skipped, so a bad migration that DID land
   ///     cannot overwrite last week's good backup on the next launch.
-  ///   * A file NEWER than this build is backed up too. With no `onDowngrade`
-  ///     handler sqflite neither migrates nor refuses: it silently stamps the
-  ///     file with the lower version (see `database_mixin.dart`'s
-  ///     `setVersion(options.version!)`), which is exactly the kind of quiet
-  ///     write that deserves a copy — it happens when a shop rolls a till back
-  ///     to an older installer.
+  ///   * A file NEWER than this build is backed up too. `_onDowngrade` then
+  ///     refuses the open, so the copy is the only write-adjacent artefact:
+  ///     it preserves the newer file's bytes before the shop rolls a till back
+  ///     to an older installer and wonders where the data went.
   ///
   /// A failed backup does NOT stop the open. A till that cannot write its
   /// backup still has to trade; refusing to start turns a disk problem into a
@@ -225,11 +272,20 @@ class LocalDatabase {
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  /// Test-only hook invoked inside the upgrade transaction at named
+  /// checkpoints (`start`, `mid`, `late`). It is always null in production;
+  /// tests use it to pause a migration deterministically so a worker process
+  /// can be killed mid-transaction and SQLite's crash recovery verified.
+  /// Not a production control — never set it outside tests.
+  static Future<void> Function(String checkpoint)? migrationTestPauseHook;
+
   static Future<void> _onUpgrade(
     Database db,
     int oldVersion,
     int newVersion,
   ) async {
+    final pause = migrationTestPauseHook;
+    if (pause != null) await pause('start');
     if (oldVersion < 2) {
       await db.execute('''
         CREATE TABLE shifts (
@@ -287,18 +343,20 @@ class LocalDatabase {
         AppLogger.warn('MIGRATION WARNING: one_open_shift index failed: $e');
       }
       await db.execute('''
-        CREATE TRIGGER prevent_second_open_shift_insert
+        CREATE TRIGGER IF NOT EXISTS prevent_second_open_shift_insert
         BEFORE INSERT ON shifts WHEN NEW.status = 'OPEN'
         AND EXISTS (SELECT 1 FROM shifts WHERE status = 'OPEN')
         BEGIN SELECT RAISE(ABORT, 'A shift is already open'); END
       ''');
       await db.execute('''
-        CREATE TRIGGER prevent_second_open_shift_update
+        CREATE TRIGGER IF NOT EXISTS prevent_second_open_shift_update
         BEFORE UPDATE OF status ON shifts WHEN NEW.status = 'OPEN'
         AND EXISTS (SELECT 1 FROM shifts WHERE status = 'OPEN' AND id != NEW.id)
         BEGIN SELECT RAISE(ABORT, 'A shift is already open'); END
       ''');
-      await db.execute('CREATE INDEX sales_shift_id ON sales(shift_id)');
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS sales_shift_id ON sales(shift_id)',
+      );
     }
     if (oldVersion < 6) {
       await _rebuildCashMovementsWithUserForeignKey(db);
@@ -401,6 +459,7 @@ class LocalDatabase {
       }
       await _createIndexesAndTriggers(db);
     }
+    if (pause != null) await pause('mid');
     if (oldVersion < 11) {
       // Per-account feature permissions replace the fixed Owner/Cashier nav
       // split. Additive column, guarded so a re-run is a no-op, then backfill
@@ -620,6 +679,47 @@ class LocalDatabase {
         );
       }
     }
+    if (oldVersion < 23) {
+      // Converge `picklist_items_picklist_id` onto every database. The index
+      // was introduced with the picklist tables at v20 but only created on
+      // the `<20` upgrade branch, so databases created at v20 or later —
+      // fresh installs and v20/v21/v22 upgrades alike — never received it.
+      // `IF NOT EXISTS` makes this a no-op wherever it already exists.
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS picklist_items_picklist_id '
+        'ON picklist_items(picklist_id)',
+      );
+    }
+    if (oldVersion < 24) {
+      // Request 3 acceptance — durable quarantine for rejected sync rows and
+      // independent deleter attribution on finance entries. Additive and
+      // guarded so a re-run is a no-op.
+      final outboxCols = await db.rawQuery('PRAGMA table_info(sync_outbox)');
+      if (!outboxCols.any((column) => column['name'] == 'status')) {
+        await db.execute(
+          "ALTER TABLE sync_outbox ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'",
+        );
+      }
+      if (!outboxCols.any((column) => column['name'] == 'last_error')) {
+        await db.execute('ALTER TABLE sync_outbox ADD COLUMN last_error TEXT');
+      }
+      if (!outboxCols.any((column) => column['name'] == 'quarantined_at')) {
+        await db.execute(
+          'ALTER TABLE sync_outbox ADD COLUMN quarantined_at TEXT',
+        );
+      }
+      await db.execute(
+        'CREATE INDEX IF NOT EXISTS sync_outbox_quarantined '
+        "ON sync_outbox(status) WHERE status = 'quarantined'",
+      );
+      final entryCols = await db.rawQuery(
+        'PRAGMA table_info(finance_entries)',
+      );
+      if (!entryCols.any((column) => column['name'] == 'deleted_by')) {
+        await db.execute('ALTER TABLE finance_entries ADD COLUMN deleted_by TEXT');
+      }
+    }
+    if (pause != null) await pause('late');
   }
 
   /// Proof photos are BLOBs in their own table (schema 16), one per movement.
@@ -712,66 +812,115 @@ class LocalDatabase {
     await db.execute('ALTER TABLE cash_movements_v6 RENAME TO cash_movements');
   }
 
+  /// Creates every index and trigger the current schema expects.
+  ///
+  /// `_onUpgrade` calls this helper at several points (`<6` through `<10`),
+  /// which means it can run while `finance_entries`, `void_requests` or
+  /// `sync_outbox` do not exist yet — their tables are only created by later
+  /// steps in the same upgrade. Every statement is therefore gated on the
+  /// table actually being present; a later call later in the same upgrade
+  /// creates whatever was deferred, so every supported path still converges
+  /// on the full index/trigger set.
   static Future<void> _createIndexesAndTriggers(DatabaseExecutor db) async {
-    try {
-      await db.execute(
-        'CREATE UNIQUE INDEX IF NOT EXISTS one_open_shift '
-        "ON shifts(status) WHERE status = 'OPEN'",
-      );
-    } catch (e) {
-      AppLogger.warn('WARNING: one_open_shift index failed: $e');
+    final tables = (await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type = 'table'",
+    )).map((row) => row['name'] as String).toSet();
+
+    Future<void> indexOn(String table, String sql) async {
+      if (tables.contains(table)) await db.execute(sql);
     }
-    await db.execute(
+
+    if (tables.contains('shifts')) {
+      try {
+        await db.execute(
+          'CREATE UNIQUE INDEX IF NOT EXISTS one_open_shift '
+          "ON shifts(status) WHERE status = 'OPEN'",
+        );
+      } catch (e) {
+        AppLogger.warn('WARNING: one_open_shift index failed: $e');
+      }
+      await db.execute('''
+        CREATE TRIGGER IF NOT EXISTS prevent_second_open_shift_insert
+        BEFORE INSERT ON shifts WHEN NEW.status = 'OPEN'
+        AND EXISTS (SELECT 1 FROM shifts WHERE status = 'OPEN')
+        BEGIN SELECT RAISE(ABORT, 'A shift is already open'); END
+      ''');
+      await db.execute('''
+        CREATE TRIGGER IF NOT EXISTS prevent_second_open_shift_update
+        BEFORE UPDATE OF status ON shifts WHEN NEW.status = 'OPEN'
+        AND EXISTS (SELECT 1 FROM shifts WHERE status = 'OPEN' AND id != NEW.id)
+        BEGIN SELECT RAISE(ABORT, 'A shift is already open'); END
+      ''');
+    }
+    await indexOn(
+      'sales',
       'CREATE INDEX IF NOT EXISTS sales_shift_id ON sales(shift_id)',
     );
-    await db.execute(
+    await indexOn(
+      'sales',
       'CREATE INDEX IF NOT EXISTS sales_created_at ON sales(created_at)',
     );
-    await db.execute(
+    await indexOn(
+      'sale_items',
       'CREATE INDEX IF NOT EXISTS sale_items_sale_id ON sale_items(sale_id)',
     );
-    await db.execute(
-      'CREATE INDEX IF NOT EXISTS audit_logs_created_at ON audit_logs(created_at)',
+    await indexOn(
+      'audit_logs',
+      'CREATE INDEX IF NOT EXISTS audit_logs_created_at '
+      'ON audit_logs(created_at)',
     );
-    await db.execute(
-      'CREATE INDEX IF NOT EXISTS cash_movements_shift_id ON cash_movements(shift_id)',
+    await indexOn(
+      'cash_movements',
+      'CREATE INDEX IF NOT EXISTS cash_movements_shift_id '
+      'ON cash_movements(shift_id)',
     );
-    await db.execute(
+    await indexOn(
+      'finance_entries',
       'CREATE INDEX IF NOT EXISTS finance_entries_category_id '
       'ON finance_entries(category_id)',
     );
-    await db.execute(
+    await indexOn(
+      'finance_entries',
       'CREATE INDEX IF NOT EXISTS finance_entries_status '
       'ON finance_entries(status)',
     );
-    await db.execute(
+    await indexOn(
+      'finance_entries',
       'CREATE INDEX IF NOT EXISTS finance_entries_entry_date '
       'ON finance_entries(entry_date)',
     );
-    await db.execute(
+    await indexOn(
+      'void_requests',
       'CREATE INDEX IF NOT EXISTS void_requests_sale_id '
       'ON void_requests(sale_id)',
     );
-    await db.execute(
+    await indexOn(
+      'void_requests',
       'CREATE INDEX IF NOT EXISTS void_requests_status '
       'ON void_requests(status)',
     );
-    await db.execute(
+    await indexOn(
+      'sync_outbox',
       'CREATE INDEX IF NOT EXISTS sync_outbox_pending '
       'ON sync_outbox(synced_at)',
     );
-    await db.execute('''
-      CREATE TRIGGER IF NOT EXISTS prevent_second_open_shift_insert
-      BEFORE INSERT ON shifts WHEN NEW.status = 'OPEN'
-      AND EXISTS (SELECT 1 FROM shifts WHERE status = 'OPEN')
-      BEGIN SELECT RAISE(ABORT, 'A shift is already open'); END
-    ''');
-    await db.execute('''
-      CREATE TRIGGER IF NOT EXISTS prevent_second_open_shift_update
-      BEFORE UPDATE OF status ON shifts WHEN NEW.status = 'OPEN'
-      AND EXISTS (SELECT 1 FROM shifts WHERE status = 'OPEN' AND id != NEW.id)
-      BEGIN SELECT RAISE(ABORT, 'A shift is already open'); END
-    ''');
+    // The quarantine index needs the v24 `status` column, which does not
+    // exist yet on mid-upgrade calls — only create it once the column is
+    // there (fresh installs have it in the CREATE TABLE; upgrades get it in
+    // the <24 block, which also creates this index itself).
+    final outboxCols = await db.rawQuery('PRAGMA table_info(sync_outbox)');
+    if (outboxCols.any((column) => column['name'] == 'status')) {
+      await indexOn(
+        'sync_outbox',
+        'CREATE INDEX IF NOT EXISTS sync_outbox_quarantined '
+        "ON sync_outbox(status) WHERE status = 'quarantined'",
+      );
+    }
+    await indexOn(
+      'picklist_items',
+      'CREATE INDEX IF NOT EXISTS picklist_items_picklist_id '
+      'ON picklist_items(picklist_id)',
+    );
     await _createShiftCashierGuards(db);
   }
 
@@ -790,6 +939,10 @@ class LocalDatabase {
   /// when a sale lands before its drawer, and it is replaced when the shift row
   /// itself arrives.
   static Future<void> _createShiftCashierGuards(DatabaseExecutor db) async {
+    final tables = (await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type = 'table'",
+    )).map((row) => row['name'] as String).toSet();
+    if (!tables.contains('shifts') || !tables.contains('users')) return;
     await db.execute('''
       CREATE TRIGGER IF NOT EXISTS shifts_cashier_must_exist_insert
       BEFORE INSERT ON shifts WHEN NEW.cashier_id != ''
@@ -955,6 +1108,7 @@ class LocalDatabase {
         completed_by TEXT,
         updated_at TEXT NOT NULL,
         payment_method TEXT,
+        deleted_by TEXT,
         FOREIGN KEY(category_id) REFERENCES finance_categories(id),
         FOREIGN KEY(created_by) REFERENCES users(id),
         FOREIGN KEY(completed_by) REFERENCES users(id)
@@ -1053,7 +1207,10 @@ class LocalDatabase {
         operation TEXT NOT NULL,
         payload TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        synced_at TEXT
+        synced_at TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        last_error TEXT,
+        quarantined_at TEXT
       )
     ''');
 

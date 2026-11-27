@@ -1,5 +1,5 @@
 import type { Ctx } from "../../shared/types.ts";
-import { audit, json, str } from "../../shared/helpers.ts";
+import { audit, json, str, userStamp } from "../../shared/helpers.ts";
 import {
   CASHIER,
   FEATURE_KEYS,
@@ -7,14 +7,11 @@ import {
   normalizePhone,
   OWNER,
   PHONE_INVALID,
+  revokeActorGrants,
 } from "../../shared/auth.ts";
 
 // userStamp is used across user mutations — mirroring the sync gateway paging requirement
-export function userStamp(
-  patch: Record<string, unknown>,
-): Record<string, unknown> {
-  return { ...patch, received_at: new Date().toISOString() };
-}
+export { userStamp };
 
 export async function createUser(db: any, ctx: Ctx, body: any) {
   const rawName = str(body.username);
@@ -51,6 +48,9 @@ export async function createUser(db: any, ctx: Ctx, body: any) {
       ok: false,
       error: `Password must be at least ${minLen} characters.`,
     }, 400);
+  }
+  if (password.length > 256) {
+    return json({ ok: false, error: "Password is too long." }, 400);
   }
   const rawPerms = Array.isArray(body.permissions)
     ? body.permissions.map(String)
@@ -220,6 +220,9 @@ export async function resetPassword(db: any, ctx: Ctx, body: any) {
       error: `Password must be at least ${minLen} characters.`,
     }, 400);
   }
+  if (password.length > 256) {
+    return json({ ok: false, error: "Password is too long." }, 400);
+  }
   const { salt, hash } = await hashPassword(password);
   const up = await db.from("pos_users").update(
     userStamp({
@@ -230,6 +233,7 @@ export async function resetPassword(db: any, ctx: Ctx, body: any) {
   )
     .eq("customer_id", ctx.customerId).eq("id", target);
   if (up.error) throw new Error(up.error.message);
+  await revokeActorGrants(db, ctx.customerId, target, null);
   await audit(
     db,
     ctx.customerId,
@@ -293,6 +297,7 @@ export async function setUserActive(db: any, ctx: Ctx, body: any) {
   if (!Array.isArray(up.data) || up.data.length !== 1) {
     return json({ ok: false, error: "User not found." }, 404);
   }
+  await revokeActorGrants(db, ctx.customerId, target, null);
   await audit(
     db,
     ctx.customerId,
@@ -360,6 +365,7 @@ export async function deleteUser(db: any, ctx: Ctx, body: any) {
       .eq("customer_id", ctx.customerId).eq("id", target);
     if (del.error) throw new Error(del.error.message);
   }
+  await revokeActorGrants(db, ctx.customerId, target, null);
   await audit(
     db,
     ctx.customerId,

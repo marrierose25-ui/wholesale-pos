@@ -24,7 +24,7 @@ This report documents all discrepancies found by inspecting 23 documentation fil
 ### 1.1 DATABASE.md — Schema Version Claim
 
 | Location | Claim (Before) | Actual | Discrepancy | Action |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `docs/DATABASE.md` title | "schema version 9" | `LocalDatabase.schemaVersion = 22` | **Wrong version in title** | ✅ Updated to "schema version 22" |
 | `docs/DATABASE.md` body | "currently 14" | `LocalDatabase.schemaVersion = 22` | **Wrong version in body** | ✅ Updated to "currently 22" |
 
@@ -35,7 +35,7 @@ This report documents all discrepancies found by inspecting 23 documentation fil
 ### 1.2 DATABASE.md — Export Claims vs Reality
 
 | Location | Claim | Actual | Discrepancy | Action |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `docs/DATABASE.md` | "exports contain password hashes" | `DataExporter.exportToJson` deliberately strips `pw_hash`/`salt` | **Wrong export claim** | ✅ Updated to "password hashes and licensing credentials are deliberately omitted" |
 
 **Status:** ✅ **FIXED**
@@ -43,7 +43,7 @@ This report documents all discrepancies found by inspecting 23 documentation fil
 ### 1.3 LICENSING.md — Two-Factor Authentication Claim
 
 | Location | Claim | Actual | Discrepancy | Action |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `docs/LICENSING.md` | No 2FA described anywhere | Actual implementation has no 2FA mechanism | **False flag - No discrepancy** | ✅ Reviewed, no changes needed |
 
 **Status:** ✅ **REVIEWED** — Licensing documentation accurately describes Ed25519 v1/v2 license formats and activation flow. No 2FA implementation exists.
@@ -55,7 +55,7 @@ This report documents all discrepancies found by inspecting 23 documentation fil
 ### 2.1 Two Sources of Truth for Server Schema
 
 | Source | Contents | Status | Action |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `supabase/migrations/` | 10 timestamped migration files | **Authoritative** | ✅ Classified in sql-file-inventory.md |
 | `docs/postgres_schema.sql` | Manual DDL script | Reference only | ✅ Documented as reference-only |
 | `docs/*.sql` (17 files) | Manually-applied SQL scripts | Historical reference | ✅ Classified in sql-file-inventory.md |
@@ -65,7 +65,7 @@ This report documents all discrepancies found by inspecting 23 documentation fil
 ### 2.2 Duplicate Navigation Shell Documentation
 
 | Location | Claim | Actual | Discrepancy | Action |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `docs/architecture/current-state.md` | Documents two parallel shells (main.dart vs app_shell.dart) as known problem | Actual code confirms two entry points sharing ONE shell | **Claim accurate** | ✅ feature-ownership.md rewritten with correct understanding |
 
 **Status:** ✅ **DOCUMENTED** — The architecture is: TWO entry points, ONE shared shell, THREE backends (Abstract + 2 concrete implementations).
@@ -73,7 +73,7 @@ This report documents all discrepancies found by inspecting 23 documentation fil
 ### 2.3 Duplicate Architecture Doc References
 
 | Doc | Issue | Action |
-|---|---|---|
+| --- | --- | --- |
 | `migration-plan.md` | Uses different stage numbering | ✅ Flagged in report |
 | `target-state.md` | Uses different stage numbering | ✅ Flagged in report |
 
@@ -84,7 +84,7 @@ This report documents all discrepancies found by inspecting 23 documentation fil
 ### 3.1 DATABASE.md Version Conflicts
 
 | Conflict | Resolution | Status |
-|---|---|---|
+| --- | --- | --- |
 | Title said "schema version 9" | Updated to "schema version 22" | ✅ FIXED |
 | Body said "currently 14" | Updated to "currently 22" | ✅ FIXED |
 | Table count discrepancies | Verified actual schema has 18 tables | ✅ Documented correctly |
@@ -92,7 +92,7 @@ This report documents all discrepancies found by inspecting 23 documentation fil
 ### 3.2 Export Scope Conflicts
 
 | Claim | Actual Behavior | Resolution | Status |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | DATABASE.md said exports contain password hashes | DataExporter strips pw_hash/salt (5 keys stripped: license_code, activation_code, device_hw_uuid, device_install_uuid, auth_session) | ✅ Document as "deliberately omitted" | ✅ FIXED |
 
 ---
@@ -104,6 +104,7 @@ This report documents all discrepancies found by inspecting 23 documentation fil
 **Location:** `docs/architecture/sql-file-inventory.md`
 
 **Content created:**
+
 - Classified all SQL files outside `supabase/migrations/`
 - Identified 10 authoritative migrations (corrected from earlier count of 9)
 - Listed 17 docs/*.sql files as historical reference
@@ -117,6 +118,7 @@ This report documents all discrepancies found by inspecting 23 documentation fil
 **Location:** `docs/architecture/feature-ownership.md`
 
 **Content created:**
+
 - Architecture Overview section explaining two-entry-point, one-shell architecture
 - Table Ownership Map with correct source paths and sync/export status
 - Layering Violations — Historical (Pre-Stages 1-3) with DELETED status for all 5
@@ -134,6 +136,7 @@ This report documents all discrepancies found by inspecting 23 documentation fil
 **Location:** `docs/architecture/final-architecture-overview.md`
 
 **Content created:**
+
 - 8 Mermaid diagrams:
   1. Full Repository Architecture (graph showing all packages and their relationships)
   2. Native App Dependency Flow (main.dart → repositories → contracts → entities)
@@ -151,6 +154,7 @@ This report documents all discrepancies found by inspecting 23 documentation fil
 **Location:** `docs/architecture/verification-history.md`
 
 **Content created:**
+
 - Test count reconciliation explaining 678/682/684 variations
 - Exact verification commands documented
 - Flutter test: 684 passed, 1 skipped
@@ -173,6 +177,7 @@ This report documents all discrepancies found by inspecting 23 documentation fil
 **Location:** `docs/LICENSING.md` (159 lines)
 
 **Verification performed:**
+
 - Ed25519 v1/v2 license format verification
 - Build-time public key injection workflow
 - Operator setup commands
@@ -186,6 +191,7 @@ This report documents all discrepancies found by inspecting 23 documentation fil
 **Location:** `docs/CLOUD_SYNC.md` (391 lines)
 
 **Verification performed:**
+
 - Transactional outbox pattern description
 - Phase numbering matches implementation
 - SQLite sync behavior
@@ -198,6 +204,7 @@ This report documents all discrepancies found by inspecting 23 documentation fil
 **Location:** `docs/NEW_SHOP.md` (139 lines)
 
 **Verification performed:**
+
 - Activation code issuance workflow
 - Owner account creation flow
 - Demo account behavior
@@ -213,7 +220,7 @@ This report documents all discrepancies found by inspecting 23 documentation fil
 The feature-ownership.md initially documented 5 layer violations as active problems. Investigation revealed:
 
 | Historical File | Import Path | Status | Resolution |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `core/repositories/sale_repository.dart` | → `features/sales/{sale,sale_item,shift,void_request}.dart` | **DELETED** — file moved to pos_local_engine | ✅ No current violation |
 | `core/repositories/shift_repository.dart` | → `features/sales/shift.dart` | **DELETED** | ✅ No current violation |
 | `core/cloud/cloud_sale_repository.dart` | → `features/sales/{sale,sale_item,void_request}.dart` | **DELETED** | ✅ No current violation |
@@ -231,7 +238,7 @@ The feature-ownership.md initially documented 5 layer violations as active probl
 **Reference:** `docs/architecture/feature-ownership.md` Table Ownership Map
 
 | Table | Owning Repository | Cross-Module Access | Sync Applicable | Export/Import Status |
-|-------|-------------------|---------------------|-----------------|---------------------|
+| ------- | ------------------- | --------------------- | ----------------- | --------------------- |
 | `users` | SqfliteUserRepository | session_store, sync_pull_applier | ✅ Yes | ✅ (strips pw_hash/salt) |
 | `products` | SqfliteProductRepository | - | ✅ Yes | ✅ Exported/Imported |
 | `sales` | SqfliteSaleRepository | shift, finance, audit | ✅ Yes | ✅ Exported/Imported |
@@ -265,7 +272,7 @@ The feature-ownership.md initially documented 5 layer violations as active probl
 **Reference:** `docs/architecture/api-action-inventory.md`
 
 | Module | Actions | Owning Entity | Notes |
-|--------|---------|---------------|-------|
+| -------- | --------- | --------------- | ------- |
 | auth | 4 | CloudApiClient | Unauthenticated login |
 | catalog | 4 | CloudProductRepository | Product CRUD |
 | sales | 7 | CloudSaleRepository | Sale, void workflow |
@@ -323,7 +330,7 @@ function derivePicklistStatus(items: any[]): string {
 ## 10. Documentation Discrepancies Summary
 
 | ID | Category | Documentation | Before | After | Status |
-|----|----------|---------------|--------|-------|--------|
+| ---- | ---------- | --------------- | -------- | ------- | -------- |
 | D1 | Outdated | DATABASE.md title | "schema version 9" | "schema version 22" | ✅ Fixed |
 | D2 | Outdated | DATABASE.md body | "currently 14" | "currently 22" | ✅ Fixed |
 | D3 | Outdated | DATABASE.md export | "exports contain password hashes" | "password hashes deliberately omitted" | ✅ Fixed |
@@ -344,7 +351,7 @@ function derivePicklistStatus(items: any[]): string {
 Per STRICT SOURCE PROTECTION, the following remain unchanged:
 
 | Category | Files | Reason |
-|---|---|---|
+| --- | --- | --- |
 | SQL migrations | `supabase/migrations/` (10 files) | Never modify, never delete |
 | Database schema | `backend/dart/pos_local_engine/lib/src/database/local_database.dart` | Actual schema v22 |
 | TypeScript handlers | `supabase/functions/pos-api/` | All Stage 8 changes complete |
@@ -360,7 +367,7 @@ Per STRICT SOURCE PROTECTION, the following remain unchanged:
 ## 12. Deliverables Completed
 
 | File | Status | Description |
-|------|--------|-------------|
+| ------ | -------- | ------------- |
 | `docs/DATABASE.md` | ✅ Updated | Schema version 22, export clarifications |
 | `README.md` | ✅ Updated | Schema v22, password hash omission, deploy to Cloudflare |
 | `docs/architecture/sql-file-inventory.md` | ✅ Updated | Migration count 10, classified SQL files |
@@ -392,6 +399,7 @@ All documentation deliverables completed:
 ## 14. Next Steps (Stage 10)
 
 All Stage 9 documentation deliverables are complete. Proceed to Stage 10 for:
+
 - User documentation
 - API external documentation  
 - Any remaining cross-doc consistency
@@ -400,4 +408,4 @@ All Stage 9 documentation deliverables are complete. Proceed to Stage 10 for:
 
 ---
 
-**Report End**
+## Report End

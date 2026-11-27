@@ -5,12 +5,13 @@
 **Date:** 2026-11-21
 
 ---
+
 ## Project Structure
 
 The project uses a 4-package architecture distributed under `backend/dart/`:
 
 | Package | Path | Purpose | Runtime Dependencies |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `pos_core` | `backend/dart/pos_core` | Pure Dart, zero dependencies. All business entities. | — |
 | `pos_contracts` | `backend/dart/pos_contracts` | Contract/interface definitions. | `pos_core` |
 | `pos_local_engine` | `backend/dart/pos_local_engine` | Local SQLite engine. | `sqflite_common_ffi`, `pos_contracts`, `pos_core` |
@@ -18,14 +19,16 @@ The project uses a 4-package architecture distributed under `backend/dart/`:
 | `wholesale_pos_app` | `frontend/` | Flutter application composition (package name `wholesale_pos_app`). | All Flutter SDK + plugins; `pos_contracts`, `pos_local_engine`, `pos_cloud_engine` |
 
 **Entry points:**
+
 - `frontend/lib/main.dart` — Native (Flutter + SQLite + local repos)
 - `frontend/lib/main_web.dart` → `app_shell.dart` — Web/PWA (Flutter + CloudBackend)
 
 ---
+
 ## Build Commands
 
 | Command | Description | Expected Result |
-|---|---|---|
+| --- | --- | --- |
 | `flutter analyze --fatal-infos` | Static analysis, fail on infos | **PASS** — no issues (run from `frontend/`) |
 | `flutter test` | Full test suite | **PASS** — 689 passed, 1 skipped (run from `frontend/`) |
 | `flutter build web --release -t lib/main_web.dart` | Web release build | **PASS** (run from `frontend/`) |
@@ -35,6 +38,7 @@ The project uses a 4-package architecture distributed under `backend/dart/`:
 | `graphify update .` | Incremental knowledge graph rebuild | Cheap; no LLM needed; runs on changed files only |
 
 ---
+
 ## Test Suite
 
 - **689 passed, 1 skipped** — live matrix across core repos, sync, licensing, and widget/layout matrices
@@ -44,11 +48,13 @@ The project uses a 4-package architecture distributed under `backend/dart/`:
 - Test files mirror `frontend/lib/` structure: `frontend/test/` covers `core/...`, `features/...`
 
 **Running specific test groups** (from `frontend/`):
+
 - `flutter test test/core/` — core repo tests (repositories, database, licensing, sync)
 - `flutter test test/features/` — feature widget/layout tests
 - `flutter test test/core/sync/` — sync-specific tests
 
 ---
+
 ## Knowledge Graph Management
 
 **Command:** `graphify update .`
@@ -62,12 +68,13 @@ The project uses a 4-package architecture distributed under `backend/dart/`:
 **Fast path:** If `graphify-out/graph.json` already exists, jump straight to `graphify query "<question>"` — no need to rebuild unless files changed.
 
 ---
+
 ## Stage Progression and Current State
 
 The architecture migration into `frontend/` + `backend/dart/` packages is complete: all six migration batches are done, `flutter analyze` reports zero issues, the full suite passes (689 tests), and all three release builds (Windows, Web, Android APK) succeed. Key milestones:
 
 | Stage | Completed | Current Focus |
-|---|---|---|
+| --- | --- | --- |
 | **Stage 1** | Domain extraction (`pos_core`, `pos_contracts`, `pos_local_engine`, `pos_cloud_engine`) | Baseline established |
 | **Stage 2** | Cloud backend separation (`AppBackend` seam) | In progress |
 | **Stage 3** | Shell convergence (NativeBackend + AppBackend) | Deferred per Stage 9 requirements |
@@ -80,6 +87,7 @@ The architecture migration into `frontend/` + `backend/dart/` packages is comple
 | **Stage 10** | Root cleanup, governance (`CLAUDE.md`, `.claude/rules/`), release-readiness audit | Completed |
 
 **Current baseline checks (all pass):**
+
 - `flutter analyze --fatal-infos` — PASS (0 issues)
 - `flutter test` — 689 passed, 1 skipped
 - `flutter build web --release -t lib/main_web.dart` — PASS
@@ -88,6 +96,7 @@ The architecture migration into `frontend/` + `backend/dart/` packages is comple
 - `deno check backend/supabase/functions/pos-api/index.ts` (and `sync/index.ts`, `licensing/index.ts`) — exit code 0
 
 ---
+
 ## How to Run the Full Baseline Check Suite
 
 ```bash
@@ -110,11 +119,20 @@ flutter build apk --release       # run from frontend/
 deno check backend/supabase/functions/pos-api/index.ts
 deno check backend/supabase/functions/sync/index.ts
 deno check backend/supabase/functions/licensing/index.ts
+
+# 7. Edge function format check
+deno fmt --check backend/supabase/functions
+
+# 8. Edge function behaviour tests (in-memory mock DB, no credentials needed)
+deno test --allow-env --allow-read backend/supabase/functions/licensing/tests/
+deno test --allow-env --allow-read backend/supabase/functions/pos-api/tests/
+deno test --allow-env --allow-read backend/supabase/functions/sync/tests/
 ```
 
 All checks must pass before considering a task complete. Any failure blocks progression.
 
 ---
+
 ## Graphify Quick Start
 
 ```bash
@@ -132,12 +150,13 @@ graphify . --no-viz
 ```
 
 ---
+
 ## Code Conventions
 
 - **No new shims after 6.7** (M-24 gate from risk register)
 - **Web graph must be free of sqflite/dart:io/path_provider/LocalDatabase** (F-1 gate)
 - **Single source of truth for server schema:** `backend/supabase/migrations/` (10 timestamped files)
-- **One `schemaVersion = 22` definition only** — in `backend/dart/pos_local_engine/lib/src/database/local_database.dart`
+- **One `schemaVersion = 23` definition only** — in `backend/dart/pos_local_engine/lib/src/database/local_database.dart`
 - **No core → features model imports** (layering violation gate)
 - **Transaction inventory must remain 38** (M-07 gate)
 - **pos_cloud_engine has no Flutter/sqflite/io imports** — verified by architecture test
@@ -151,16 +170,18 @@ graphify . --no-viz
 - **Sync gateway:** License-gated (Ed25519 v2 license as credential); Phase 18 feature
 
 ---
+
 ## Troubleshooting
 
 | Problem | Solution |
-|---|---|
+| --- | --- |
 | `flutter analyze` fails | Check for infos (not errors); fix analysis options if needed |
 | `flutter test` skip persists | Check for integration tests requiring live Supabase credentials |
 | Web build fails | Verify `lib/main_web.dart` entry point; check for `dart:io`/`sqflite` in web graph |
 | Windows build fails | Ensure build tools; check `tools/build_release.ps1` output |
 | Edge function TS errors | Run `deno check` on each entry point under `backend/supabase/functions/` |
-| Schema version confusion | Actual: `LocalDatabase.schemaVersion = 22` in `backend/dart/pos_local_engine`; docs updated to match |
+| Schema version confusion | Actual: `LocalDatabase.schemaVersion = 23` in `backend/dart/pos_local_engine`; docs updated to match |
 
 ---
-**End of Guide**
+
+## End of Guide

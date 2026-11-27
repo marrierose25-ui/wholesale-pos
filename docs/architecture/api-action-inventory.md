@@ -2,13 +2,15 @@
 
 **Generated:** 2026-11-21
 **Source:** `supabase/functions/pos-api/` (post-modularization)
+**Updated (Stage 2, 2026-11-24):** the modular router is now the live
+production entry point; see "Production request path" below.
 
 ---
 
 ## Summary
 
 | Category | Actions | Module |
-|----------|---------|--------|
+| ---------- | --------- | -------- |
 | Auth (unauthenticated) | 3 | modules/auth |
 | Auth (authenticated) | 1 | modules/auth |
 | Products / Catalog | 4 | modules/catalog |
@@ -20,6 +22,48 @@
 | Users | 7 | modules/users |
 | **Total** | **60** | |
 
+## Production request path (Stage 2)
+
+`index.ts` is a ~210-line router — no action logic remains in it:
+
+```text
+POST /functions/v1/pos-api
+  -> index.ts handleRequest(): OPTIONS/405/JSON guards
+  -> PUBLIC_ACTIONS: login | setup_owner | has_users   (shared/auth.ts)
+  -> verifyJwt (HMAC-SHA256, POS_API_JWT_SECRET)
+  -> checkAuthorization (shared/authorization.ts):
+       loadActiveUser -> token_version revocation -> OWNER_ONLY -> ACTION_FEATURES
+  -> ctx { customerId, userId, role, canSeePicklistMoney, deviceId }
+  -> ACTIONS dispatch table -> modules/<domain> handler -> PostgREST/RPC
+```
+
+Module ownership: `modules/auth` (session actions), `modules/catalog`
+(products), `modules/sales` (sales + voids), `modules/register` (shifts +
+cash), `modules/users` (staff admin), `modules/finance` (money tracking),
+`modules/warehouse` (picklists + customers), `modules/reporting`
+(dashboard/reports/audit). Shared machinery (JWT, PBKDF2, license gate,
+login throttle, phone normalization, demo-user seeding, CORS/JSON helpers,
+pagination, RPC error mapping, hydration helpers) lives in `shared/`.
+
+`Deno.serve` is guarded by `import.meta.main`; tests import `handleRequest`
+and inject a mock DB. No monolithic implementation is retained — the old
+inline handler was removed when the router went live.
+
+### Test coverage
+
+`pos-api/tests/` — 33 Deno tests against an in-memory PostgREST mock
+(`mock_db.ts`), no credentials or network required:
+
+- `router_test.ts` — transport guards, auth/JWT/session revocation,
+  OWNER_ONLY + feature gates, tenant isolation, response shapes,
+  pagination, audit writes, full action-registration parity.
+- `picklist_test.ts` — `deletePicklistItem` parent status/`updated_at`
+  regression, last-line header tombstone, COMPLETED freeze, 404s.
+- `architecture_test.ts` — guards against the entry point regressing to an
+  inline monolithic handler.
+
+Run: `deno test --allow-env --allow-read backend/supabase/functions/pos-api/tests/`
+
 ---
 
 ## Unauthenticated Actions
@@ -27,12 +71,13 @@
 ### auth
 
 | Action | Signature | Description |
-|--------|-----------|-------------|
+| -------- | ----------- | ------------- |
 | `has_users` | `(db, body) → Response` | Check if any users exist for activation code. Returns `{ ok, has_users }`. |
 | `login` | `(db, body) → Response` | Authenticate user by phone/username + password. Returns JWT token, role, permissions. Includes demo password rotation for first OWNER login. |
 | `setup_owner` | `(db, body) → Response` | Bootstrap owner account from activation code. Validates phone number, creates owner user via RPC `pos_setup_owner`. Sets up demo cashier account. |
 
 **Behavior notes:**
+
 - Password hashing: PBKDF2-HMAC-SHA256, 210k iterations, per-user random 16-byte salt
 - Session TTL: ~10 years (`SESSION_TTL_SECONDS`) — revocation done via `token_version` bump
 - Login throttle: 10 attempts per minute per `(customerId, username)` pair; locks out for 5 minutes
@@ -53,7 +98,7 @@ All authenticated actions require a valid JWT in `Authorization: Bearer <token>`
 ### catalog — Products
 
 | Action | Signature | Description |
-|--------|-----------|-------------|
+| -------- | ----------- | ------------- |
 | `list_products` | `(db, ctx, body) → Response` | List products with optional category filter, search, pagination. Supports "name only" lightweight mode. |
 | `save_product` | `(db, ctx, body) → Response` | Upsert product (insert or update). Handles image upload, serial number tracking. Audit: `PRODUCT_SAVED`. |
 | `update_product` | `(db, ctx, body) → Response` | Update existing product fields without full replace. Audit: `PRODUCT_UPDATED`. |
@@ -62,7 +107,7 @@ All authenticated actions require a valid JWT in `Authorization: Bearer <token>`
 ### sales — Point of Sale
 
 | Action | Signature | Description |
-|--------|-----------|-------------|
+| -------- | ----------- | ------------- |
 | `next_receipt_number` | `(db, ctx) → Response` | Get next receipt number from counter. Atomic increment via row-level lock. |
 | `insert_sale` | `(db, ctx, body) → Response` | Create sale with line items. Handles discount, tax, payment method splitting. Updates stock. Generates receipt PDF reference. Audit: `SALE_INSERTED`. |
 | `search_sales` | `(db, ctx, body) → Response` | Search sales by date range, receipt number, customer, payment method. Paginated. Excludes demo user sales when flag set. |
@@ -74,7 +119,7 @@ All authenticated actions require a valid JWT in `Authorization: Bearer <token>`
 ### register — Shift Management
 
 | Action | Signature | Description |
-|--------|-----------|-------------|
+| -------- | ----------- | ------------- |
 | `getActiveShift` | `(db, ctx) → Response` | Fetch currently open shift (if any). |
 | `ensureShift` | `(db, ctx) → Response` | Ensure an open shift exists (create if none). Via RPC `pos_ensure_shift`. |
 | `registerSnapshot` | `(db, ctx, body) → Response` | Cash snapshot for open shift. Computes expected cash via RPC `pos_expected_cash`, fetches counters via `pos_shift_counters`. Supports period filtering. |
@@ -88,7 +133,7 @@ All authenticated actions require a valid JWT in `Authorization: Bearer <token>`
 ### finance — Personal Accounts & Entries
 
 | Action | Signature | Description |
-|--------|-----------|-------------|
+| -------- | ----------- | ------------- |
 | `financeCategories` | `(db, ctx) → Response` | List all categories (including deleted). Returns array of `{ id, name, deleted_at? }`. |
 | `financeDeletedCategories` | `(db, ctx) → Response` | List only deleted categories (recycle bin view). |
 | `financeSummaries` | `(db, ctx) → Response` | Summarize entries by category with totals. Uses RPC `pos_finance_summary`. |
@@ -107,7 +152,7 @@ All authenticated actions require a valid JWT in `Authorization: Bearer <token>`
 ### warehouse — Picklists & Customers
 
 | Action | Signature | Description |
-|--------|-----------|-------------|
+| -------- | ----------- | ------------- |
 | `listPicklists` | `(db, ctx, body) → Response` | List picklists with optional status/customer/name filters. Shows item counts and progress. Excludes customer-only picklists unless requester has `warehouse_fill` permission. |
 | `getPicklistItems` | `(db, ctx, body) → Response` | Fetch picklist with items, pricing (if permitted), and customer info. Shows remaining qty if partially filled. |
 | `createPicklist` | `(db, ctx, body) → Response` | Create new picklist with initial items. Auto-fills supplier prices if permitted. Audit: `PICKLIST_CREATED`. |
@@ -122,7 +167,7 @@ All authenticated actions require a valid JWT in `Authorization: Bearer <token>`
 ### reporting — Dashboards & Audit
 
 | Action | Signature | Description |
-|--------|-----------|-------------|
+| -------- | ----------- | ------------- |
 | `dashboardSummary` | `(db, ctx, body) → Response` | Dashboard KPIs: today's sales, recent sales count, low-stock products, pending picklists. Requires owner or specific feature flags. |
 | `revenueTrend` | `(db, ctx, body) → Response` | Daily revenue trend over configurable period (default 30 days). Groups by `DATE(created_at)`. |
 | `reportSummary` | `(db, ctx, body) → Response` | Detailed sales report: daily breakdown, payment method split, top products. Period defaults to previous calendar month. |
@@ -131,7 +176,7 @@ All authenticated actions require a valid JWT in `Authorization: Bearer <token>`
 ### users — Staff Management (Owner-only for mutations)
 
 | Action | Signature | Description |
-|--------|-----------|-------------|
+| -------- | ----------- | ------------- |
 | `listUsers` | `(db, ctx, body) → Response` | List all staff users with roles, active status, join dates. Supports search by name/phone. Excludes demo user from results. |
 | `createUser` | `(db, ctx, body) → Response` | Create new staff account. OWNER_ONLY action. Requires owner session verification via RPC. Password min 12 chars for owner, 8 for others. |
 | `setUserPermissions` | `(db, ctx, body) → Response` | Update user feature permissions. OWNER_ONLY. Sanitizes input to only known FEATURE_KEYS. Audit: `USER_PERMISSIONS_CHANGED`. |
@@ -147,7 +192,7 @@ All authenticated actions require a valid JWT in `Authorization: Bearer <token>`
 ### Feature Gates (`ACTION_FEATURES`)
 
 | Action(s) | Required Permission(s) |
-|-----------|----------------------|
+| ----------- | ---------------------- |
 | `dashboard_*` | `dashboard` |
 | `list_products`, `save_product`, `update_product`, `deactivate_product`, `reactivate_product`, `next_receipt_number`, `insert_sale`, `request_void` | `pos` |
 | `get_shift`, `ensure_shift`, `register_snapshot`, `open_shift`, `close_shift`, `add_cash_movement`, `shift_summary` | `register` |
@@ -184,11 +229,13 @@ Every action returns one of:
 ```
 
 Unhandled exceptions return:
+
 ```typescript
 { ok: false, error: "Internal error." }  // 500
 ```
 
 Known error patterns:
+
 - `"Not signed in."` — 401 (invalid/expired JWT)
 - `"Session no longer valid."` — 403 (user deactivated or token version mismatch)
 - `"Owner access required."` — 403 (non-owner hitting OWNER_ONLY action)
@@ -201,6 +248,7 @@ Known error patterns:
 ## Security Notes
 
 ### Password Storage
+
 - PBKDF2-HMAC-SHA256, 210,000 iterations
 - 16-byte random salt per user
 - Stored as `<iterations>$<base64_hash>` in `pw_hash` column
@@ -208,6 +256,7 @@ Known error patterns:
 - Homoglyph attack mitigation: usernames normalized via `_escape_sql_like()`
 
 ### Session Security
+
 - Stateless JWT: `{ sub: userId, cid: customerId, role, tv: tokenVersion, iat, exp }`
 - HMAC-SHA256 signature with `POS_API_JWT_SECRET` env var
 - No server-side session store
@@ -215,13 +264,16 @@ Known error patterns:
 - 10-year expiry but revoked at next use if `tv` mismatch detected
 
 ### Tenant Isolation
+
 - All queries include `.eq('customer_id', ctx.customerId)` or equivalent
 - `customer_id` extracted from JWT, never from request body
 - Service role key used for database access (bypasses RLS)
 - No cross-tenant data leakage possible from application logic
 
 ### Audit Trail
+
 All write operations emit audit records to `audit_log` table via `audit(db, customerId, userId, eventCode, message)` helper. Covers:
+
 - Account lifecycle (CREATE, DEACTIVATE, REACTIVATE, DELETE)
 - Credential changes (PASSWORD_CHANGED, PASSWORD_RESET)
 - Financial transactions (SALE_INSERTED, SALE_VOIDED, FINANCE_ENTRY_ADDED, etc.)
@@ -233,6 +285,7 @@ All write operations emit audit records to `audit_log` table via `audit(db, cust
 ## Migration Impact Assessment
 
 ### Zero Breaking Changes
+
 - All 60 action handlers maintain identical signatures
 - Request/response shapes unchanged
 - PostgreSQL RPC calls unchanged
@@ -240,12 +293,14 @@ All write operations emit audit records to `audit_log` table via `audit(db, cust
 - Error codes and messages preserved
 
 ### Behavioral Equivalents
+
 - Login flow: same throttling, same demo user seeding, same password requirements
 - Sale insertion: same stock deduction, same receipt generation, same void workflow
 - Shift management: same RPC calls, same expected cash calculation
 - Finance: same soft-delete pattern, same category renaming behavior
 
 ### Files Added (no deletions from original repo)
+
 - 28 new files under `supabase/functions/pos-api/`
 - Original `index.ts` rewritten (not deleted) to act as router
 - No git history loss — all original code preserved in new locations

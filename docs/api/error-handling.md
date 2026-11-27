@@ -26,7 +26,7 @@ Client code should branch on `ok` first; `code` is a programmatic hint for autom
 Returned with HTTP 400–403:
 
 | Code | Meaning | Retry? |
-|------|---------|--------|
+| ------ | --------- | -------- |
 | `NOT_FOUND` | Entity doesn't exist | No — fix input |
 | `CONFLICT` | Unique constraint violated | No — resolve collision |
 | `FORBIDDEN` | Insufficient role (non-owner accessing OWNER_ONLY action) | No |
@@ -39,7 +39,7 @@ Returned with HTTP 400–403:
 ## HTTP status mapping
 
 | Status | Meaning | Typical cause |
-|--------|---------|---------------|
+| -------- | --------- | --------------- |
 | 200 | OK | Success |
 | 400 | Bad Request | Malformed JSON, missing field |
 | 401 | Unauthorized | Missing or invalid JWT |
@@ -52,7 +52,7 @@ Returned with HTTP 400–403:
 ## Retry guidance
 
 | Scenario | Strategy |
-|----------|----------|
+| ---------- | ---------- |
 | Network timeout / 500 | Exponential backoff, max 3 retries |
 | 401 / 403 | Invalidate cached credentials; prompt re-login |
 | 423 (throttle) | Back off for the stated lockout window (usually 5 min) |

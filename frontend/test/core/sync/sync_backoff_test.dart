@@ -16,9 +16,9 @@ class _IdleBackend implements SyncBackend {
   bool get isConfigured => true;
 
   @override
-  Future<Set<String>> push(List<SyncOutboxEntry> entries) async {
+  Future<SyncPushOutcome> push(List<SyncOutboxEntry> entries) async {
     pushes++;
-    return const {};
+    return SyncPushOutcome.empty;
   }
 
   @override
@@ -38,7 +38,7 @@ class _OneRowBackend implements SyncBackend {
   bool get isConfigured => true;
 
   @override
-  Future<Set<String>> push(List<SyncOutboxEntry> entries) async => const {};
+  Future<SyncPushOutcome> push(List<SyncOutboxEntry> entries) async => SyncPushOutcome.empty;
 
   @override
   Future<SyncPullResult> pull({
@@ -77,7 +77,7 @@ class _SlowBackend implements SyncBackend {
   bool get isConfigured => true;
 
   @override
-  Future<Set<String>> push(List<SyncOutboxEntry> entries) async => const {};
+  Future<SyncPushOutcome> push(List<SyncOutboxEntry> entries) async => SyncPushOutcome.empty;
 
   @override
   Future<SyncPullResult> pull({
@@ -99,7 +99,7 @@ class _ThrowingBackend implements SyncBackend {
   bool get isConfigured => true;
 
   @override
-  Future<Set<String>> push(List<SyncOutboxEntry> entries) async => const {};
+  Future<SyncPushOutcome> push(List<SyncOutboxEntry> entries) async => SyncPushOutcome.empty;
 
   @override
   Future<SyncPullResult> pull({

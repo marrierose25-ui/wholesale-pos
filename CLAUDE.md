@@ -14,7 +14,7 @@ secured, integrated, and all affected documentation has been updated.**
 Do not rely on memory or this file alone. Read the relevant document first:
 
 | Concern | Authoritative document |
-|---|---|
+| --- | --- |
 | Layering, package boundaries, sync/security rules, protected files, verification checklist | `docs/architecture/architecture-rules.md` |
 | Which layer/module owns each feature and table | `docs/architecture/feature-ownership.md` |
 | Build, test, Supabase, and release commands | `docs/DEVELOPMENT.md` |

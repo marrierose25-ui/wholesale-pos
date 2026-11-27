@@ -76,6 +76,32 @@ class SyncResult {
   bool get ok => error == null;
 }
 
+/// What an operator's quarantine retry actually did. [supported] is false when
+/// the configured backend cannot ask the cloud to re-validate staged rows —
+/// the honest answer is "keep or discard", never a silent local requeue.
+class QuarantineRetryReport {
+  final bool supported;
+  final int applied;
+  final int reRejected;
+  final int requeued;
+  final int missing;
+
+  const QuarantineRetryReport({
+    required this.supported,
+    this.applied = 0,
+    this.reRejected = 0,
+    this.requeued = 0,
+    this.missing = 0,
+  });
+
+  const QuarantineRetryReport.unsupported()
+    : supported = false,
+      applied = 0,
+      reRejected = 0,
+      requeued = 0,
+      missing = 0;
+}
+
 /// Drains the outbox to a [SyncBackend], then pulls back everything the shop
 /// recorded elsewhere. Offline-first by construction: if the backend is missing
 /// or throws, nothing is lost — the rows stay queued and the next attempt (a
@@ -232,6 +258,7 @@ class SyncService {
         authenticationFailed: failure is SyncAuthException,
         applied: applied,
         queued: remaining,
+        quarantined: await _quarantinedSafely(),
       );
     }
 
@@ -291,14 +318,19 @@ class SyncService {
       return (0, await _outbox.pendingCount());
     }
 
-    // A backend failure propagates: everything stays queued, and [syncNow]
-    // records why so the operator is not left guessing.
-    final Set<String> acked = await _backend.push(pending);
-
-    // Mark synced only what the server confirmed; a partially-acked batch
-    // leaves its retryable rows queued (audit #20).
-    await _outbox.markSynced(acked.toList());
-    return (acked.length, await _outbox.pendingCount());
+    // Mark synced only what the server confirmed APPLIED; deferred,
+    // retryable and still-stored rows stay queued, and permanent refusals
+    // move to durable quarantine with their payload and server reason —
+    // a rejected financial record is never acked, never pruned, never lost
+    // (Request 3 acceptance).
+    final outcome = await _backend.push(pending);
+    await _outbox.markSynced(outcome.acked.toList());
+    if (outcome.rejected.isNotEmpty) {
+      await _outbox.markQuarantined({
+        for (final r in outcome.rejected) r.entryId: r.error,
+      });
+    }
+    return (outcome.acked.length, await _outbox.pendingCount());
   }
 
   /// Applies every cloud page this device has not seen yet. Returns the number
@@ -321,6 +353,73 @@ class SyncService {
     final report = await puller.pullNow();
     _lastPull = _now();
     return report.inserted;
+  }
+
+  /// Quarantined entries for the operator review surface. Empty when the
+  /// repository cannot answer — the sync loop must never break over it.
+  Future<List<SyncOutboxEntry>> quarantinedEntries() async {
+    try {
+      return await _outbox.quarantined();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Deliberate operator actions on quarantined records.
+  ///
+  /// [retryQuarantined] is only honest when the backend can ask the cloud to
+  /// re-validate the staged row ([SyncRecoveryBackend]). Re-queueing the local
+  /// row alone changes nothing — the server copy is still REJECTED — so an
+  /// unsupported backend reports [QuarantineRetryReport.supported] = false and
+  /// leaves every record quarantined.
+  Future<QuarantineRetryReport> retryQuarantined(List<String> ids) async {
+    final backend = _backend;
+    if (backend is! SyncRecoveryBackend) {
+      return const QuarantineRetryReport.unsupported();
+    }
+    final quarantined = await _outbox.quarantined(limit: 500);
+    final targets = [
+      for (final e in quarantined)
+        if (ids.contains(e.id)) e,
+    ];
+    if (targets.isEmpty) {
+      return const QuarantineRetryReport(supported: true);
+    }
+    final outcome = await (backend as SyncRecoveryBackend).recover(targets);
+    if (outcome.applied.isNotEmpty) {
+      await _outbox.markSynced(outcome.applied.toList());
+    }
+    if (outcome.rejected.isNotEmpty) {
+      await _outbox.markQuarantined({
+        for (final r in outcome.rejected) r.entryId: r.error,
+      });
+    }
+    if (outcome.missing.isNotEmpty) {
+      await _outbox.markQuarantined({
+        for (final r in outcome.missing) r.entryId: r.error,
+      });
+    }
+    if (outcome.retryable.isNotEmpty) {
+      await _outbox.retryQuarantined(outcome.retryable.toList());
+    }
+    return QuarantineRetryReport(
+      supported: true,
+      applied: outcome.applied.length,
+      reRejected: outcome.rejected.length,
+      requeued: outcome.retryable.length,
+      missing: outcome.missing.length,
+    );
+  }
+
+  Future<int> discardQuarantined(List<String> ids) =>
+      _outbox.discardQuarantined(ids);
+
+  Future<int> _quarantinedSafely() async {
+    try {
+      return await _outbox.quarantinedCount();
+    } catch (_) {
+      return 0;
+    }
   }
 
   Future<int> _queuedSafely() async {

@@ -49,7 +49,7 @@ structural preference below.
 The target splits the current single-file database layer into three packages
 with a one-way dependency graph.
 
-```
+```text
                     ┌────────────────────────────────────┐
                     │ backend/dart/pos_core/             │
                     │ pure entities + value objects      │
@@ -80,7 +80,7 @@ with a one-way dependency graph.
 ### 2.1 Dependency rules
 
 | Package / graph | May depend on | Must never depend on |
-|---|---|---|
+| --- | --- | --- |
 | `pos_core` | nothing (Dart SDK only) | Flutter, sqflite, HTTP, `dart:io`, app |
 | `pos_contracts` | `pos_core` | Flutter, sqflite, `dart:io`, HTTP, app, engine |
 | `pos_local_engine` | `pos_core`, `pos_contracts`, Flutter, sqflite, `sqflite_common_ffi`, `path`, `path_provider`, `crypto`, `cryptography`, `uuid` | app, `lib/features`, cloud/HTTP clients |
@@ -118,7 +118,7 @@ ports”. This proposal keeps the existing `pos_core` scope intact.
 
 Pure Dart, `publish_to: 'none'`, depends only on `pos_core`.
 
-```
+```text
 backend/dart/pos_contracts/
   pubspec.yaml
   lib/pos_contracts.dart
@@ -193,7 +193,7 @@ package move is preferred.
 
 ## 4. `pos_local_engine` — contents
 
-```
+```sql
 backend/dart/pos_local_engine/
   pubspec.yaml
   lib/pos_local_engine.dart
@@ -239,7 +239,7 @@ backend/dart/pos_local_engine/
 ### 4.1 Responsibility split inside the engine
 
 | Unit | Owns | Explicitly does **not** own |
-|---|---|---|
+| --- | --- | --- |
 | `lifecycle/` | Factory selection, path resolution, `PRAGMA foreign_keys = ON`, pre-migration backup call, open/in-memory entry points, no close | Any business SQL, any repository behaviour |
 | `schema/` | Frozen DDL, index/trigger creation, the single `schemaVersion` constant | Version bumps, “fixed” indexes, WAL |
 | `migrations/` | The exact v2→v22 chain in the exact order | Reordering, merging, new migrations |
@@ -335,7 +335,7 @@ It does not affect the web graph.
 ## 6. Schema, migrations, and versioning
 
 | Concern | Target owner | Preservation proof |
-|---|---|---|
+| --- | --- | --- |
 | `schemaVersion = 22` | `engine/schema/schema_version.dart` only | Repo-wide grep finds one definition; exporter/importer/settings/tests import it |
 | 18 `CREATE TABLE` statements | `engine/schema/schema_v22.dart` | Byte/text diff against current `_onCreate` SQL, normalised only for file placement |
 | Index/trigger creation | `engine/schema/indexes_triggers.dart` | Same statements, same `IF NOT EXISTS`, same call sites |
@@ -411,7 +411,7 @@ One `settings` table, unchanged. The engine adds a typed facade over the same
 keys:
 
 | Group | Keys (unchanged) | Accessor |
-|---|---|---|
+| --- | --- | --- |
 | Appearance | `theme_mode` | `SettingsStore.themeMode` |
 | Sign-in | `remember_login`, `auth_session` | `SettingsStore.rememberLogin`, session store |
 | Licensing | `license_code`, `activation_code` | licensing accessors |
@@ -454,7 +454,7 @@ without moving licence policy into the engine.
 ## 9. Backup, export, and restore
 
 | Mechanism | Target owner | Behaviour that must not change |
-|---|---|---|
+| --- | --- | --- |
 | Pre-migration safety copy | `engine/backup/pre_migration_backup.dart` | `<db>.bak` sibling, skip for version 0/22, copy for newer, non-fatal failure |
 | JSON export | `engine/backup/json_backup_service.dart` | Owner-only, active-owner check, credential stripping, photo reattachment, five secret settings omitted, `BACKUP_EXPORTED` audit after file write, `version = 22` |
 | JSON restore | `engine/backup/json_backup_service.dart` | Version 6–22 validation, required tables/fields, legacy sale-item normalisation, owner credential retention, unusable digests for others, pre-restore recovery export, one replacement transaction, cursor deletion, `PRAGMA foreign_key_check`, `BACKUP_RESTORED`, post-restore device registration |
@@ -474,7 +474,7 @@ would be a separately authorised behaviour change.
 
 ### 10.1 Native (`main.dart`)
 
-```
+```text
 main()
   └─ LocalDatabase.open()                      // engine
        ├─ SettingsStore(db)
@@ -499,7 +499,7 @@ root is the only place that knows the engine exists above `core/sync`.
 
 ### 10.2 Web (`main_web.dart`)
 
-```
+```text
 main_web()
   └─ CloudBackend(
         CloudSaleRepository, CloudReportingRepository, CloudShiftRepository,
@@ -540,7 +540,7 @@ packages.
 ## 12. Test seams and gates
 
 | Seam | Purpose |
-|---|---|
+| --- | --- |
 | `LocalDatabase.openInMemory()` | Existing repository/sync tests keep using real SQLite in the VM |
 | `openAt(tempPath)` | Migration and backup tests use temporary files |
 | `SettingsStore` over the same table | Licensing/session tests can use a fake store without SQLite |
@@ -583,7 +583,7 @@ Required gates for every Stage 6 sub-stage:
 ## 14. Rejected alternatives
 
 | Alternative | Why rejected |
-|---|---|
+| --- | --- |
 | Keep `LocalDatabase` in `app/lib` and only “tidy” it | Does not give the engine a reusable boundary; the web graph keeps importing mixed port/implementation files. |
 | Move the engine but keep `factory X(Database db)` on ports | Reintroduces sqflite into the contract and therefore into the web graph. |
 | Split the schema into one table per module / one DB per module | Breaks the atomic cross-module transactions and the single restore transaction. |

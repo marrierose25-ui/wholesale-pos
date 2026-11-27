@@ -21,18 +21,28 @@ import 'supabase_sync_backend.dart';
 ///   * a device activated AFTER app start begins syncing without a restart;
 ///   * an un-activated device keeps rows queued (push throws, SyncService
 ///     swallows and retries) — nothing is ever lost or sent unauthenticated.
-class SyncGatewayBackend implements SyncBackend {
+class SyncGatewayBackend implements SyncBackend, SyncRecoveryBackend {
   /// Settings key holding the signed license — must match `_licenseCodeKey`
   /// in main.dart's LicenseWrapper (the activation flow writes it there).
   static const String licenseSettingKey = 'license_code';
 
   final String _fnUrl;
   final Future<String?> Function() _licenseProvider;
+
+  /// Supplies the per-entry actor grants. The licence authenticates the device;
+  /// these delegated credentials say which signed-in users are responsible for
+  /// a queued row — one primary grant plus one per actor the payload names
+  /// (a finance entry's creator and completer can differ). Looked up per entry
+  /// so an owner's queued edit still resolves after a cashier logs in, and
+  /// never stored in the outbox payload itself.
+  final SyncGrantProvider? _grantProvider;
+
   final http.Client _client;
 
   SyncGatewayBackend({
     required String fnUrl,
     required this._licenseProvider,
+    this._grantProvider,
     http.Client? client,
   }) : _fnUrl = fnUrl.endsWith('/')
            ? fnUrl.substring(0, fnUrl.length - 1)
@@ -77,11 +87,13 @@ class SyncGatewayBackend implements SyncBackend {
     required bool unsafeAllowEmbed,
     required bool isMobile,
     required Future<String?> Function() licenseProvider,
+    SyncGrantProvider? grantProvider,
   }) {
     if (gatewayUrl.isNotEmpty) {
       return SyncGatewayBackend(
         fnUrl: gatewayUrl,
         licenseProvider: licenseProvider,
+        grantProvider: grantProvider,
       );
     }
     final hasSecret = secretUrl.isNotEmpty && secretKey.isNotEmpty;
@@ -98,7 +110,7 @@ class SyncGatewayBackend implements SyncBackend {
   bool get isConfigured => _fnUrl.isNotEmpty;
 
   @override
-  Future<Set<String>> push(List<SyncOutboxEntry> entries) async {
+  Future<SyncPushOutcome> push(List<SyncOutboxEntry> entries) async {
     final license = await _licenseProvider();
     if (license == null || license.trim().isEmpty) {
       // Not activated yet: throw so SyncService leaves rows queued. Selling
@@ -108,24 +120,52 @@ class SyncGatewayBackend implements SyncBackend {
       );
     }
 
+    // Build the wire entries first: the per-entry actor grant is an async
+    // lookup, and a grant failure must only drop that one grant (leaving the
+    // row deferred server-side), never the whole batch.
+    final wireEntries = <Map<String, dynamic>>[];
+    for (final e in entries) {
+      SyncActorGrantSet? grants;
+      final provider = _grantProvider;
+      if (provider != null) {
+        try {
+          grants = await provider(e);
+        } catch (_) {
+          grants = null;
+        }
+      }
+      final primary = grants?.primary?.trim() ?? '';
+      final byActor = grants?.byActor ?? const <String, String>{};
+      wireEntries.add({
+        // The outbox row id, echoed back per entry so the ack marks exactly
+        // the rows the server processed — two edits to one entity no longer
+        // share one verdict (audit 2 #21).
+        'entryId': e.id,
+        // Send the LOCAL vocabulary ('sale' etc.); the gateway folds it
+        // onto a staging entity and never writes a cloud table directly.
+        'entityType': e.entityType,
+        'entityId': e.entityId,
+        'operation': e.operation,
+        'payload': e.payload,
+        // The opaque, server-issued delegated credential for the person who
+        // queued this row. The gateway hashes it and never stores the raw
+        // token; the server resolves it to a live user for every actor column.
+        if (primary.isNotEmpty) 'actorGrant': primary,
+        // Every actor the payload names gets its own grant slot, so the
+        // server resolves creator/completer/deleter independently (a forged
+        // payload id can only select WHICH grant to use, never who it is).
+        if (byActor.isNotEmpty)
+          'actorGrants': {
+            for (final a in byActor.entries)
+              if (a.value.trim().isNotEmpty) a.key: a.value.trim(),
+          },
+      });
+    }
+
     final body = jsonEncode({
       'action': 'push',
       'license': license.trim(),
-      'entries': [
-        for (final e in entries)
-          {
-            // The outbox row id, echoed back per entry so the ack marks exactly
-            // the rows the server processed — two edits to one entity no longer
-            // share one verdict (audit 2 #21).
-            'entryId': e.id,
-            // Send the LOCAL vocabulary ('sale' etc.); the gateway folds it
-            // onto a staging entity and never writes a cloud table directly.
-            'entityType': e.entityType,
-            'entityId': e.entityId,
-            'operation': e.operation,
-            'payload': e.payload,
-          },
-      ],
+      'entries': wireEntries,
     });
 
     final res = await _client.post(
@@ -160,39 +200,153 @@ class SyncGatewayBackend implements SyncBackend {
     }
 
     // Per-entry ack (audit #20 / #21): only outbox rows the server actually
-    // processed are marked synced. 'applied' (landed through the till RPC),
-    // 'stored' (safe in the staging table, applied on the next drain) and
-    // 'rejected' (a permanent refusal, never worth retrying) are acked;
-    // 'failed' stays queued. The server echoes the outbox id it saw, so two
-    // queued edits to one sale no longer share a single verdict; a server that
-    // predates entryId falls back to the entityId mapping, and one that sends
-    // no results list leaves every row queued for the next retry.
+    // applied or permanently refused are marked synced. `applied` landed
+    // through the till RPC and `rejected` is a permanent refusal. `stored`
+    // (safe in staging but not yet applied) and `deferred` (waiting for a
+    // valid actor grant) stay QUEUED: acknowledging them would drop a sale the
+    // cloud has not booked, and re-pushing a staged row is idempotent. The
+    // server echoes the outbox id it saw, so two queued edits to one sale no
+    // longer share a single verdict; a server that predates entryId falls back
+    // to the entityId mapping, and one that sends no results list leaves every
+    // row queued for the next retry.
     final results = decoded is Map ? decoded['results'] : null;
     if (results is! List || results.isEmpty) {
       // No per-entry verdict means nothing is confirmed; leave every row
       // queued and retry. Returning empty (vs ack-all) is fail-safe:
       // retries are cheap, losing a sale is not.
-      return const <String>{};
+      return SyncPushOutcome.empty;
     }
     final idsByEntity = <String, List<String>>{};
     for (final e in entries) {
       (idsByEntity[e.entityId] ??= <String>[]).add(e.id);
     }
     final known = entries.map((e) => e.id).toSet();
+    final entityOf = {for (final e in entries) e.id: e.entityId};
     final acked = <String>{};
+    final rejected = <SyncPushRejection>[];
+    var deferred = 0;
     for (final r in results.whereType<Map>()) {
       final status = '${r['status']}';
-      if (status != 'applied' && status != 'stored' && status != 'rejected') {
-        continue;
-      }
       final entryId = '${r['entryId'] ?? ''}';
-      if (entryId.isNotEmpty && known.contains(entryId)) {
-        acked.add(entryId);
-      } else {
-        acked.addAll(idsByEntity['${r['entityId']}'] ?? const <String>[]);
+      final resolvedId = entryId.isNotEmpty && known.contains(entryId)
+          ? entryId
+          : (idsByEntity['${r['entityId']}'] ?? const <String>[]).firstOrNull;
+      if (status == 'deferred') deferred++;
+      if (resolvedId == null) continue;
+      if (status == 'applied') {
+        // Only a confirmed application is acked — 'stored'/'retryable'/
+        // 'deferred' rows stay queued until the server actually books them.
+        acked.add(resolvedId);
+      } else if (status == 'rejected') {
+        // A permanent refusal is quarantined by the caller with the payload
+        // intact — never acked, never pruned.
+        rejected.add(SyncPushRejection(
+          entryId: resolvedId,
+          entityId: entityOf[resolvedId] ?? '${r['entityId'] ?? ''}',
+          error: '${r['error'] ?? 'rejected by server'}',
+        ));
       }
     }
-    return acked;
+    return SyncPushOutcome(acked: acked, rejected: rejected, deferred: deferred);
+  }
+
+  /// Quarantine recovery (Request 3 P1): asks the gateway to re-queue each
+  /// entry's still-REJECTED staged row and re-run it through pos_sync_apply.
+  /// The payload is NOT re-sent — the server already holds it; only the
+  /// entity identity is needed to find the staged row.
+  @override
+  Future<SyncRecoveryOutcome> recover(List<SyncOutboxEntry> entries) async {
+    if (entries.isEmpty) return SyncRecoveryOutcome.empty;
+    final license = await _licenseProvider();
+    if (license == null || license.trim().isEmpty) {
+      throw const SyncAuthException(
+        'This device has no activation code yet, so it cannot reach the cloud.',
+      );
+    }
+
+    final res = await _client.post(
+      Uri.parse(_fnUrl),
+      headers: const {
+        'Content-Type': 'application/json',
+        'User-Agent': 'WholesalePOS-Sync/1.0',
+      },
+      body: jsonEncode({
+        'action': 'recover',
+        'license': license.trim(),
+        'entries': [
+          for (final e in entries)
+            {'entryId': e.id, 'entityType': e.entityType, 'entityId': e.entityId},
+        ],
+      }),
+    );
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw SyncAuthException(
+        _errorOf(res.body) ??
+            'The cloud refused this device (HTTP ${res.statusCode}).',
+      );
+    }
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception(
+        'Sync gateway recover failed (HTTP ${res.statusCode}): ${res.body}',
+      );
+    }
+    final decoded = jsonDecode(res.body);
+    if (decoded is! Map || decoded['ok'] == false) {
+      throw Exception(
+        'Sync gateway rejected recover: ${decoded is Map ? decoded['error'] : 'bad response'}',
+      );
+    }
+    final results = decoded['results'];
+    if (results is! List) return SyncRecoveryOutcome.empty;
+
+    final known = entries.map((e) => e.id).toSet();
+    final idsByEntity = <String, List<String>>{};
+    for (final e in entries) {
+      (idsByEntity[e.entityId] ??= <String>[]).add(e.id);
+    }
+    final entityOf = {for (final e in entries) e.id: e.entityId};
+    String resolveId(Map r) {
+      final entryId = '${r['entryId'] ?? ''}';
+      if (entryId.isNotEmpty && known.contains(entryId)) return entryId;
+      return (idsByEntity['${r['entityId']}'] ?? const <String>[]).firstOrNull ??
+          '';
+    }
+
+    final applied = <String>{};
+    final rejected = <SyncPushRejection>[];
+    final retryable = <String>{};
+    final missing = <SyncPushRejection>[];
+    for (final r in results.whereType<Map>()) {
+      final id = resolveId(r);
+      if (id.isEmpty) continue;
+      switch ('${r['status']}') {
+        case 'applied':
+          applied.add(id);
+        case 'rejected':
+          rejected.add(SyncPushRejection(
+            entryId: id,
+            entityId: entityOf[id] ?? '${r['entityId'] ?? ''}',
+            error: '${r['error'] ?? 'rejected by server'}',
+          ));
+        case 'missing':
+          missing.add(SyncPushRejection(
+            entryId: id,
+            entityId: entityOf[id] ?? '${r['entityId'] ?? ''}',
+            error: '${r['error'] ?? 'no staged record on the server'}',
+          ));
+        default:
+          // deferred / stored: the staged row is alive again — hand it back
+          // to the normal pending queue so the next drain retries it with
+          // whatever grants are available then.
+          retryable.add(id);
+      }
+    }
+    return SyncRecoveryOutcome(
+      applied: applied,
+      rejected: rejected,
+      retryable: retryable,
+      missing: missing,
+    );
   }
 
   /// Fetches every transaction recorded after [cursor] — including the ones

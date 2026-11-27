@@ -15,7 +15,20 @@ v2   reconstructed from the v3 initial commit's `_onCreate`, with the
      rather than an invention. See docs/architecture/database-migration-log.md.
 v3   f644ceb (`_databaseVersion = 3`) `_onCreate`
 v4   0d071dd (`_databaseVersion = 4`) `_onCreate`
+v5   reconstructed: the v4 `_onCreate` plus the v5 upgrade DDL recorded in
+     ea2dc36's `_onUpgrade` (`oldVersion < 5` block). No commit ever stamped
+     `schemaVersion = 5`, so — like v2 — this is an evidence-based
+     reconstruction, not a verbatim file.
+v6   ea2dc36 (`schemaVersion = 6`) `_onCreate`
+v8   3697555 (`schemaVersion = 8`) `_onCreate`
+v9   0f149ae (`schemaVersion = 9`) `_onCreate`
+v10  1fbfdea (`schemaVersion = 10`) `_onCreate`
 v12  485c96e (`schemaVersion = 12`) `_onCreate`
+v13  7be6f5e (`schemaVersion = 13`) `_onCreate`
+v14  e384e32 (`schemaVersion = 14`) `_onCreate`
+v15  516f1be (`schemaVersion = 15`) `_onCreate`
+v16  1915388 (`schemaVersion = 16`) `_onCreate`
+v17  ecda9ef (`schemaVersion = 17`) `_onCreate`
 v19  cc45662 (`schemaVersion = 19`) `_onCreate`
 v20  0444604 (`schemaVersion = 20`) `_onCreate`
 v21  e82123a (`schemaVersion = 21`) `_onCreate`
@@ -56,7 +69,24 @@ FIXTURE_SOURCES = {
     ),
     3: ("f644ceb", "Verbatim `_onCreate` of the first committed schema (v3)."),
     4: ("0d071dd", "Verbatim `_onCreate` of schema v4."),
+    5: (
+        "0d071dd",
+        "Reconstructed: v4 `_onCreate` (0d071dd) plus the v5 upgrade DDL "
+        "from ea2dc36's `_onUpgrade` `oldVersion < 5` block (void "
+        "attribution columns, cash_movements.user_id, one_open_shift "
+        "index, prevent_second_open_shift triggers, sales_shift_id "
+        "index). No commit ever set schemaVersion = 5.",
+    ),
+    6: ("ea2dc36", "Verbatim `_onCreate` of schema v6."),
+    8: ("3697555", "Verbatim `_onCreate` of schema v8."),
+    9: ("0f149ae", "Verbatim `_onCreate` of schema v9."),
+    10: ("1fbfdea", "Verbatim `_onCreate` of schema v10."),
     12: ("485c96e", "Verbatim `_onCreate` of schema v12."),
+    13: ("7be6f5e", "Verbatim `_onCreate` of schema v13."),
+    14: ("e384e32", "Verbatim `_onCreate` of schema v14."),
+    15: ("516f1be", "Verbatim `_onCreate` of schema v15."),
+    16: ("1915388", "Verbatim `_onCreate` of schema v16."),
+    17: ("ecda9ef", "Verbatim `_onCreate` of schema v17."),
     19: ("cc45662", "Verbatim `_onCreate` of schema v19."),
     20: ("0444604", "Verbatim `_onCreate` of schema v20."),
     21: ("e82123a", "Verbatim `_onCreate` of schema v21."),
@@ -642,6 +672,36 @@ def insert_rows(conn: sqlite3.Connection, table: str, rows: list[dict]) -> None:
         conn.execute(sql, [row[key] for key in usable])
 
 
+# The v5 schema was never committed as an `_onCreate`: the release line went
+# from `_databaseVersion = 4` (0d071dd) straight to `schemaVersion = 6`
+# (ea2dc36). A v5-stamped database is what the `oldVersion < 5` upgrade block
+# in ea2dc36 produces on top of the v4 schema, so the fixture applies exactly
+# those statements after the v4 `_onCreate`. The representative data set has
+# a single OPEN shift, so `one_open_shift` is created — matching what the
+# historical block did when it found at most one open shift.
+V5_POST_DDL = [
+    "ALTER TABLE sales ADD COLUMN voided_at TEXT",
+    "ALTER TABLE sales ADD COLUMN voided_by TEXT",
+    "ALTER TABLE sales ADD COLUMN voided_shift_id TEXT",
+    "ALTER TABLE cash_movements ADD COLUMN user_id TEXT",
+    "CREATE UNIQUE INDEX one_open_shift ON shifts(status) "
+    "WHERE status = 'OPEN'",
+    """
+        CREATE TRIGGER prevent_second_open_shift_insert
+        BEFORE INSERT ON shifts WHEN NEW.status = 'OPEN'
+        AND EXISTS (SELECT 1 FROM shifts WHERE status = 'OPEN')
+        BEGIN SELECT RAISE(ABORT, 'A shift is already open'); END
+    """,
+    """
+        CREATE TRIGGER prevent_second_open_shift_update
+        BEFORE UPDATE OF status ON shifts WHEN NEW.status = 'OPEN'
+        AND EXISTS (SELECT 1 FROM shifts WHERE status = 'OPEN' AND id != NEW.id)
+        BEGIN SELECT RAISE(ABORT, 'A shift is already open'); END
+    """,
+    "CREATE INDEX sales_shift_id ON sales(shift_id)",
+]
+
+
 def build_fixture(version: int, commit: str) -> Path:
     source = git_show(commit)
     statements = collect_function_sql(source, "_onCreate")
@@ -658,6 +718,12 @@ def build_fixture(version: int, commit: str) -> Path:
         conn.execute("PRAGMA foreign_keys = ON")
         for sql in statements:
             conn.execute(sql)
+        if version == 5:
+            # Apply the v4 -> v5 upgrade DDL *before* seeding so the new
+            # columns (sales.voided_*, cash_movements.user_id) receive the
+            # representative values a real v5 till would have written.
+            for sql in V5_POST_DDL:
+                conn.execute(sql)
         for table, rows in rows_for(version).items():
             insert_rows(conn, table, rows)
         conn.execute(f"PRAGMA user_version = {version}")

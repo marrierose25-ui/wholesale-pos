@@ -11,6 +11,7 @@ library pos_local_engine;
 
 export 'src/pos_local_engine.dart';
 export 'src/database/local_database.dart';
+export 'src/database/local_database_app.dart';
 export 'src/repositories/sqflite_sale_repository.dart';
 export 'src/repositories/sqflite_finance_repository.dart';
 export 'src/repositories/sqflite_shift_repository.dart';
@@ -23,6 +24,7 @@ export 'src/backend/sqlite_local_data_ops.dart';
 export 'src/sync/sqflite_sync_outbox_repository.dart';
 export 'src/sync/sync_outbox.dart';
 export 'src/sync/sync_pull_applier.dart';
+export 'src/sync/pending_owner_actions.dart';
 export 'src/licensing/activation_client.dart';
 export 'src/licensing/device_activation.dart';
 export 'src/licensing/device_fingerprint.dart';

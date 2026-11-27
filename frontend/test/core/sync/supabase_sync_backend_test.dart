@@ -156,6 +156,37 @@ void main() {
     expect(paths, ['/rest/v1/void_requests']);
   });
 
+  test(
+    'unsupported entities fail without sending or acknowledging the batch',
+    () async {
+      final requests = <http.Request>[];
+      final client = MockClient((req) async {
+        requests.add(req);
+        return http.Response('[]', 201);
+      });
+      final backend = SupabaseSyncBackend(
+        url: 'https://proj.supabase.co',
+        key: 'sb_test',
+        client: client,
+      );
+
+      await expectLater(
+        backend.push([
+          _entry(
+            entityType: SyncEntities.financeEntry,
+            entityId: 'finance-1',
+            payload: {
+              'finance_entry': {'id': 'finance-1', 'status': 'PENDING'},
+            },
+          ),
+        ]),
+        throwsA(isA<UnsupportedError>()),
+      );
+
+      expect(requests, isEmpty);
+    },
+  );
+
   test('a non-2xx response throws so the rows stay queued', () async {
     final client = MockClient((req) async => http.Response('boom', 500));
     final backend = SupabaseSyncBackend(

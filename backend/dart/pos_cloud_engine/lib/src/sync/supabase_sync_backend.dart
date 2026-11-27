@@ -57,20 +57,34 @@ class SupabaseSyncBackend implements SyncBackend {
   bool get isConfigured => _baseUrl.isNotEmpty && _apiKey.isNotEmpty;
 
   @override
-  Future<Set<String>> push(List<SyncOutboxEntry> entries) async {
-    // Acked incrementally, per entry (audit 2 #25). It used to `continue` past
-    // an unknown entity type and then ack the whole batch at the end, so a row
-    // that was never sent looked synced. An unknown type is terminal here (this
-    // legacy sink has no way to store it) and is acked with a notice; every
-    // other entry is acked only after its write returned 2xx.
+  Future<SyncPushOutcome> push(List<SyncOutboxEntry> entries) async {
+    // Validate the entire batch before making any HTTP writes. This legacy
+    // mirror only supports sales, shifts, cash movements and void requests;
+    // newer entity types (finance, products, warehouse, users, etc.) require
+    // the licensed sync gateway. Acknowledging an unsupported outbox row would
+    // permanently lose that change, while partially processing a batch before
+    // discovering one would make its retry needlessly ambiguous.
+    for (final entry in entries) {
+      if (_tableFor(entry.entityType) == null) {
+        throw UnsupportedError(
+          'The legacy Supabase sync backend cannot upload '
+          '"${entry.entityType}". Configure the licensed sync gateway before '
+          'syncing this data; the outbox entry remains queued.',
+        );
+      }
+      if (entry.operation != SyncOperations.upsert &&
+          entry.operation != SyncOperations.delete) {
+        throw UnsupportedError(
+          'The legacy Supabase sync backend does not support operation '
+          '"${entry.operation}" for "${entry.entityType}". The outbox entry '
+          'remains queued.',
+        );
+      }
+    }
+
     final acked = <String>{};
     for (final entry in entries) {
-      final table = _tableFor(entry.entityType);
-      if (table == null) {
-        // Unknown entity type: acknowledge but do not attempt a write.
-        acked.add(entry.id);
-        continue;
-      }
+      final table = _tableFor(entry.entityType)!;
 
       if (entry.operation == SyncOperations.delete) {
         await _delete(table, entry);
@@ -103,13 +117,17 @@ class SupabaseSyncBackend implements SyncBackend {
             (payload['void_request'] as Map).cast<String, dynamic>(),
           ]);
         default:
-          break;
+          throw UnsupportedError(
+            'The legacy Supabase sync backend has no upload handler for '
+            '"${entry.entityType}". The outbox entry remains queued.',
+          );
       }
       acked.add(entry.id);
     }
     // Every write above throws on the first failure, so reaching here means the
-    // acked rows landed. Rows not in this set stay queued.
-    return acked;
+    // acked rows landed. Rows not in this set stay queued. This legacy sink
+    // has no per-entry rejection channel, so nothing is quarantined here.
+    return SyncPushOutcome(acked: acked);
   }
 
   static String? _tableFor(String entityType) => switch (entityType) {
