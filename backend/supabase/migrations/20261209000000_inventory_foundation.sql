@@ -14,7 +14,6 @@
 -- 1. Product catalogue gains cost price + optional image (idempotent).
 ALTER TABLE public.pos_products
   ADD COLUMN IF NOT EXISTS bought_price_minor_units bigint NOT NULL DEFAULT 0;
-ALTER TABLE public.pos_products
 
 -- 2. Stores.
 CREATE TABLE IF NOT EXISTS public.stores (
@@ -57,17 +56,44 @@ GRANT DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE
 --    `billing_quantity_milliunits` convention. One live row per
 --    (store, product) pair; tombstones are excluded so a deleted record can
 --    be re-created.
+-- Product photos. `pos_products.id` is text and its key is the composite
+-- (customer_id, id), so the image row keys on the same pair: one image per
+-- product per tenant, cascade-deleted with the product. `image_data` is the
+-- base64 JPEG the same encodeProof pipeline produces for register proof
+-- photos; `deleted_at` is the tombstone the sync feed carries so an image
+-- removed on one device disappears on the others.
 CREATE TABLE IF NOT EXISTS public.product_images (
-  product_id    uuid PRIMARY KEY REFERENCES public.pos_products(id) ON DELETE CASCADE,
-  customer_id   uuid NOT NULL REFERENCES public.customers(id),
-  image_data    text NOT NULL,
-  created_at    timestamptz NOT NULL DEFAULT now(),
-  updated_at    timestamptz NOT NULL DEFAULT now(),
-  received_at   timestamptz NOT NULL DEFAULT now()
+  customer_id   uuid                     NOT NULL,
+  product_id    text                     NOT NULL,
+  image_data    text,
+  created_at    timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at    timestamp with time zone NOT NULL DEFAULT now(),
+  deleted_at    timestamp with time zone,
+  received_at   timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT product_images_customer_id_fkey FOREIGN KEY (customer_id)
+    REFERENCES public.customers(id),
+  CONSTRAINT product_images_product_fkey FOREIGN KEY (customer_id, product_id)
+    REFERENCES public.pos_products(customer_id, id) ON DELETE CASCADE,
+  CONSTRAINT product_images_pkey PRIMARY KEY (customer_id, product_id)
 );
+
 ALTER TABLE public.product_images ENABLE ROW LEVEL SECURITY;
-CREATE POLICY product_images_tenant ON public.product_images
-  FOR ALL TO service_role USING (true) WITH CHECK (true);
+
+CREATE INDEX IF NOT EXISTS product_images_customer_received
+  ON public.product_images USING btree (customer_id, received_at, product_id);
+
+DROP TRIGGER IF EXISTS touch_received_at ON public.product_images;
+CREATE TRIGGER touch_received_at
+  BEFORE UPDATE ON public.product_images
+  FOR EACH ROW EXECUTE FUNCTION public.pos_touch_received_at();
+
+GRANT DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE
+  ON TABLE public.product_images TO anon, authenticated;
+GRANT DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE
+  ON TABLE public.product_images TO service_role;
+REVOKE ALL ON TABLE public.product_images FROM postgres;
+GRANT DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE
+  ON TABLE public.product_images TO postgres;
 
 CREATE TABLE IF NOT EXISTS public.store_inventory (
   id                  text                     NOT NULL,

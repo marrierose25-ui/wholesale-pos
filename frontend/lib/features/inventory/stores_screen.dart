@@ -30,7 +30,10 @@ class StoresScreenState extends State<StoresScreen> {
   }
 
   void refresh() {
-    setState(() => _future = widget.repository.getStores());
+    final future = widget.repository.getStores();
+    setState(() {
+      _future = future;
+    });
   }
 
   void _snack(String message, {bool isError = false}) {

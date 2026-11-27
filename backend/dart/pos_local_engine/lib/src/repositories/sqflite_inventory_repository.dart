@@ -310,19 +310,41 @@ class SqfliteInventoryRepository implements InventoryRepository {
 
       await txn.insert('products', resolved.toMap());
       // Photo bytes live in product_images (BLOB), never on the product row —
-      // same split as cash_movement_photos. imageData arrives as base64.
+      // same split as cash_movement_photos. imageData arrives as base64 and
+      // is bounded by the same budget the proof-photo pipeline guarantees;
+      // the server enforces the identical cap, so reject early and atomically.
       if (resolved.imageData != null && resolved.imageData!.isNotEmpty) {
+        if (resolved.imageData!.length > 400000) {
+          throw Exception('Product image is too large.');
+        }
         await txn.insert('product_images', {
           'product_id': resolved.id,
           'jpeg_bytes': base64Decode(resolved.imageData!),
           'created_at': now.toIso8601String(),
+          'updated_at': now.toIso8601String(),
         });
+        // The image rides its own sync entity so product payloads never
+        // carry bytes; entityId is the product id (one image per product).
+        await SyncOutbox.upsert(
+          txn,
+          entityType: SyncEntities.productImage,
+          entityId: resolved.id,
+          payload: {
+            SyncEntities.payloadKeys[SyncEntities.productImage]!: {
+              'product_id': resolved.id,
+              'image_data': resolved.imageData,
+              'created_at': now.toIso8601String(),
+              'updated_at': now.toIso8601String(),
+              'deleted_at': null,
+            },
+          },
+        );
       }
       await txn.insert('store_inventory', stock.toMap());
 
       // Queue the product first, then its stock record: the server applies
       // master data before dependents anyway, but keeping the order honest
-      // costs nothing.
+      // costs nothing. The image entry above lands between them.
       await _enqueueProduct(txn, resolved.id);
       await _enqueueInventory(txn, stock.id);
     });

@@ -1,5 +1,5 @@
 {
-  "user_version": 25,
+  "user_version": 26,
   "tables": {
     "audit_logs": {
       "sql": "CREATE TABLE audit_logs (id TEXT PRIMARY KEY, user_id TEXT, action TEXT NOT NULL, details TEXT, created_at TEXT NOT NULL)",
@@ -662,7 +662,7 @@
       "unique_constraints": []
     },
     "product_images": {
-      "sql": "CREATE TABLE product_images (product_id TEXT PRIMARY KEY, jpeg_bytes BLOB NOT NULL, created_at TEXT NOT NULL, FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE)",
+      "sql": "CREATE TABLE product_images (product_id TEXT PRIMARY KEY, jpeg_bytes BLOB NOT NULL, created_at TEXT NOT NULL, updated_at TEXT, FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE)",
       "columns": [
         {
           "name": "product_id",
@@ -682,6 +682,13 @@
           "name": "created_at",
           "type": "TEXT",
           "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "updated_at",
+          "type": "TEXT",
+          "not_null": 0,
           "default": null,
           "primary_key": 0
         }

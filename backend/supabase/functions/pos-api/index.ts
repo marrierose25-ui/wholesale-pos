@@ -165,6 +165,7 @@ export const ACTIONS: Record<string, Handler> = {
   delete_store: inventory.deleteStore,
   list_inventory: inventory.listInventory,
   create_inventory_product: inventory.createInventoryProduct,
+  save_product_image: inventory.saveProductImage,
 
   // Device management (owner-only; see OWNER_ONLY in authorization.ts)
   list_devices: licensing.listDevices,

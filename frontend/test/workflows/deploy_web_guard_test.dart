@@ -15,11 +15,26 @@ void main() {
     '../.github/workflows/deploy-web.yml',
   ).readAsStringSync();
 
-  test('push trigger stays limited to main', () {
+  test('push trigger stays disabled (manual deploy only)', () {
+    // 402e751 paused automatic production deployment: the contract is now
+    // STRICTER than main-only — no push trigger may exist at all, so nothing
+    // can auto-publish; releases go through workflow_dispatch + approval.
     expect(
       workflow.contains('branches: [main]'),
+      isFalse,
+      reason:
+          'deploy-web.yml must not auto-deploy on push — deployment is '
+          'manual-only via workflow_dispatch with production approval',
+    );
+    expect(
+      RegExp(r"^\s*push:").hasMatch(workflow),
+      isFalse,
+      reason: 'no push trigger may exist in deploy-web.yml',
+    );
+    expect(
+      workflow.contains('workflow_dispatch:'),
       isTrue,
-      reason: 'deploy-web.yml must only auto-deploy pushes to main',
+      reason: 'manual dispatch must remain the only deploy path',
     );
   });
 

@@ -5,14 +5,6 @@ import 'package:pos_cloud_engine/pos_cloud_engine.dart';
 import 'package:pos_contracts/pos_contracts.dart' hide AppBackend;
 import 'package:uuid/uuid.dart';
 
-import '../cloud/cloud_api_client.dart';
-import '../cloud/cloud_finance_repository.dart';
-import '../cloud/cloud_inventory_repository.dart';
-import '../cloud/cloud_picklist_repository.dart';
-import '../cloud/cloud_product_repository.dart';
-import '../cloud/cloud_sale_repository.dart';
-import '../cloud/cloud_shift_repository.dart';
-import '../cloud/cloud_user_repository.dart';
 import 'app_backend.dart';
 import 'web_local_storage.dart';
 import 'web_activation_gate.dart';

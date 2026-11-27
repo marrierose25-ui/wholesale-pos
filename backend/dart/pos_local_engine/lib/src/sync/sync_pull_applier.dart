@@ -36,6 +36,10 @@ class SyncApplyReport {
   /// separately like the other mutable master data.
   final int stores;
   final int storeInventory;
+
+  /// Product photos applied from the cloud (insert or replace). A cloud
+  /// tombstone removes the local row and is not counted here.
+  final int productImages;
   final int skipped;
 
   const SyncApplyReport({
@@ -53,6 +57,7 @@ class SyncApplyReport {
     this.picklistItems = 0,
     this.stores = 0,
     this.storeInventory = 0,
+    this.productImages = 0,
     this.skipped = 0,
   });
 
@@ -72,7 +77,8 @@ class SyncApplyReport {
       picklists +
       picklistItems +
       stores +
-      storeInventory;
+      storeInventory +
+      productImages;
 
   SyncApplyReport operator +(SyncApplyReport other) => SyncApplyReport(
     sales: sales + other.sales,
@@ -89,6 +95,7 @@ class SyncApplyReport {
     picklistItems: picklistItems + other.picklistItems,
     stores: stores + other.stores,
     storeInventory: storeInventory + other.storeInventory,
+    productImages: productImages + other.productImages,
     skipped: skipped + other.skipped,
   );
 
@@ -102,6 +109,7 @@ class SyncApplyReport {
       'persons: $financeCategories, entries: $financeEntries, '
       'picklists: $picklists, picklistItems: $picklistItems, '
       'stores: $stores, storeInventory: $storeInventory, '
+      'productImages: $productImages, '
       'skipped: $skipped)';
 }
 
@@ -163,6 +171,7 @@ class SyncPullApplier {
         picklistItems = 0,
         stores = 0,
         storeInventory = 0,
+        productImages = 0,
         skipped = 0;
 
     await db.transaction((txn) async {
@@ -181,6 +190,12 @@ class SyncPullApplier {
       storeInventory = await _applyStoreInventory(
         txn,
         page.changes['store_inventory'] ?? const [],
+      );
+      // Product photos land right after products: product_images foreign-keys
+      // to products(id), and image bytes never ride the product row itself.
+      productImages = await _applyProductImages(
+        txn,
+        page.changes['product_images'] ?? const [],
       );
       persons = await _applyFinanceCategories(
         txn,
@@ -240,6 +255,7 @@ class SyncPullApplier {
       picklistItems: picklistItems,
       stores: stores,
       storeInventory: storeInventory,
+      productImages: productImages,
       skipped: skipped,
     );
   }
@@ -1372,6 +1388,73 @@ class SyncPullApplier {
     return count;
   }
 
+  /// Product photos: one BLOB row per product, applied newest-wins on
+  /// `updated_at` exactly like the other mutable master rows. A cloud
+  /// tombstone (`deleted_at` set) removes the local bytes; a pending local
+  /// `product_image` outbox entry always wins over the cloud copy.
+  Future<int> _applyProductImages(
+    Transaction txn,
+    List<Map<String, dynamic>> rows,
+  ) async {
+    var count = 0;
+    for (final row in rows) {
+      final productId = _str(row['product_id']);
+      if (productId == null || productId.isEmpty) continue;
+      // The photo is meaningless without its product; products are walked
+      // before this table, so a missing parent means it has not landed yet.
+      if (!await _exists(txn, 'products', productId)) continue;
+
+      final deletedAt = _localIso(row['deleted_at']);
+      if (deletedAt != null) {
+        if (await _hasPending(txn, 'product_image', productId)) continue;
+        await _safely(txn, () async {
+          await txn.delete(
+            'product_images',
+            where: 'product_id = ?',
+            whereArgs: [productId],
+          );
+        });
+        continue;
+      }
+
+      final imageData = _str(row['image_data']);
+      if (imageData == null || imageData.isEmpty) continue;
+      final List<int> bytes;
+      try {
+        bytes = base64Decode(imageData);
+      } on FormatException {
+        continue; // malformed payload — skip the row, never the page
+      }
+      if (bytes.isEmpty) continue;
+      final updatedAt = _localIso(row['updated_at']) ??
+          _localIso(row['created_at']) ??
+          _nowIso();
+      final createdAt = _localIso(row['created_at']) ?? _nowIso();
+
+      final local = await txn.query(
+        'product_images',
+        columns: const ['updated_at'],
+        where: 'product_id = ?',
+        whereArgs: [productId],
+        limit: 1,
+      );
+      if (local.isNotEmpty) {
+        if (await _hasPending(txn, 'product_image', productId)) continue;
+        if (!_outdated(local.first['updated_at'], updatedAt)) continue;
+      }
+      await _safely(txn, () async {
+        await txn.insert('product_images', {
+          'product_id': productId,
+          'jpeg_bytes': bytes,
+          'created_at': createdAt,
+          'updated_at': updatedAt,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      });
+      count++;
+    }
+    return count;
+  }
+
   /// True when the row already here was last touched at or before [incoming],
   /// so the incoming copy is the newer one. Both sides are the local naive ISO
   /// form ([_localIso] has already converted the cloud's `timestamptz`), which
@@ -1518,6 +1601,7 @@ class CloudSyncPuller {
   static const List<String> tableOrder = [
     'users',
     'products',
+    'product_images',
     'stores',
     'store_inventory',
     'picklists',

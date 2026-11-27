@@ -823,3 +823,18 @@ Corrections in this commit:
 Correction: `pos_link_legacy_reversal` now requires exact amount equality
 between the withdrawal and the COMPLETED CASH collection before linking —
 mismatch refuses with no link, no audit, both records untouched (J3–J5).
+
+### Inventory foundation completion (feature/inventory-foundation)
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Local migration chain | `flutter test test/core/database/historical_fixture_migration_test.dart` | **38/38 PASS** — genuine v2–v22 + new v24 fixture upgrade to schema v26 with historical data preserved (incl. new assertions: inventory tables exist/empty, `bought_price_minor_units` backfilled, `product_images.updated_at` present) |
+| Fresh schema | `flutter test test/core/database/schema_characterization_test.dart` | **11/11 PASS** (goldens regenerated for v26) |
+| Two-device sync identity | `flutter test test/core/sync/inventory_two_device_test.dart` | **8/8 PASS** — deterministic `si_{store}_{product}` ids, duplicate-upsert convergence, deferred parents, retry idempotence, tombstone-vs-stale-write, pending-outbox shield, image pull/tombstone |
+| Inventory UI | `flutter test test/features/inventory/inventory_ui_test.dart` | **11/11 PASS** — empty state, store CRUD, wizard nav/validation/back-preservation/no-store/double-submit/image-cancel, filter, avatars, green/amber/red indicators |
+| Image backup round-trip | `flutter test test/core/utils/product_image_backup_test.dart` | **3/3 PASS** — bytes+linkage, malformed/orphan skip, pre-image backup compat |
+| Deno | `deno fmt --check`, `deno check`, `deno test` | fmt clean after format; check exit 0; **82 passed, 0 failed** (router expected-actions list updated for the 6 inventory actions) |
+| `flutter analyze --fatal-infos` | frontend | **0 issues** (also repaired rebase damage: stale `frontend/lib/core/cloud/` duplicate, `cloud_backend.dart` dead imports, `setState`-returns-Future in inventory screens) |
+| Web production build | `flutter build web --release` | **PASS** |
+| Cold PG migration replay | `replay_migrations.sh` | **BLOCKED (env)**: local PG@55432 already holds applied tables; script targets the fixed `postgres` db — rerun on a clean instance before release |
+| Windows desktop build | `flutter build windows` | not run in this batch — run before release |

@@ -1,0 +1,26 @@
+{
+  "schema_version": 24,
+  "source_commit": "1f6bab48cf2fb8854739b6ba73202453f17bc7f2",
+  "source_path": "backend/dart/pos_local_engine/lib/src/database/local_database.dart",
+  "provenance": "Verbatim `_onCreate` of schema v24 (main @1f6bab4, parent of the inventory foundation commit c69149c).",
+  "tables": [
+    "audit_logs",
+    "cash_movement_photos",
+    "cash_movements",
+    "counters",
+    "devices",
+    "finance_categories",
+    "finance_entries",
+    "picklist_customers",
+    "picklist_items",
+    "picklists",
+    "products",
+    "sale_items",
+    "sales",
+    "settings",
+    "shifts",
+    "sync_outbox",
+    "users",
+    "void_requests"
+  ]
+}

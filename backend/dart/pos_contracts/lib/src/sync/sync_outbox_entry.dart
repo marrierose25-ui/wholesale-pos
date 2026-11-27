@@ -89,6 +89,7 @@ abstract final class SyncEntities {
   static const String picklistItem = 'picklist_item';
   static const String store = 'store';
   static const String storeInventory = 'store_inventory';
+  static const String productImage = 'product_image';
 
   /// Master data: the newest payload wins, so a later edit of the same id must
   /// replace what is already staged rather than be dropped as a duplicate.
@@ -105,6 +106,9 @@ abstract final class SyncEntities {
     // this release, but stock quantities will move), so both are mutable.
     store,
     storeInventory,
+    // A product photo is its own entity: image bytes never ride the product
+    // payload, and a replaced photo re-stages newest-wins like any mutable row.
+    productImage,
   };
 
   /// Payload key each entity type is filed under, so the gateway and the
@@ -122,6 +126,7 @@ abstract final class SyncEntities {
     picklistItem: 'picklist_item',
     store: 'store',
     storeInventory: 'store_inventory',
+    productImage: 'product_image',
   };
 }
 

@@ -121,9 +121,12 @@ const ACTION_FEATURES: Record<string, string[]> = {
   // Register History (cross-shift ledger browsing)
   shift_history: ["register_history"],
   list_cash_movements: ["register_history"],
-  list_stores: ["inventory"], create_store: ["inventory"],
-  delete_store: ["inventory"], list_inventory: ["inventory"],
+  list_stores: ["inventory"],
+  create_store: ["inventory"],
+  delete_store: ["inventory"],
+  list_inventory: ["inventory"],
   create_inventory_product: ["inventory"],
+  save_product_image: ["inventory"],
 };
 
 async function checkAuthorization(

@@ -115,7 +115,7 @@ Contrary to earlier documentation, there is **ONE shared shell** with **TWO entr
 | `finance_*` | `finance` | Finance | pos-api |
 | `list_picklists`, `get_picklist_items`, `create_picklist`, `update_picklist_items`, `update_picklist_item`, `toggle_picklist_item` | `warehouse` | Picklists/Customers | pos-api |
 | `delete_picklist_item`, `delete_picklist`, `get_customers`, `add_customer` | `warehouse_fill` | Picklists/Customers | pos-api |
-| `list_stores`, `create_store`, `delete_store`, `list_inventory`, `create_inventory_product` | `inventory` | Inventory | pos-api |
+| `list_stores`, `create_store`, `delete_store`, `list_inventory`, `create_inventory_product`, `save_product_image` | `inventory` | Inventory | pos-api |
 | `search_sales`, `void_sale`, `list_void_requests`, `approve_void`, `reject_void` | `history`, `register_history` | Sales history | pos-api |
 | `report_summary`, `revenue_trend` | `reports` | Reporting | pos-api |
 | `list_users`, `create_user`, `set_user_permissions`, `set_user_phone`, `reset_password`, `set_user_active`, `delete_user` | `users` | Staff management | pos-api |

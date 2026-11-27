@@ -43,7 +43,7 @@ class UnsupportedDatabaseVersionException implements Exception {
 
 class LocalDatabase {
   static const String databaseName = 'wholesale_pos.db';
-  static const int schemaVersion = 25;
+  static const int schemaVersion = 26;
   static const String deviceIdFileName = 'device_id.txt';
   static const String themeSettingKey = 'theme_mode';
 
@@ -760,6 +760,21 @@ class LocalDatabase {
       ''');
       await _createInventoryIndexes(db);
     }
+    if (oldVersion < 26) {
+      // Product-image lifecycle completion: `updated_at` lets the pull
+      // applier apply newest-wins like every other mutable entity, and
+      // existing rows inherit their creation stamp. Additive only.
+      final imageCols = await db.rawQuery('PRAGMA table_info(product_images)');
+      if (!imageCols.any((c) => c['name'] == 'updated_at')) {
+        await db.execute(
+          'ALTER TABLE product_images ADD COLUMN updated_at TEXT',
+        );
+        await db.execute(
+          'UPDATE product_images SET updated_at = created_at '
+          'WHERE updated_at IS NULL',
+        );
+      }
+    }
     if (pause != null) await pause('late');
   }
 
@@ -772,6 +787,7 @@ class LocalDatabase {
       'product_id TEXT PRIMARY KEY, '
       'jpeg_bytes BLOB NOT NULL, '
       'created_at TEXT NOT NULL, '
+      'updated_at TEXT, '
       'FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE)',
     );
   }

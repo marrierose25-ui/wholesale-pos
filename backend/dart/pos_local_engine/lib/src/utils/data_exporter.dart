@@ -114,6 +114,7 @@ class DataExporter {
           'product_id': row['product_id'],
           'jpeg_bytes': base64Encode(row['jpeg_bytes'] as List<int>),
           'created_at': row['created_at'],
+          'updated_at': row['updated_at'],
         },
     ];
 

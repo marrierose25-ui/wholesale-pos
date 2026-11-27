@@ -371,16 +371,36 @@ class DataImporter {
         );
       }
       // Optional: backups predating product images simply restore none.
+      // A malformed row or one naming a product the backup does not carry is
+      // skipped, never allowed to fail the whole restore.
+      final productIds = {
+        for (final row in (data['products'] as List? ?? const []))
+          (row as Map)['id'],
+      };
       final productImages = data['product_images'] is List
           ? data['product_images'] as List
           : const <dynamic>[];
       for (var row in productImages) {
         final m = Map<String, dynamic>.from(row as Map);
+        final productId = m['product_id'];
+        if (productId == null || !productIds.contains(productId)) continue;
         final b64 = m['jpeg_bytes'];
+        List<int>? bytes;
+        if (b64 is String) {
+          try {
+            bytes = base64Decode(b64);
+          } on FormatException {
+            bytes = null;
+          }
+        } else if (b64 is List<int>) {
+          bytes = b64;
+        }
+        if (bytes == null || bytes.isEmpty) continue;
         await txn.insert('product_images', {
-          'product_id': m['product_id'],
-          'jpeg_bytes': b64 is String ? base64Decode(b64) : b64,
+          'product_id': productId,
+          'jpeg_bytes': bytes,
           'created_at': m['created_at'],
+          'updated_at': m['updated_at'] ?? m['created_at'],
         });
       }
       for (var row in (data['shifts'] as List)) {

@@ -54,7 +54,11 @@ class InventoryScreenState extends State<InventoryScreen> {
   /// Re-runs both fetches. Called by the shell on tab-select and after the
   /// wizard or a store change returns.
   void refresh({bool silent = false}) {
-    setState(() => _future = _load());
+    // Start the load first: a setState closure must not return the Future.
+    final future = _load();
+    setState(() {
+      _future = future;
+    });
   }
 
   void _openWizard(List<Store> stores) async {
