@@ -13,10 +13,7 @@ import {
   type Row,
 } from "./mock_db.ts";
 import { signJwt } from "../shared/auth.ts";
-import {
-  ACTION_FEATURES,
-  OWNER_ONLY,
-} from "../shared/authorization.ts";
+import { ACTION_FEATURES, OWNER_ONLY } from "../shared/authorization.ts";
 
 const { handleRequest, ACTIONS } = await import("../index.ts");
 
