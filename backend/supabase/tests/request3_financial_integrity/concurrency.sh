@@ -23,6 +23,11 @@ VALUES ('$CUST', 'R3 Cash Race Shop')
 ON CONFLICT (id) DO NOTHING;
 DELETE FROM actor_grants WHERE customer_id='$CUST';
 DELETE FROM sync_mirror WHERE customer_id='$CUST';
+-- This fixture uses stable IDs, so it must be safely repeatable on the same
+-- scratch database. Remove dependent reconciliation/audit rows before the
+-- ledger rows they reference; the tenant is synthetic and isolated to this test.
+DELETE FROM cash_movement_reconciliations WHERE customer_id='$CUST';
+DELETE FROM pos_audit_logs WHERE customer_id='$CUST';
 DELETE FROM cash_movements WHERE customer_id='$CUST';
 DELETE FROM pos_finance_entries WHERE customer_id='$CUST';
 DELETE FROM pos_finance_categories WHERE customer_id='$CUST';
