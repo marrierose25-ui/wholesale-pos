@@ -216,4 +216,92 @@ if [ "$ST" != "DELETED" ] || [ "$SRC" != "fe-other" ] || [ "$OWN" != "1" ]; then
 fi
 echo "PASS D: lost claim race recovered — fe-d1 deleted with its own reversal, leg-d1 stayed with fe-other"
 
+echo "== E: two different withdrawals concurrently linked to ONE collection =="
+$PSQL <<SQL
+INSERT INTO pos_finance_categories (id, customer_id, name, created_at)
+VALUES ('cat-link-e', '$CUST', 'LinkRaceE', now());
+INSERT INTO pos_finance_entries (id, customer_id, category_id, source,
+  amount_minor_units, description, status, entry_date, created_at,
+  created_by, completed_at, completed_by, updated_at, payment_method)
+VALUES ('fe-link-e', '$CUST', 'cat-link-e', 'ManualLink', 10000, 'link race E',
+        'COMPLETED', now(), now(), 'race-cash', now(), 'race-cash', now(), 'CASH');
+INSERT INTO cash_movements (id, customer_id, shift_id, user_id, type,
+  amount_minor_units, reason, created_at, source_finance_entry_id)
+VALUES ('dep-fe-link-e', '$CUST', '$SHIFT', 'race-cash', 'DEPOSIT', 10000,
+        'Collected from LinkRaceE', now(), 'fe-link-e'),
+       ('leg-link-e-a', '$CUST', '$SHIFT', 'race-cash', 'WITHDRAWAL', 10000,
+        'legacy candidate A', now(), NULL),
+       ('leg-link-e-b', '$CUST', '$SHIFT', 'race-cash', 'WITHDRAWAL', 10000,
+        'legacy candidate B', now(), NULL);
+SQL
+link_e() {
+  $PSQL -c "SELECT public.pos_link_legacy_reversal('$CUST','$1','fe-link-e','race-cash','concurrency test E')"
+}
+link_e leg-link-e-a > /tmp/r3fin_link_e1.out 2>/tmp/r3fin_link_e1.err &
+P1=$!
+link_e leg-link-e-b > /tmp/r3fin_link_e2.out 2>/tmp/r3fin_link_e2.err &
+P2=$!
+RC1=0; RC2=0
+wait $P1 || RC1=$?
+wait $P2 || RC2=$?
+if [ "$RC1" -eq "$RC2" ]; then
+  echo "FAIL E: expected exactly one manual link to succeed (rc $RC1/$RC2)" >&2
+  cat /tmp/r3fin_link_e1.err /tmp/r3fin_link_e2.err >&2
+  exit 1
+fi
+N=$($PSQL -c "SELECT count(*) FROM cash_movements WHERE customer_id='$CUST' AND source_finance_entry_id='fe-link-e' AND type='WITHDRAWAL'")
+A=$($PSQL -c "SELECT count(*) FROM pos_audit_logs WHERE customer_id='$CUST' AND action='LEGACY_REVERSAL_LINKED' AND details LIKE '%fe-link-e%'")
+U=$($PSQL -c "SELECT count(*) FROM cash_movements WHERE customer_id='$CUST' AND id IN ('leg-link-e-a','leg-link-e-b') AND source_finance_entry_id IS NULL")
+D=$($PSQL -c "SELECT count(*) FROM cash_movements WHERE customer_id='$CUST' AND source_finance_entry_id='fe-link-e' AND type='DEPOSIT'")
+if [ "$N" != "1" ] || [ "$A" != "1" ] || [ "$U" != "1" ] || [ "$D" != "1" ]; then
+  echo "FAIL E: linked=$N audits=$A unlinked=$U deposit=$D" >&2
+  exit 1
+fi
+echo "PASS E: one of two candidate withdrawals linked; one audit; the other stayed unlinked"
+
+echo "== F: one withdrawal concurrently linked to TWO collections =="
+$PSQL <<SQL
+INSERT INTO pos_finance_categories (id, customer_id, name, created_at)
+VALUES ('cat-link-f', '$CUST', 'LinkRaceF', now());
+INSERT INTO pos_finance_entries (id, customer_id, category_id, source,
+  amount_minor_units, description, status, entry_date, created_at,
+  created_by, completed_at, completed_by, updated_at, payment_method)
+VALUES ('fe-link-f1', '$CUST', 'cat-link-f', 'ManualLinkA', 11000,
+        'link race F1', 'COMPLETED', now(), now(), 'race-cash', now(),
+        'race-cash', now(), 'CASH'),
+       ('fe-link-f2', '$CUST', 'cat-link-f', 'ManualLinkB', 11000,
+        'link race F2', 'COMPLETED', now(), now(), 'race-cash', now(),
+        'race-cash', now(), 'CASH');
+INSERT INTO cash_movements (id, customer_id, shift_id, user_id, type,
+  amount_minor_units, reason, created_at, source_finance_entry_id)
+VALUES ('dep-fe-link-f1', '$CUST', '$SHIFT', 'race-cash', 'DEPOSIT', 11000,
+        'Collected from LinkRaceF', now(), 'fe-link-f1'),
+       ('dep-fe-link-f2', '$CUST', '$SHIFT', 'race-cash', 'DEPOSIT', 11000,
+        'Collected from LinkRaceF', now(), 'fe-link-f2'),
+       ('leg-link-f-shared', '$CUST', '$SHIFT', 'race-cash', 'WITHDRAWAL',
+        11000, 'shared candidate', now(), NULL);
+SQL
+link_f() {
+  $PSQL -c "SELECT public.pos_link_legacy_reversal('$CUST','leg-link-f-shared','$1','race-cash','concurrency test F')"
+}
+link_f fe-link-f1 > /tmp/r3fin_link_f1.out 2>/tmp/r3fin_link_f1.err &
+P1=$!
+link_f fe-link-f2 > /tmp/r3fin_link_f2.out 2>/tmp/r3fin_link_f2.err &
+P2=$!
+RC1=0; RC2=0
+wait $P1 || RC1=$?
+wait $P2 || RC2=$?
+if [ "$RC1" -eq "$RC2" ]; then
+  echo "FAIL F: expected exactly one collection claim to succeed (rc $RC1/$RC2)" >&2
+  cat /tmp/r3fin_link_f1.err /tmp/r3fin_link_f2.err >&2
+  exit 1
+fi
+N=$($PSQL -c "SELECT count(*) FROM cash_movements WHERE customer_id='$CUST' AND id='leg-link-f-shared' AND source_finance_entry_id IN ('fe-link-f1','fe-link-f2')")
+A=$($PSQL -c "SELECT count(*) FROM pos_audit_logs WHERE customer_id='$CUST' AND action='LEGACY_REVERSAL_LINKED' AND details LIKE '%leg-link-f-shared%'")
+if [ "$N" != "1" ] || [ "$A" != "1" ]; then
+  echo "FAIL F: shared movement claimed=$N manual-link audits=$A" >&2
+  exit 1
+fi
+echo "PASS F: shared withdrawal claimed by exactly one collection; one audit; other claim rejected"
+
 echo "== Request-3 financial-integrity concurrency: ALL PASSED =="
