@@ -72,7 +72,8 @@ BEGIN
   FROM (VALUES
     ('customers'),('licenses'),('device_registrations'),('license_audit'),
     ('seat_vouchers'),('pos_users'),('sales'),('sale_items'),('void_requests'),
-    ('picklists'),('sync_mirror'),('rate_limit_buckets'),('migration_markers')
+    ('picklists'),('sync_mirror'),('rate_limit_buckets'),('migration_markers'),
+    ('stores'),('store_inventory'),('product_images')
   ) AS v(t)
   WHERE to_regclass('public.' || t) IS NULL;
   IF missing IS NOT NULL THEN
@@ -91,12 +92,28 @@ BEGIN
     ('public.try_reserve_seat(text,text,text)'),
     ('public.pos_create_sale(uuid,text,text,text,text,jsonb,text,bigint,bigint,text,text)'),
     ('public.pos_sync_apply(uuid,integer)'),
+    ('public.pos_sync_apply(uuid,integer,text)'),
+    ('public.pos_create_inventory_product(uuid,text,jsonb,text,bigint,bigint)'),
     ('public.pos_setup_owner(uuid,text,text,text,text)'),
     ('public.rls_auto_enable()')
   ) AS v(p)
   WHERE to_regprocedure(p) IS NULL;
   IF missing IS NOT NULL THEN
     RAISE EXCEPTION 'missing functions: %', missing;
+  END IF;
+
+  -- Inventory sync: the latest pos_sync_apply body must contain the
+  -- inventory entity branches and the atomic product+image RPC must exist
+  -- with its image argument.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc pr
+    JOIN pg_namespace n ON n.oid=pr.pronamespace
+    WHERE n.nspname='public' AND pr.proname='pos_sync_apply'
+      AND pr.pronargs=3
+      AND pr.prosrc LIKE '%store_inventory%'
+      AND pr.prosrc LIKE '%product_image%'
+  ) THEN
+    RAISE EXCEPTION 'pos_sync_apply(uuid,integer,text) missing inventory entity handling';
   END IF;
 
   -- RLS must be enabled on every application table.

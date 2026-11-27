@@ -39,22 +39,22 @@
 | **`docs/postgres_schema.sql` is reference only** | Manually maintained DDL script; not deployed to Supabase; stale compared to `backend/supabase/migrations/` |
 | **`docs/*.sql` (17 files) are historical reference only** | Parallel set to `backend/supabase/migrations/`; not deployed; do not delete per Stage 9 constraint |
 | **Documentation must reference `backend/supabase/migrations/` as authoritative** | All docs referencing server schema must direct readers to `backend/supabase/migrations/` |
-| **Schema version:** | `schemaVersion = 23` defined in `backend/dart/pos_local_engine/lib/src/database/local_database.dart` — one definition only |
+| **Schema version:** | `schemaVersion = 26` defined in `backend/dart/pos_local_engine/lib/src/database/local_database.dart` — one definition only |
 | **`supabase/migrations/` is the single authoritative source for the live Supabase schema** | 9 timestamped migration files (newest: `20261111000000`); all schema changes must go through these files |
 | **`docs/postgres_schema.sql` is reference only** | Manually maintained DDL script; not deployed to Supabase; stale compared to `supabase/migrations/` |
 | **`docs/*.sql` (16 files) are historical reference only** | Parallel set to `supabase/migrations/`; not deployed; do not delete per Stage 9 constraint |
 | **Documentation must reference `supabase/migrations/` as authoritative** | All docs referencing server schema must direct readers to `supabase/migrations/` |
-| **Schema version:** | `schemaVersion = 22` defined in `frontend/lib/core/database/local_database.dart` — one definition only |
+| **Schema version:** | `schemaVersion = 26` defined in `backend/dart/pos_local_engine/lib/src/database/local_database.dart` — one definition only |
 
-### Rule L4: One `schemaVersion = 23` definition only
+### Rule L4: One `schemaVersion = 26` definition only
 
 | Detail | Enforcement |
 | --- | --- |
-| **The single source of truth for SQLite schema version is `backend/dart/pos_local_engine/lib/src/database/local_database.dart`** | `LocalDatabase.schemaVersion = 23` (defined once in `pos_local_engine`) |
+| **The single source of truth for SQLite schema version is `backend/dart/pos_local_engine/lib/src/database/local_database.dart`** | `LocalDatabase.schemaVersion = 26` (defined once in `pos_local_engine`) |
 | **No other file should define or override `schemaVersion`** | All documentation claims must align with v23 |
 | **DATABASE.md claims must be corrected:** | Title: "schema version 23"; Body: "currently 23" |
 | **Other docs referencing schema versions must be updated** | Any doc claiming v9, v14, or any version ≠ 23 must be corrected |
-| **The single source of truth for SQLite schema version is `frontend/lib/core/database/local_database.dart`** | `LocalDatabase.schemaVersion = 22` |
+| **The single source of truth for SQLite schema version is `frontend/lib/core/database/local_database.dart`** | `LocalDatabase.schemaVersion = 26` |
 | **No other file should define or override `schemaVersion`** | All documentation claims must align with v22 |
 | **DATABASE.md claims must be corrected:** | Title: "schema version 22" (was "9"); Body: "currently 22" (was "14") |
 | **Other docs referencing schema versions must be updated** | Any doc claiming v9, v14, or any version ≠ 22 must be corrected |
@@ -259,7 +259,7 @@ Before any code change or stage progression, verify:
 - [ ] Windows build — PASS
 - [ ] `deno check backend/supabase/functions/{licensing,pos-api,sync}/index.ts` — exit code 0
 - [ ] Web graph has zero sqflite/dart:io/path_provider/LocalDatabase imports from `main_web.dart` entry point
-- [ ] `schemaVersion = 23` is the only definition in the codebase
+- [ ] `schemaVersion = 26` is the only definition in the codebase
 - [ ] `backend/supabase/migrations/` is the authoritative source for server schema references
 - [ ] Transaction inventory count = 38 (verified against risk register)
 - [ ] No new shims added since Stage 6.7

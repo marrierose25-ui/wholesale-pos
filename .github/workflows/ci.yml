@@ -47,6 +47,11 @@ jobs:
       - name: Build web (PWA entry point)
         run: flutter build web --release -t lib/main_web.dart
 
+      # The Windows desktop shell is the primary till target: sqflite_ffi,
+      # path_provider and the native plugins only link in a real build.
+      - name: Build Windows desktop
+        run: flutter build windows --release
+
   # Edge Function gate: the Deno suites (licensing activation + rate limits,
   # pos-api router/auth/device authorization, sync push security) previously
   # only ran locally, so a regression could reach the branch green. Format,
@@ -323,3 +328,13 @@ jobs:
           PGUSER: postgres
           PGPASSWORD: postgres
         run: bash backend/supabase/tests/request3_financial_integrity/concurrency.sh
+      # Inventory foundation: atomic product+stock+image creation, store
+      # tenant isolation, upsert convergence/newest-wins, missing-parent
+      # deferral, tombstones, image persistence and feature authorization.
+      - name: Inventory foundation SQL tests
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/inventory_foundation/inventory_foundation_test.sql

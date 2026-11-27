@@ -14,7 +14,7 @@
 > `migrations/`). Server schema authority is `backend/supabase/migrations/`
 > (6 files: `20261030000000` production baseline, H1 void migrations
 > `20261125`–`20261127`, Request 2 `20261128000000`/`20261128000001`).
-> SQLite `schemaVersion = 23` in `pos_local_engine`. Licensing is now
+> SQLite `schemaVersion = 26` in `pos_local_engine`. Licensing is now
 > unlimited-device; device management is owner-authenticated on `pos-api`
 > with Ed25519 device-license proofs; rate limiting is durable
 > (`rate_limit_buckets`). Paths, file counts, and test totals below are
