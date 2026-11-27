@@ -447,6 +447,58 @@ void main() {
       },
     );
 
+    test(
+      'blocks deleting a completed cash entry that already has a linked withdrawal',
+      () async {
+        final category = await repository.createCategory(
+          ownerId: 'owner-1',
+          name: 'Alem',
+        );
+        final entry = await repository.addEntry(
+          ownerId: 'owner-1',
+          categoryId: category.id,
+          source: 'Counter',
+          amountMinorUnits: 10000,
+          paymentMethod: 'CASH',
+        );
+        final shiftId = await openShift();
+        await repository.markCompleted(ownerId: 'owner-1', entryId: entry.id);
+
+        // Simulate an inconsistent legacy state: a reversal leg exists while
+        // the finance entry is still marked COMPLETED. Do not create a second
+        // withdrawal or mark the entry deleted.
+        await db.insert('cash_movements', {
+          'id': 'existing-reversal',
+          'shift_id': shiftId,
+          'user_id': 'owner-1',
+          'type': 'WITHDRAWAL',
+          'amount_minor_units': 10000,
+          'reason': 'Previously reversed collection',
+          'created_at': DateTime.now().toIso8601String(),
+          'source_finance_entry_id': entry.id,
+        });
+
+        await expectLater(
+          repository.deleteEntry(ownerId: 'owner-1', entryId: entry.id),
+          throwsException,
+        );
+
+        final stored = await db.query(
+          'finance_entries',
+          where: 'id = ?',
+          whereArgs: [entry.id],
+        );
+        expect(stored.single['status'], FinanceEntry.statusCompleted);
+        final withdrawals = await db.query(
+          'cash_movements',
+          where: "source_finance_entry_id = ? AND type = 'WITHDRAWAL'",
+          whereArgs: [entry.id],
+        );
+        expect(withdrawals, hasLength(1));
+        expect(withdrawals.single['id'], 'existing-reversal');
+      },
+    );
+
     test('deleting a pending entry needs no cash movement', () async {
       final category = await repository.createCategory(
         ownerId: 'owner-1',

@@ -658,6 +658,18 @@ class SqfliteFinanceRepository implements FinanceRepository {
             'Reconcile the cash movement before deleting it.',
           );
         }
+        final existingReversals = await txn.query(
+          'cash_movements',
+          columns: ['id'],
+          where: "source_finance_entry_id = ? AND type = 'WITHDRAWAL'",
+          whereArgs: [entry.id],
+        );
+        if (existingReversals.isNotEmpty) {
+          throw Exception(
+            'This cash collection already has a linked withdrawal. '
+            'Reconcile the cash movement before deleting it again.',
+          );
+        }
 
         final shifts = await txn.query(
           'shifts',
