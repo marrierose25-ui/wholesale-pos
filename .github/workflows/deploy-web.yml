@@ -52,8 +52,7 @@ jobs:
     # event-name escape hatch: if the push trigger is ever widened to feature
     # branches, this condition still refuses them.
     if: github.ref == 'refs/heads/main'
-    environment:
-      name: 'production'
+    environment: production
     env:
       CLOUDFLARE_ACCOUNT_ID: 649454cb5d6616042f888499d80b51b7
       PAGES_PROJECT: aymen-pos

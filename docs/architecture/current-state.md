@@ -3,8 +3,7 @@
 > **Current repository snapshot — 2026-11-27 (verified baseline `81960c34d30f78733e1f3bfc9b0d834b19bf84ca`):** The active development branch is `stage6/request3-security-hardening`; it was 36 commits ahead of `main` (`ec47ff4abc74de8689e040b72373b5128bc2a4c3`) and 0 behind at the time of comparison. The current source uses `frontend/`, shared Dart packages under `backend/dart/` (`pos_core`, `pos_contracts`, `pos_local_engine`, `pos_cloud_engine`), and Supabase functions/migrations under `backend/supabase/`. SQLite schema version is **24** and the active Supabase migration chain contains **14 SQL files**. CI run [#39](https://github.com/marrierose25-ui/wholesale-pos/actions/runs/45895098268) passed all five jobs on this baseline. Its verified outputs are recorded in `verification-history.md`. This is CI evidence, not proof that production Supabase has the same migration state or that a Windows customer release has been independently certified. A separate remediation branch `stage6/finance-sync-docs-hardening` is under review in [PR #1](https://github.com/marrierose25-ui/wholesale-pos/pull/1); its head is `303b994c5ee5aa714f8a6f262df3ec18493b11e7` and it has not been merged into this development branch.
 >
 > The detailed audit body below is a historical source review from November 18/24, 2026. Its old paths, schema version, migration count, test counts, and findings must not be treated as current without rechecking the source.
-
-
+>
 > **Historical status note (2026-11-24, Stage 5 branch `stage5/licensing-and-server-schema`):**
 > This document is a HISTORICAL audit (baseline `64ff4fe`, pre-migration
 > `app/` layout). The repository has since been reorganized: the app lives in
@@ -20,7 +19,6 @@
 > (`rate_limit_buckets`). Paths, file counts, and test totals below are
 > historical and superseded — see `verification-history.md` for current
 > results.
-
 
 Audit date: 2026-11-18. Baseline commit: `64ff4fe` on `main` (clean tree).
 Method: full source inspection of `app/lib`, `app/test`, `app/tools`,
