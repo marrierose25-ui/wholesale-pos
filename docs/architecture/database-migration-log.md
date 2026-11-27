@@ -1,5 +1,19 @@
 # Database Migration Log — Stage 6.0
 
+## Current migration follow-up — 2026-11-27
+
+The old upgrade matrix below is a historical record of the pre-Stage-0 defect and is superseded by the current test/source state:
+
+- `LocalDatabase.schemaVersion` is now **24**.
+- `frontend/test/core/database/historical_fixture_migration_test.dart` runs genuine historical SQLite fixtures for versions 2, 3, 4, 5, 6, 8, 9, 10, 12–17, and 19–22 through the current schema. Each upgrade test checks the resulting schema snapshot, preserved representative records, `PRAGMA integrity_check`, `PRAGMA foreign_key_check`, and the pre-migration backup. The latest historical fixture is v22; it upgrades to v24. There are not separate v23 or v24 historical fixture files yet.
+- The previous pre-v6 index-creation ordering defect is repaired: index/trigger creation is guarded by actual table existence and deferred until the corresponding table exists. CI run [#39](https://github.com/marrierose25-ui/wholesale-pos/actions/runs/45895098268) passed the Flutter test suite, including the historical fixture tests.
+- Schema v17 adds `cash_movements.source_finance_entry_id` but does not infer historical links. Old cash movements can therefore retain a null source ID. The current remediation PR #1 makes deletion of a completed CASH finance entry fail closed unless exactly one linked deposit of the exact amount exists. It deliberately does not guess which legacy movement belongs to which collection.
+
+These statements describe the checked source and CI baseline, not a test against any customer database. Historical fixtures are copied to temporary paths; never run migration tests against a production data file.
+
+---
+
+
 **Status:** characterisation only. No production file, SQL statement, migration
 branch, schema version, index, trigger, constraint, or foreign key was changed to
 produce this document, its fixtures, or its tests.

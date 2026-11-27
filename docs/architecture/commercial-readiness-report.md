@@ -1,5 +1,14 @@
 # Commercial Readiness Report — Wholesale POS
 
+> ## Current reassessment — 2026-11-27
+>
+> **This report's PASS table is historical Stage 10 evidence dated 2026-11-21, not a current commercial-release approval.** It was written against an earlier source snapshot (SQLite schema v22 and older repository layout). The current development baseline reviewed on 2026-11-27 is `81960c34d30f78733e1f3bfc9b0d834b19bf84ca`, with SQLite schema v24 and 14 active Supabase migrations. GitHub CI run [#39](https://github.com/marrierose25-ui/wholesale-pos/actions/runs/45895098268) passed its five jobs: 768 Flutter tests passed, 1 live sync test was skipped, 81 Deno tests passed, Android/iOS database jobs passed, and 14 migrations replayed against an empty PostgreSQL 17 database.
+>
+> **Current decision: NO-GO for customer rollout until the outstanding gates below are closed.** A remediation PR [#1](https://github.com/marrierose25-ui/wholesale-pos/pull/1) proposes fail-closed handling for legacy cash-collection deletion, transactional product-name uniqueness, safe handling of unsupported legacy-sync entities, and corrected deployment documentation. Its own CI must pass before the changes are integrated. The PR does not auto-reconcile old financial records; historical unlinked cash deposits require explicit, evidence-based reconciliation. Production Supabase migration state has not been inspected, the live multi-device sync matrix remains skipped without staging credentials, and a current Windows customer installer has not been certified by the CI run cited above.
+>
+> Do not use the historical PASS rows below as evidence that the current branch is production-ready. The previous audit's source-protection constraint and results are preserved for history; this reassessment does not change production data or deploy anything.
+
+
 **Date:** 2026-11-21  
 **Auditor:** Agnes (Claude Code)  
 **Scope:** Evaluate all acceptance criteria for commercial deployment readiness  

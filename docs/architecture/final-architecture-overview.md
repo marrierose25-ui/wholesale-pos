@@ -1,5 +1,8 @@
 # Final Architecture Overview — Wholesale POS
 
+> **Historical snapshot warning (2026-11-27):** This architecture overview describes the Stage 10 repository state from **2026-11-21**. It uses the previous `app/` and `supabase/` paths and SQLite schema v22. It is retained as a historical record, not as the current implementation map or production sign-off. Current source paths are `frontend/`, `backend/dart/`, and `backend/supabase/`; current SQLite schema is v24, and the active server migration chain has 14 SQL files. For current implementation facts, use [current-state.md](current-state.md), [CLOUD_SYNC.md](../CLOUD_SYNC.md), [DATABASE.md](../DATABASE.md), and [the migration-chain README](../../backend/supabase/migrations/README.md).
+
+
 **Date:** 2026-11-21
 **Version:** Stage 10 completion (FINAL ARCHITECTURE ENFORCEMENT, VERIFICATION AND DOCUMENTATION)
 **Scope:** Unified view of the entire Wholesale POS architecture across all repositories and platforms.

@@ -1,5 +1,24 @@
 # Verification History — Wholesale POS
 
+## Current verified CI — 2026-11-27
+
+**Commit:** `81960c34d30f78733e1f3bfc9b0d834b19bf84ca` (`fix(request3): require amount equality in manual legacy-reversal link`).
+
+**GitHub Actions run:** [#39, attempt 2](https://github.com/marrierose25-ui/wholesale-pos/actions/runs/45895098268) — completed successfully on 2026-11-27. All five jobs passed.
+
+| Job / gate | Verified result |
+|---|---|
+| Flutter verify | `flutter analyze --fatal-infos`: no issues; **768 tests passed, 1 skipped**; web release build passed |
+| Edge Functions (Deno) | Formatting and entry-point type checks passed; **81 tests passed, 0 failed** |
+| Android database | Integration tests passed |
+| iOS database | POSIX interrupted-migration test, iOS simulator build, and integration tests passed |
+| Supabase cold replay | **14 migrations** applied to an empty PostgreSQL 17 database; H1 invariants/concurrency, Request 2 licensing/rate limits/concurrency, Request 3 actor authorization/acceptance/bootstrap concurrency/financial integrity/cash-movement concurrency all passed |
+
+The skipped test is `frontend/test/integration/sync_matrix_live_test.dart`; it requires `MATRIX_CODE`, `MATRIX_USER`, and `MATRIX_PASS`. Therefore the run does **not** establish live multi-device synchronization against a staging tenant. The cold replay proves the migration chain builds from empty PostgreSQL; it does not prove which versions are installed in the production Supabase project. The cited run tests the baseline commit above, not subsequent remediation PR commits; see PR #1 and its own checks for those changes.
+
+---
+
+
 **Date:** 2026-11-21
 **Version:** Stage 10 completion
 **Purpose:** Record exact test counts, commands, and verification evidence across Stages 1–10.

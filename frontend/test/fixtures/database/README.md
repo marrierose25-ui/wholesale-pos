@@ -2,8 +2,9 @@
 
 Genuine historical SQLite files for exercising the real
 `LocalDatabase._onUpgrade` chain. See
-`docs/architecture/database-migration-log.md` for the full provenance and the
-preserved pre-v6 upgrade limitation.
+`docs/architecture/database-migration-log.md` for the fixture provenance and
+current upgrade behavior. The current database schema is **v24**; v22 is the
+latest historical fixture and is migrated to v24 by the current test suite.
 
 ## Contents
 
@@ -26,7 +27,7 @@ preserved pre-v6 upgrade limitation.
 | `v19/` | `wholesale_pos.db` | Verbatim v19. |
 | `v20/` | `wholesale_pos.db` | Verbatim v20. |
 | `v21/` | `wholesale_pos.db` | Verbatim v21. |
-| `v22/` | `wholesale_pos.db` | Verbatim v22 (current build). |
+| `v22/` | `wholesale_pos.db` | Verbatim v22 (latest historical fixture; current schema v24 is reached by upgrading this fixture). |
 | `snapshots/` | `*.json` | Golden schema captures and frozen fresh-vs-upgraded diffs. |
 
 Each `v<version>/fixture.json` records the source commit and the DDL provenance.
