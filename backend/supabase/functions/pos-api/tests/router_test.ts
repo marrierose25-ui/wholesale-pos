@@ -13,6 +13,10 @@ import {
   type Row,
 } from "./mock_db.ts";
 import { signJwt } from "../shared/auth.ts";
+import {
+  ACTION_FEATURES,
+  OWNER_ONLY,
+} from "../shared/authorization.ts";
 
 const { handleRequest, ACTIONS } = await import("../index.ts");
 
@@ -558,6 +562,21 @@ const EXPECTED_AUTHENTICATED_ACTIONS = [
   "list_devices",
   "deactivate_device",
 ];
+
+Deno.test(
+  "every authenticated action has an explicit owner or feature policy",
+  () => {
+    // Password change is intentionally the sole self-service exception: any
+    // authenticated active user may change their own credentials.
+    const selfService = new Set(["change_password"]);
+    const unclassified = Object.keys(ACTIONS).filter((action) =>
+      !OWNER_ONLY.has(action) &&
+      !Object.hasOwn(ACTION_FEATURES, action) &&
+      !selfService.has(action)
+    );
+    assertEquals(unclassified, []);
+  },
+);
 
 Deno.test("every monolith action is registered in the dispatch table", () => {
   assertEquals(
