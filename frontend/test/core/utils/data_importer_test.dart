@@ -127,6 +127,9 @@ void main() {
       'settings': [
         {'key': 'theme_mode', 'value': 'light'},
       ],
+      if (version >= 20) 'picklists': <dynamic>[],
+      if (version >= 20) 'picklist_items': <dynamic>[],
+      if (version >= 21) 'picklist_customers': <dynamic>[],
     };
   }
 
@@ -221,6 +224,155 @@ void main() {
     expect(entry['source'], 'CBE Birr');
     expect(entry['status'], 'PENDING');
   });
+
+  test(
+    'warehouse picklists and tombstones round-trip through export and restore',
+    () async {
+      final now = DateTime.now().toIso8601String();
+      await db.insert('picklist_customers', {
+        'id': 'warehouse-customer-1',
+        'name': 'Alem Shop',
+        'phone': '0912345678',
+        'created_at': now,
+      });
+      await db.insert('picklists', {
+        'id': 'picklist-1',
+        'customer_name': 'Alem Shop',
+        'status': 'COMPLETED',
+        'created_by': 'owner-1',
+        'created_at': now,
+        'updated_at': now,
+        'deleted_at': now,
+      });
+      await db.insert('picklist_items', {
+        'id': 'picklist-item-1',
+        'picklist_id': 'picklist-1',
+        'product_name': 'Sugar',
+        'requested_qty': 10,
+        'taken_qty': 8,
+        'unit': 'kg',
+        'unit_price_minor_units': 2500,
+        'line_total_minor_units': 20000,
+        'updated_at': now,
+        'deleted_at': now,
+      });
+
+      final exportPath = await DataExporter.exportToJson(
+        db,
+        requestingUserId: 'owner-1',
+      );
+      final exported =
+          jsonDecode(await File(exportPath).readAsString()) as Map;
+      expect(exported['picklists'], hasLength(1));
+      expect(exported['picklist_items'], hasLength(1));
+      expect(exported['picklist_customers'], hasLength(1));
+      expect((exported['picklists'] as List).single['deleted_at'], now);
+      expect((exported['picklist_items'] as List).single['deleted_at'], now);
+
+      // A post-export local row must be replaced, not left beside the backup.
+      await db.insert('picklists', {
+        'id': 'stale-picklist',
+        'customer_name': 'Stale',
+        'status': 'PENDING',
+        'created_by': 'owner-1',
+        'created_at': now,
+        'updated_at': now,
+      });
+
+      await DataImporter.importFromJson(
+        db,
+        exportPath,
+        requestingUserId: 'owner-1',
+      );
+
+      final restoredLists = await db.query('picklists', orderBy: 'id');
+      final restoredItems = await db.query('picklist_items');
+      final restoredCustomers = await db.query('picklist_customers');
+      expect(restoredLists.map((row) => row['id']), ['picklist-1']);
+      expect(restoredLists.single['deleted_at'], now);
+      expect(restoredItems.single['taken_qty'], 8);
+      expect(restoredItems.single['deleted_at'], now);
+      expect(restoredCustomers.single['name'], 'Alem Shop');
+    },
+  );
+
+  test(
+    'legacy pre-v20 backup clears local picklists instead of leaving stale warehouse data',
+    () async {
+      final now = DateTime.now().toIso8601String();
+      await db.insert('picklist_customers', {
+        'id': 'old-directory-row',
+        'name': 'Old Directory',
+        'created_at': now,
+      });
+      await db.insert('picklists', {
+        'id': 'old-picklist',
+        'customer_name': 'Old',
+        'status': 'PENDING',
+        'created_by': 'owner-1',
+        'created_at': now,
+        'updated_at': now,
+      });
+      await db.insert('picklist_items', {
+        'id': 'old-item',
+        'picklist_id': 'old-picklist',
+        'product_name': 'Old product',
+        'requested_qty': 1,
+        'taken_qty': 0,
+        'updated_at': now,
+      });
+
+      final path = await writeBackup(buildBackup(version: 19));
+      await DataImporter.importFromJson(
+        db,
+        path,
+        requestingUserId: 'owner-1',
+      );
+
+      expect(await db.query('picklists'), isEmpty);
+      expect(await db.query('picklist_items'), isEmpty);
+      expect(await db.query('picklist_customers'), isEmpty);
+    },
+  );
+
+  test(
+    'malformed picklist backup is rejected before changing existing warehouse data',
+    () async {
+      final now = DateTime.now().toIso8601String();
+      await db.insert('picklists', {
+        'id': 'keep-picklist',
+        'customer_name': 'Keep',
+        'status': 'PENDING',
+        'created_by': 'owner-1',
+        'created_at': now,
+        'updated_at': now,
+      });
+      final data = buildBackup(version: 24)
+        ..['picklists'] = <dynamic>[]
+        ..['picklist_items'] = [
+          {
+            'id': 'broken-item',
+            // Missing picklist_id and other required values.
+            'product_name': 'Bad row',
+          },
+        ]
+        ..['picklist_customers'] = <dynamic>[];
+      final path = await writeBackup(data);
+
+      await expectLater(
+        DataImporter.importFromJson(
+          db,
+          path,
+          requestingUserId: 'owner-1',
+        ),
+        throwsException,
+      );
+
+      final unchanged = await db.query('picklists');
+      expect(unchanged.single['id'], 'keep-picklist');
+      expect(await db.query('picklist_items'), isEmpty);
+    },
+  );
 
   test('a cashier cannot restore a backup', () async {
     final path = await writeBackup(buildBackup(version: 7));

@@ -72,6 +72,28 @@ class DataImporter {
         ? data['void_requests'] as List
         : <dynamic>[];
 
+    // Warehouse tables were introduced in schema v20 (picklists/items) and
+    // v21 (reusable customer directory). Older backups legitimately omit them;
+    // current/newer backups must contain the arrays so a truncated export
+    // cannot be mistaken for an intentionally empty warehouse.
+    List<dynamic> readOptionalTable(String table, int introducedIn) {
+      if (!data.containsKey(table)) {
+        if (backupVersion >= introducedIn) {
+          throw Exception('Backup is missing the $table table.');
+        }
+        return <dynamic>[];
+      }
+      final rows = data[table];
+      if (rows is! List) {
+        throw Exception('Backup has an invalid $table table.');
+      }
+      return rows;
+    }
+
+    final picklists = readOptionalTable('picklists', 20);
+    final picklistItems = readOptionalTable('picklist_items', 20);
+    final picklistCustomers = readOptionalTable('picklist_customers', 21);
+
     final requiredFields = <String, List<String>>{
       // password_hash / salt are intentionally NOT required: the plaintext
       // backup never carries them (audit #7). Missing credentials are re-seeded
@@ -180,6 +202,39 @@ class DataImporter {
       }
     }
 
+    const picklistRequiredFields = <String, List<String>>{
+      'picklists': [
+        'id',
+        'customer_name',
+        'status',
+        'created_by',
+        'created_at',
+        'updated_at',
+      ],
+      'picklist_items': [
+        'id',
+        'picklist_id',
+        'product_name',
+        'requested_qty',
+        'taken_qty',
+        'updated_at',
+      ],
+      'picklist_customers': ['id', 'name', 'created_at'],
+    };
+    for (final entry in picklistRequiredFields.entries) {
+      final rows = switch (entry.key) {
+        'picklists' => picklists,
+        'picklist_items' => picklistItems,
+        _ => picklistCustomers,
+      };
+      for (final row in rows) {
+        if (row is! Map ||
+            entry.value.any((field) => !row.containsKey(field))) {
+          throw Exception('Backup has an invalid ${entry.key} record.');
+        }
+      }
+    }
+
     // Normalize sale items to the schema 7 shape. Rows from schema 6 backups
     // carried an integer `quantity`; schema 7 rows pass through unchanged.
     final saleItems = (data['sale_items'] as List)
@@ -226,6 +281,12 @@ class DataImporter {
       await txn.delete('shifts');
       await txn.delete('finance_entries');
       await txn.delete('finance_categories');
+      // Delete child rows first for a clear FK-safe replacement. Backups older
+      // than v20 supply empty lists, so restoring one also clears warehouse
+      // records that did not exist when that backup was taken.
+      await txn.delete('picklist_items');
+      await txn.delete('picklists');
+      await txn.delete('picklist_customers');
       await txn.delete('devices');
       await txn.delete('products');
       await txn.delete('settings');
@@ -289,6 +350,15 @@ class DataImporter {
       }
       for (var row in financeEntries) {
         await txn.insert('finance_entries', Map<String, dynamic>.from(row));
+      }
+      for (var row in picklistCustomers) {
+        await txn.insert('picklist_customers', Map<String, dynamic>.from(row));
+      }
+      for (var row in picklists) {
+        await txn.insert('picklists', Map<String, dynamic>.from(row));
+      }
+      for (var row in picklistItems) {
+        await txn.insert('picklist_items', Map<String, dynamic>.from(row));
       }
       for (var row in (data['audit_logs'] as List)) {
         await txn.insert('audit_logs', Map<String, dynamic>.from(row));
