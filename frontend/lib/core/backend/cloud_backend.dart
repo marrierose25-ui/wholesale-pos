@@ -4,6 +4,15 @@ import 'package:flutter/widgets.dart';
 import 'package:pos_cloud_engine/pos_cloud_engine.dart';
 import 'package:pos_contracts/pos_contracts.dart' hide AppBackend;
 import 'package:uuid/uuid.dart';
+
+import '../cloud/cloud_api_client.dart';
+import '../cloud/cloud_finance_repository.dart';
+import '../cloud/cloud_inventory_repository.dart';
+import '../cloud/cloud_picklist_repository.dart';
+import '../cloud/cloud_product_repository.dart';
+import '../cloud/cloud_sale_repository.dart';
+import '../cloud/cloud_shift_repository.dart';
+import '../cloud/cloud_user_repository.dart';
 import 'app_backend.dart';
 import 'web_local_storage.dart';
 import 'web_activation_gate.dart';
@@ -31,6 +40,9 @@ class CloudBackend extends AppBackend {
   late final CloudShiftRepository _shifts = CloudShiftRepository(_api);
   late final CloudFinanceRepository _finance = CloudFinanceRepository(_api);
   late final CloudPicklistRepository _picklists = CloudPicklistRepository(_api);
+  late final CloudInventoryRepository _inventory = CloudInventoryRepository(
+    _api,
+  );
   late final WebSessionStore _session = WebSessionStore(_api);
   late final String _deviceId = _resolveDeviceId();
 
@@ -64,6 +76,8 @@ class CloudBackend extends AppBackend {
   FinanceRepository get finance => _finance;
   @override
   PicklistRepository? get picklists => _picklists;
+  @override
+  InventoryRepository? get inventory => _inventory;
   @override
   SessionStore get session => _session;
   @override

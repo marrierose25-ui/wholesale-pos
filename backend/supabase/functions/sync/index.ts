@@ -117,6 +117,17 @@ const PULL_TABLES: Record<string, { from: string; select: string }> = {
   sale_items: { from: "sale_items", select: "*" },
   cash_movements: { from: "cash_movements", select: "*" },
   void_requests: { from: "void_requests", select: "*" },
+      'id, name, code, category, unit, selling_price_minor_units, bought_price_minor_units, image_data, is_active, created_at, updated_at, received_at',
+  },
+  // Inventory foundation: stores and per-store stock. Both are mutable
+  // master data, read straight through like the picklist tables.
+  stores: { from: 'stores', select: '*' },
+  store_inventory: { from: 'store_inventory', select: '*' },
+  shifts: { from: 'shifts', select: '*' },
+  sales: { from: 'sales', select: '*' },
+  sale_items: { from: 'sale_items', select: '*' },
+  cash_movements: { from: 'cash_movements', select: '*' },
+  void_requests: { from: 'void_requests', select: '*' },
   finance_categories: {
     from: "pos_finance_categories",
     select: "id, name, created_at, updated_at, deleted_at, received_at",
@@ -159,6 +170,31 @@ const ENTITY_ALIAS: Record<string, string> = {
   picklist: "picklist",
   picklist_items: "picklist_item",
   picklist_item: "picklist_item",
+  sales: 'sale',
+  sale_items: 'sale',
+  shifts: 'shift',
+  cash_movements: 'cash_movement',
+  void_requests: 'void_request',
+  sale: 'sale',
+  shift: 'shift',
+  cash_movement: 'cash_movement',
+  void_request: 'void_request',
+  users: 'user',
+  user: 'user',
+  products: 'product',
+  product: 'product',
+  finance_categories: 'finance_category',
+  finance_category: 'finance_category',
+  finance_entries: 'finance_entry',
+  finance_entry: 'finance_entry',
+  picklists: 'picklist',
+  picklist: 'picklist',
+  picklist_items: 'picklist_item',
+  picklist_item: 'picklist_item',
+  stores: 'store',
+  store: 'store',
+  store_inventory: 'store_inventory',
+  storeInventory: 'store_inventory',
 };
 
 // Master data, i.e. everything a shop EDITS after creating. A ledger row is
@@ -177,6 +213,12 @@ const MUTABLE_ENTITIES = new Set([
   // stock, so a later edit must replace the earlier mirror copy, not freeze.
   "picklist",
   "picklist_item",
+  'picklist',
+  'picklist_item',
+  // Stores and per-store stock are edited after creation, so a later change
+  // must replace the earlier mirror copy rather than freeze at first push.
+  'store',
+  'store_inventory',
 ]);
 
 // Max outbox entries accepted in one push batch (abuse guard).

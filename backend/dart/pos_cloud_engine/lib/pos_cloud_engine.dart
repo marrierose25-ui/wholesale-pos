@@ -20,3 +20,6 @@ export 'src/repositories/finance/cloud_finance_repository.dart';
 
 // Warehouse (picklists)
 export 'src/repositories/warehouse/cloud_picklist_repository.dart';
+
+// Inventory (stores + per-store stock)
+export 'src/repositories/inventory/cloud_inventory_repository.dart';

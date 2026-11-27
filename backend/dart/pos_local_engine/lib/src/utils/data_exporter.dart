@@ -102,6 +102,10 @@ class DataExporter {
     final picklists = await db.query('picklists');
     final picklistItems = await db.query('picklist_items');
     final picklistCustomers = await db.query('picklist_customers');
+    // Inventory foundation (schema 23): optional in older backups, always
+    // present in new ones. Rows carry their own deleted_at tombstones.
+    final stores = await db.query('stores');
+    final storeInventory = await db.query('store_inventory');
 
     final exportData = {
       'exported_at': DateTime.now().toIso8601String(),
@@ -122,6 +126,8 @@ class DataExporter {
       'picklists': picklists,
       'picklist_items': picklistItems,
       'picklist_customers': picklistCustomers,
+      'stores': stores,
+      'store_inventory': storeInventory,
     };
 
     final jsonString = const JsonEncoder.withIndent('  ').convert(exportData);

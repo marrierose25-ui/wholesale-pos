@@ -87,6 +87,8 @@ abstract final class SyncEntities {
   static const String financeEntry = 'finance_entry';
   static const String picklist = 'picklist';
   static const String picklistItem = 'picklist_item';
+  static const String store = 'store';
+  static const String storeInventory = 'store_inventory';
 
   /// Master data: the newest payload wins, so a later edit of the same id must
   /// replace what is already staged rather than be dropped as a duplicate.
@@ -99,6 +101,10 @@ abstract final class SyncEntities {
     // warehouse workers tick stock off, so both are re-staged on every edit.
     picklist,
     picklistItem,
+    // Stores and per-store stock are edited after creation (rename is not in
+    // this release, but stock quantities will move), so both are mutable.
+    store,
+    storeInventory,
   };
 
   /// Payload key each entity type is filed under, so the gateway and the
@@ -114,6 +120,8 @@ abstract final class SyncEntities {
     financeEntry: 'finance_entry',
     picklist: 'picklist',
     picklistItem: 'picklist_item',
+    store: 'store',
+    storeInventory: 'store_inventory',
   };
 }
 

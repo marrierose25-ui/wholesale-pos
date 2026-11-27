@@ -445,6 +445,7 @@ void main() {
         'shifts',
         'finance',
         'picklists',
+        'inventory',
         'session',
         'deviceId',
       ];

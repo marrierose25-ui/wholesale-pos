@@ -14,6 +14,7 @@ const FEATURE_KEYS = new Set([
   "users",
   "audit",
   "register_history",
+  "inventory",
 ]);
 
 // Permanently owner-only: a feature tick NEVER grants these. Money-integrity
@@ -120,6 +121,9 @@ const ACTION_FEATURES: Record<string, string[]> = {
   // Register History (cross-shift ledger browsing)
   shift_history: ["register_history"],
   list_cash_movements: ["register_history"],
+  list_stores: ["inventory"], create_store: ["inventory"],
+  delete_store: ["inventory"], list_inventory: ["inventory"],
+  create_inventory_product: ["inventory"],
 };
 
 async function checkAuthorization(

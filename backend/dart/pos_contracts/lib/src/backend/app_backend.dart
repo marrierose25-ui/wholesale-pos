@@ -1,5 +1,6 @@
 import '../auth/session_store.dart';
 import '../repositories/finance_repository.dart';
+import '../repositories/inventory_repository.dart';
 import '../repositories/picklist_repository.dart';
 import '../repositories/product_repository.dart';
 import '../repositories/reporting_repository.dart';
@@ -42,6 +43,11 @@ abstract class AppBackend {
   /// SQLite-backed seam would supply a real repository here. Keeping it null is
   /// the deliberate isolation that guarantees picklists can never reach Sales.
   PicklistRepository? get picklists => null;
+
+  /// Inventory foundation: stores and per-store product stock. Null by
+  /// default, same isolation rule as [picklists] — a backend without the
+  /// feature simply does not render the Inventory tab.
+  InventoryRepository? get inventory => null;
 
   /// Persists the opaque "stay signed in" session.
   SessionStore get session;

@@ -48,7 +48,7 @@ void main() {
       );
 
       final tables = (fresh['tables'] as Map).keys.toSet();
-      expect(tables, hasLength(18));
+      expect(tables, hasLength(20));
       expect(
         tables,
         containsAll([
@@ -66,6 +66,8 @@ void main() {
           'picklists',
           'picklist_items',
           'picklist_customers',
+          'stores',
+          'store_inventory',
           'audit_logs',
           'counters',
           'settings',

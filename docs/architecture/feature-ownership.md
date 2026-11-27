@@ -40,12 +40,13 @@ The abstract `AppBackend` class in `backend/dart/pos_contracts/lib/src/backend/a
 | `shifts`, `cash_movements`, `cash_movement_photos` | `ShiftRepository` (`SqfliteShiftRepository`) | `sale_repository` (summary), `finance_repository` (reads), `sync_pull_applier`, `data_exporter/importer` | ✅ Yes | ✅ Exported/Imported |
 | `finance_categories`, `finance_entries` | `FinanceRepository` (`SqfliteFinanceRepository`) | `sync_pull_applier`, `data_exporter/importer` | ✅ Yes | ✅ Exported/Imported |
 | `picklists`, `picklist_items`, `picklist_customers` | `PicklistRepository` (`SqflitePicklistRepository`) | `sync_pull_applier` | ✅ Yes | ✅ Exported/Imported |
+| `stores`, `store_inventory` | `InventoryRepository` (`SqfliteInventoryRepository`) | `sync_pull_applier` | ✅ Yes | ✅ Exported/Imported |
 | `devices` | `LocalDatabase.registerCurrentDevice()` | `sync_pull_applier`, `data_exporter/importer` | ✅ Yes (device id only) | ✅ Exported/Imported |
 | `audit_logs` | `SaleRepository`, `ShiftRepository`, `FinanceRepository` (write via audit helper) | `sync_pull_applier`, `data_exporter/importer` | ✅ Yes | ✅ Exported/Imported |
 | `settings` | `SettingsSessionStore` (wraps `LocalDatabase` KV helpers) | All features (read), owner only (write) | ❌ No | ✅ Exported/Imported (excluding 5 stripped keys) |
 | `sync_outbox` | `SyncOutbox` (enqueue from all repos) | `SyncOutboxRepository`, `SyncPullApplier` | ✅ Yes | ❌ Not in export (plumbing table) |
 
-**Business Tables:** users, products, sales, sale_items, shifts, cash_movements, cash_movement_photos, finance_categories, finance_entries, picklists, picklist_items, picklist_customers, devices, audit_logs, counters
+**Business Tables:** users, products, sales, sale_items, shifts, cash_movements, cash_movement_photos, finance_categories, finance_entries, picklists, picklist_items, picklist_customers, stores, store_inventory, devices, audit_logs, counters
 
 **Infrastructure Tables:** settings, sync_outbox
 
@@ -114,6 +115,7 @@ Contrary to earlier documentation, there is **ONE shared shell** with **TWO entr
 | `finance_*` | `finance` | Finance | pos-api |
 | `list_picklists`, `get_picklist_items`, `create_picklist`, `update_picklist_items`, `update_picklist_item`, `toggle_picklist_item` | `warehouse` | Picklists/Customers | pos-api |
 | `delete_picklist_item`, `delete_picklist`, `get_customers`, `add_customer` | `warehouse_fill` | Picklists/Customers | pos-api |
+| `list_stores`, `create_store`, `delete_store`, `list_inventory`, `create_inventory_product` | `inventory` | Inventory | pos-api |
 | `search_sales`, `void_sale`, `list_void_requests`, `approve_void`, `reject_void` | `history`, `register_history` | Sales history | pos-api |
 | `report_summary`, `revenue_trend` | `reports` | Reporting | pos-api |
 | `list_users`, `create_user`, `set_user_permissions`, `set_user_phone`, `reset_password`, `set_user_active`, `delete_user` | `users` | Staff management | pos-api |

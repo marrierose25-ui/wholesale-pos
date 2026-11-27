@@ -50,6 +50,9 @@ const List<FeatureDef> kFeatures = [
     'Warehouse Filling',
     CupertinoIcons.checkmark_rectangle,
   ),
+  // Inventory foundation: stores + per-store product stock. One tickable
+  // feature — the Inventory tab renders only when the account holds it.
+  FeatureDef('inventory', 'Inventory', CupertinoIcons.cube),
   FeatureDef('reports', 'Reports', CupertinoIcons.chart_bar),
   FeatureDef('users', 'Users', CupertinoIcons.person_2),
   FeatureDef('audit', 'Audit Logs', CupertinoIcons.lock_shield),

@@ -18,6 +18,7 @@ export 'src/repositories/sqflite_shift_repository.dart';
 export 'src/repositories/sqflite_user_repository.dart';
 export 'src/repositories/sqflite_product_repository.dart';
 export 'src/repositories/sqflite_picklist_repository.dart';
+export 'src/repositories/sqflite_inventory_repository.dart';
 export 'src/repositories/sqflite_reporting_repository.dart';
 export 'src/auth/settings_session_store.dart';
 export 'src/backend/sqlite_local_data_ops.dart';

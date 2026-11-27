@@ -71,6 +71,11 @@ class DataImporter {
     final voidRequests = data['void_requests'] is List
         ? data['void_requests'] as List
         : <dynamic>[];
+    // Inventory tables arrived in schema 23; older backups simply start empty.
+    final stores = data['stores'] is List ? data['stores'] as List : <dynamic>[];
+    final storeInventory = data['store_inventory'] is List
+        ? data['store_inventory'] as List
+        : <dynamic>[];
 
     // Warehouse tables were introduced in schema v20 (picklists/items) and
     // v21 (reusable customer directory). The first v20-v24 JSON exporters did
@@ -310,6 +315,8 @@ class DataImporter {
         await txn.delete('picklists');
         await txn.delete('picklist_customers');
       }
+      await txn.delete('store_inventory');
+      await txn.delete('stores');
       await txn.delete('devices');
       await txn.delete('products');
       await txn.delete('settings');
@@ -350,8 +357,17 @@ class DataImporter {
       for (var row in (data['devices'] as List)) {
         await txn.insert('devices', Map<String, dynamic>.from(row));
       }
+      for (var row in stores) {
+        await txn.insert('stores', Map<String, dynamic>.from(row as Map));
+      }
       for (var row in (data['products'] as List)) {
         await txn.insert('products', Map<String, dynamic>.from(row));
+      }
+      for (var row in storeInventory) {
+        await txn.insert(
+          'store_inventory',
+          Map<String, dynamic>.from(row as Map),
+        );
       }
       for (var row in (data['shifts'] as List)) {
         await txn.insert('shifts', Map<String, dynamic>.from(row));

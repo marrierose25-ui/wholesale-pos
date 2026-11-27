@@ -58,6 +58,7 @@ import { publicSourceAllowed } from "./shared/auth.ts";
 import type { Ctx } from "./shared/types.ts";
 import * as catalog from "./modules/catalog/index.ts";
 import * as finance from "./modules/finance/index.ts";
+import * as inventory from "./modules/inventory/index.ts";
 import * as licensing from "./modules/licensing/index.ts";
 import * as register from "./modules/register/index.ts";
 import * as reporting from "./modules/reporting/index.ts";
@@ -157,6 +158,13 @@ export const ACTIONS: Record<string, Handler> = {
   update_picklist_item: warehouse.updatePicklistItem,
   delete_picklist_item: warehouse.deletePicklistItem,
   delete_picklist: warehouse.deletePicklist,
+
+  // Inventory foundation: stores + per-store product stock.
+  list_stores: inventory.listStores,
+  create_store: inventory.createStore,
+  delete_store: inventory.deleteStore,
+  list_inventory: inventory.listInventory,
+  create_inventory_product: inventory.createInventoryProduct,
 
   // Device management (owner-only; see OWNER_ONLY in authorization.ts)
   list_devices: licensing.listDevices,

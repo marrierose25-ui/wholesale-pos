@@ -25,6 +25,7 @@ class NativeBackend extends AppBackend implements LocalDataOpsProvider {
   late final ShiftRepository _shifts;
   late final FinanceRepository _finance;
   late final PicklistRepository _picklists;
+  late final InventoryRepository _inventory;
   late final SessionStore _session;
   late final SqliteLocalDataOps _localDataOps;
 
@@ -132,6 +133,7 @@ class NativeBackend extends AppBackend implements LocalDataOpsProvider {
     ShiftRepository? shifts,
     FinanceRepository? finance,
     PicklistRepository? picklists,
+    InventoryRepository? inventory,
     SessionStore? session,
   }) : _db = db,
        _products = products ?? SqfliteProductRepository(db),
@@ -141,6 +143,7 @@ class NativeBackend extends AppBackend implements LocalDataOpsProvider {
        _shifts = shifts ?? SqfliteShiftRepository(db),
        _finance = finance ?? SqfliteFinanceRepository(db),
        _picklists = picklists ?? SqflitePicklistRepository(db),
+       _inventory = inventory ?? SqfliteInventoryRepository(db),
        _session = session ?? SettingsSessionStore(db),
        _localDataOps = SqliteLocalDataOps(db);
 
@@ -158,6 +161,8 @@ class NativeBackend extends AppBackend implements LocalDataOpsProvider {
   FinanceRepository get finance => _finance;
   @override
   PicklistRepository? get picklists => _picklists;
+  @override
+  InventoryRepository? get inventory => _inventory;
   @override
   SessionStore get session => _session;
 
