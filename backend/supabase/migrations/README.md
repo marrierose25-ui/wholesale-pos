@@ -14,6 +14,14 @@ in `supabase_migrations.schema_migrations`.
 | `20261127000000_void_request_sale_fk.sql` | H1 — pending |
 | `20261128000000_register_device_unlimited.sql` | Request 2 — atomic unlimited-device `register_device` RPC |
 | `20261128000001_rate_limit_buckets.sql` | Request 2 — durable rate limiting |
+| `20261201000000_actor_authorization.sql` | Request 3 — device licence vs. human actor authorization and ledger protection |
+| `20261202000000_request3_acceptance.sql` | Request 3 — checked RPC grants, retryable sync outcomes, multi-actor finance, owner-bootstrap concurrency |
+| `20261203000000_request3_corrections.sql` | Request 3 — owner-bootstrap credential verification, offline finance lifecycle replay, quarantine recovery |
+| `20261204000000_request3_financial_integrity.sql` | Request 3 — atomic cash-leg uniqueness and safe legacy-reversal reconciliation |
+| `20261205000000_request3_legacy_reversal_safety.sql` | Request 3 — bidirectional legacy-reversal matching and actor-evidence safeguards |
+| `20261206000000_request3_late_reversal_dedup.sql` | Request 3 — late-arriving reversal deduplication and audited operator reconciliation |
+| `20261207000000_request3_reason_drift_audited_link.sql` | Request 3 — reason-drift safety and audited manual reversal linking |
+| `20261208000000_request3_manual_link_amount.sql` | Request 3 — exact amount equality for manual legacy-reversal links |
 
 ## Archived migrations
 

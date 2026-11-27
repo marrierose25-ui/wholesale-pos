@@ -81,4 +81,23 @@ void main() {
       await expectLater(repository.update(make('b', 'Flour')), throwsException);
     },
   );
+
+  test('concurrent saves cannot create duplicate normalized names', () async {
+    Future<bool> attemptSave(String id, String name) async {
+      try {
+        await repository.save(make(id, name));
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    final outcomes = await Future.wait([
+      attemptSave('concurrent-1', 'Wholesale Flour'),
+      attemptSave('concurrent-2', ' wholesale flour '),
+    ]);
+
+    expect(outcomes.where((saved) => saved), hasLength(1));
+    expect(await db.query('products'), hasLength(1));
+  });
 }

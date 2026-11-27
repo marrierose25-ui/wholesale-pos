@@ -351,6 +351,102 @@ void main() {
       },
     );
 
+    test(
+      'blocks deleting a legacy completed cash entry with no linked deposit',
+      () async {
+        final category = await repository.createCategory(
+          ownerId: 'owner-1',
+          name: 'Alem',
+        );
+        final entry = await repository.addEntry(
+          ownerId: 'owner-1',
+          categoryId: category.id,
+          source: 'Counter',
+          amountMinorUnits: 10000,
+          paymentMethod: 'CASH',
+        );
+        await openShift();
+        await repository.markCompleted(ownerId: 'owner-1', entryId: entry.id);
+
+        // Simulate a pre-v17 database: the column exists after upgrade, but
+        // the historical deposit has no backfilled finance-entry association.
+        await db.update(
+          'cash_movements',
+          {'source_finance_entry_id': null},
+          where: "type = 'DEPOSIT'",
+        );
+
+        await expectLater(
+          repository.deleteEntry(ownerId: 'owner-1', entryId: entry.id),
+          throwsException,
+        );
+
+        final stored = await db.query(
+          'finance_entries',
+          where: 'id = ?',
+          whereArgs: [entry.id],
+        );
+        expect(stored.single['status'], FinanceEntry.statusCompleted);
+        expect(
+          await db.query('cash_movements', where: "type = 'DEPOSIT'"),
+          hasLength(1),
+        );
+        expect(
+          await db.query('cash_movements', where: "type = 'WITHDRAWAL'"),
+          isEmpty,
+        );
+        expect(
+          await db.query(
+            'audit_logs',
+            where: "action = 'FINANCE_ENTRY_DELETED'",
+          ),
+          isEmpty,
+        );
+      },
+    );
+
+    test(
+      'blocks deleting a completed cash entry when its deposit amount differs',
+      () async {
+        final category = await repository.createCategory(
+          ownerId: 'owner-1',
+          name: 'Alem',
+        );
+        final entry = await repository.addEntry(
+          ownerId: 'owner-1',
+          categoryId: category.id,
+          source: 'Counter',
+          amountMinorUnits: 10000,
+          paymentMethod: 'CASH',
+        );
+        await openShift();
+        await repository.markCompleted(ownerId: 'owner-1', entryId: entry.id);
+
+        await db.update(
+          'cash_movements',
+          {'amount_minor_units': 9000},
+          where: "type = 'DEPOSIT' AND source_finance_entry_id = ?",
+          whereArgs: [entry.id],
+        );
+
+        await expectLater(
+          repository.deleteEntry(ownerId: 'owner-1', entryId: entry.id),
+          throwsException,
+        );
+
+        final stored = await db.query(
+          'finance_entries',
+          where: 'id = ?',
+          whereArgs: [entry.id],
+        );
+        expect(stored.single['status'], FinanceEntry.statusCompleted);
+        expect(
+          await db.query('cash_movements', where: "type = 'WITHDRAWAL'"),
+          isEmpty,
+        );
+      },
+    );
+
     test('deleting a pending entry needs no cash movement', () async {
       final category = await repository.createCategory(
         ownerId: 'owner-1',

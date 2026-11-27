@@ -11,8 +11,8 @@ class SqfliteProductRepository implements ProductRepository {
 
   @override
   Future<void> save(Product product) async {
-    await _ensureNameIsUnique(product.name, excludeId: null);
     await _db.transaction((txn) async {
+      await _ensureNameIsUnique(txn, product.name, excludeId: null);
       await txn.insert('products', product.toMap());
       await _enqueue(txn, product.id);
     });
@@ -22,8 +22,8 @@ class SqfliteProductRepository implements ProductRepository {
   /// screen for rename, price edits and deactivate/reactivate.
   @override
   Future<void> update(Product product) async {
-    await _ensureNameIsUnique(product.name, excludeId: product.id);
     await _db.transaction((txn) async {
+      await _ensureNameIsUnique(txn, product.name, excludeId: product.id);
       await txn.update(
         'products',
         product.toMap(),
@@ -63,10 +63,14 @@ class SqfliteProductRepository implements ProductRepository {
   /// any duplicates that already exist and fights the "code is the unique key"
   /// design. Blocks against every product, active or not, so a deactivated
   /// name can be reactivated instead of recreated.
-  Future<void> _ensureNameIsUnique(String name, {String? excludeId}) async {
+  Future<void> _ensureNameIsUnique(
+    DatabaseExecutor executor,
+    String name, {
+    String? excludeId,
+  }) async {
     final trimmed = name.trim();
     if (trimmed.isEmpty) return; // empty names are rejected by the form.
-    final maps = await _db.query(
+    final maps = await executor.query(
       'products',
       columns: ['id'],
       where:

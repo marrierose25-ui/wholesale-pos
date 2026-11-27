@@ -638,48 +638,62 @@ class SqfliteFinanceRepository implements FinanceRepository {
       if (entry.isCompleted && entry.isCash) {
         final deposits = await txn.query(
           'cash_movements',
-          columns: ['id'],
-          where: 'source_finance_entry_id = ?',
+          columns: ['id', 'amount_minor_units'],
+          where: "source_finance_entry_id = ? AND type = 'DEPOSIT'",
           whereArgs: [entry.id],
-          limit: 1,
         );
-        if (deposits.isNotEmpty) {
-          final shifts = await txn.query(
-            'shifts',
-            columns: ['id'],
-            where: "status = 'OPEN'",
-            limit: 1,
-          );
-          if (shifts.isEmpty) {
-            throw Exception(
-              'Open the register before deleting a completed cash collection '
-              'so its deposit can be reversed.',
-            );
-          }
-          final movementId = const Uuid().v4();
-          final movement = {
-            'id': movementId,
-            'shift_id': shifts.first['id'] as String,
-            'user_id': ownerId,
-            'type': 'WITHDRAWAL',
-            'amount_minor_units': entry.amountMinorUnits,
-            'reason':
-                'Reversal: deleted cash collection from ${category.name} '
-                '(${entry.source})',
-            'created_at': now.toIso8601String(),
-            // Links the reversal to its collection like the DEPOSIT does, so
-            // the cloud can tell "the device already posted this leg" apart
-            // from a second reversal and never books the money back twice.
-            'source_finance_entry_id': entry.id,
-          };
-          await txn.insert('cash_movements', movement);
-          await SyncOutbox.upsert(
-            txn,
-            entityType: SyncEntities.cashMovement,
-            entityId: movementId,
-            payload: {'cash_movement': movement},
+        // Older databases gained source_finance_entry_id in schema v17, but
+        // existing deposits were not backfilled. Never infer a relationship
+        // from amount, timestamp or description: deleting without the exact
+        // linked deposit would leave drawer cash overstated.
+        if (deposits.length != 1) {
+          throw Exception(
+            'This completed cash collection does not have exactly one linked '
+            'deposit. Reconcile its cash movement before deleting it.',
           );
         }
+        if (deposits.single['amount_minor_units'] != entry.amountMinorUnits) {
+          throw Exception(
+            'The linked cash deposit amount does not match this collection. '
+            'Reconcile the cash movement before deleting it.',
+          );
+        }
+
+        final shifts = await txn.query(
+          'shifts',
+          columns: ['id'],
+          where: "status = 'OPEN'",
+          limit: 1,
+        );
+        if (shifts.isEmpty) {
+          throw Exception(
+            'Open the register before deleting a completed cash collection '
+            'so its deposit can be reversed.',
+          );
+        }
+        final movementId = const Uuid().v4();
+        final movement = {
+          'id': movementId,
+          'shift_id': shifts.first['id'] as String,
+          'user_id': ownerId,
+          'type': 'WITHDRAWAL',
+          'amount_minor_units': entry.amountMinorUnits,
+          'reason':
+              'Reversal: deleted cash collection from ${category.name} '
+              '(${entry.source})',
+          'created_at': now.toIso8601String(),
+          // Links the reversal to its collection like the DEPOSIT does, so
+          // the cloud can tell "the device already posted this leg" apart
+          // from a second reversal and never books the money back twice.
+          'source_finance_entry_id': entry.id,
+        };
+        await txn.insert('cash_movements', movement);
+        await SyncOutbox.upsert(
+          txn,
+          entityType: SyncEntities.cashMovement,
+          entityId: movementId,
+          payload: {'cash_movement': movement},
+        );
       }
 
       final updated = await txn.update(
