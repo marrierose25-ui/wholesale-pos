@@ -336,6 +336,44 @@ void main() {
   );
 
   test(
+    'pre-fix v24 backup without warehouse fields remains restorable and preserves local picklists',
+    () async {
+      final now = DateTime.now().toIso8601String();
+      await db.insert('picklists', {
+        'id': 'keep-picklist',
+        'customer_name': 'Keep',
+        'status': 'PENDING',
+        'created_by': 'owner-1',
+        'created_at': now,
+        'updated_at': now,
+      });
+      await db.insert('picklist_items', {
+        'id': 'keep-item',
+        'picklist_id': 'keep-picklist',
+        'product_name': 'Rice',
+        'requested_qty': 2,
+        'taken_qty': 1,
+        'updated_at': now,
+      });
+
+      final legacyBackup = buildBackup(version: 24)
+        ..remove('picklists')
+        ..remove('picklist_items')
+        ..remove('picklist_customers');
+      final path = await writeBackup(legacyBackup);
+
+      await DataImporter.importFromJson(
+        db,
+        path,
+        requestingUserId: 'owner-1',
+      );
+
+      expect((await db.query('picklists')).single['id'], 'keep-picklist');
+      expect((await db.query('picklist_items')).single['id'], 'keep-item');
+    },
+  );
+
+  test(
     'malformed picklist backup is rejected before changing existing warehouse data',
     () async {
       final now = DateTime.now().toIso8601String();

@@ -73,16 +73,36 @@ class DataImporter {
         : <dynamic>[];
 
     // Warehouse tables were introduced in schema v20 (picklists/items) and
-    // v21 (reusable customer directory). Older backups legitimately omit them;
-    // current/newer backups must contain the arrays so a truncated export
-    // cannot be mistaken for an intentionally empty warehouse.
-    List<dynamic> readOptionalTable(String table, int introducedIn) {
-      if (!data.containsKey(table)) {
-        if (backupVersion >= introducedIn) {
-          throw Exception('Backup is missing the $table table.');
-        }
-        return <dynamic>[];
-      }
+    // v21 (reusable customer directory). The first v20-v24 JSON exporters did
+    // not include these keys. For backward compatibility, an older backup
+    // with *all* warehouse keys absent remains restorable and preserves the
+    // target's current warehouse rows (the backup contains no information
+    // with which to replace them). Partial key sets are malformed and rejected.
+    final expectedPicklistTables = <String>[
+      if (backupVersion >= 20) 'picklists',
+      if (backupVersion >= 20) 'picklist_items',
+      if (backupVersion >= 21) 'picklist_customers',
+    ];
+    final presentPicklistTables = expectedPicklistTables
+        .where(data.containsKey)
+        .toList();
+    if (presentPicklistTables.isNotEmpty &&
+        presentPicklistTables.length != expectedPicklistTables.length) {
+      throw Exception(
+        'Backup contains an incomplete set of warehouse tables.',
+      );
+    }
+    if (backupVersion < 20 &&
+        const ['picklists', 'picklist_items', 'picklist_customers']
+            .any(data.containsKey)) {
+      throw Exception(
+        'Backup version predates warehouse tables but contains warehouse data.',
+      );
+    }
+    final replacePicklistTables = backupVersion < 20 ||
+        presentPicklistTables.length == expectedPicklistTables.length;
+    List<dynamic> readPicklistTable(String table) {
+      if (!data.containsKey(table)) return <dynamic>[];
       final rows = data[table];
       if (rows is! List) {
         throw Exception('Backup has an invalid $table table.');
@@ -90,9 +110,9 @@ class DataImporter {
       return rows;
     }
 
-    final picklists = readOptionalTable('picklists', 20);
-    final picklistItems = readOptionalTable('picklist_items', 20);
-    final picklistCustomers = readOptionalTable('picklist_customers', 21);
+    final picklists = readPicklistTable('picklists');
+    final picklistItems = readPicklistTable('picklist_items');
+    final picklistCustomers = readPicklistTable('picklist_customers');
 
     final requiredFields = <String, List<String>>{
       // password_hash / salt are intentionally NOT required: the plaintext
@@ -281,12 +301,15 @@ class DataImporter {
       await txn.delete('shifts');
       await txn.delete('finance_entries');
       await txn.delete('finance_categories');
-      // Delete child rows first for a clear FK-safe replacement. Backups older
-      // than v20 supply empty lists, so restoring one also clears warehouse
-      // records that did not exist when that backup was taken.
-      await txn.delete('picklist_items');
-      await txn.delete('picklists');
-      await txn.delete('picklist_customers');
+      // Backups captured before the picklist-export fix contain no
+      // warehouse keys. Preserve the target's existing warehouse rows rather
+      // than silently destroying them; pre-v20 backups explicitly predate
+      // these tables and therefore restore them as empty.
+      if (replacePicklistTables) {
+        await txn.delete('picklist_items');
+        await txn.delete('picklists');
+        await txn.delete('picklist_customers');
+      }
       await txn.delete('devices');
       await txn.delete('products');
       await txn.delete('settings');
@@ -351,14 +374,16 @@ class DataImporter {
       for (var row in financeEntries) {
         await txn.insert('finance_entries', Map<String, dynamic>.from(row));
       }
-      for (var row in picklistCustomers) {
-        await txn.insert('picklist_customers', Map<String, dynamic>.from(row));
-      }
-      for (var row in picklists) {
-        await txn.insert('picklists', Map<String, dynamic>.from(row));
-      }
-      for (var row in picklistItems) {
-        await txn.insert('picklist_items', Map<String, dynamic>.from(row));
+      if (replacePicklistTables) {
+        for (var row in picklistCustomers) {
+          await txn.insert('picklist_customers', Map<String, dynamic>.from(row));
+        }
+        for (var row in picklists) {
+          await txn.insert('picklists', Map<String, dynamic>.from(row));
+        }
+        for (var row in picklistItems) {
+          await txn.insert('picklist_items', Map<String, dynamic>.from(row));
+        }
       }
       for (var row in (data['audit_logs'] as List)) {
         await txn.insert('audit_logs', Map<String, dynamic>.from(row));
