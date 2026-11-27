@@ -117,7 +117,7 @@ const PULL_TABLES: Record<string, { from: string; select: string }> = {
   sale_items: { from: "sale_items", select: "*" },
   cash_movements: { from: "cash_movements", select: "*" },
   void_requests: { from: "void_requests", select: "*" },
-      'id, name, code, category, unit, selling_price_minor_units, bought_price_minor_units, image_data, is_active, created_at, updated_at, received_at',
+      'id, name, code, category, unit, selling_price_minor_units, bought_price_minor_units, is_active, created_at, updated_at, received_at',
   },
   // Inventory foundation: stores and per-store stock. Both are mutable
   // master data, read straight through like the picklist tables.

@@ -315,6 +315,7 @@ class DataImporter {
         await txn.delete('picklists');
         await txn.delete('picklist_customers');
       }
+      await txn.delete('product_images');
       await txn.delete('store_inventory');
       await txn.delete('stores');
       await txn.delete('devices');
@@ -368,6 +369,19 @@ class DataImporter {
           'store_inventory',
           Map<String, dynamic>.from(row as Map),
         );
+      }
+      // Optional: backups predating product images simply restore none.
+      final productImages = data['product_images'] is List
+          ? data['product_images'] as List
+          : const <dynamic>[];
+      for (var row in productImages) {
+        final m = Map<String, dynamic>.from(row as Map);
+        final b64 = m['jpeg_bytes'];
+        await txn.insert('product_images', {
+          'product_id': m['product_id'],
+          'jpeg_bytes': b64 is String ? base64Decode(b64) : b64,
+          'created_at': m['created_at'],
+        });
       }
       for (var row in (data['shifts'] as List)) {
         await txn.insert('shifts', Map<String, dynamic>.from(row));

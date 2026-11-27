@@ -1,4 +1,6 @@
 import 'package:sqflite/sqflite.dart';
+import 'dart:convert';
+
 import 'package:uuid/uuid.dart';
 
 import '../sync/sync_outbox.dart';
@@ -158,8 +160,25 @@ class SqfliteInventoryRepository implements InventoryRepository {
         ),
       );
     }
+    // Photos are BLOBs in product_images — hydrate them only for the
+    // inventory list (the one screen that renders avatars), so catalogue and
+    // sync reads never pay for image bytes.
+    final imageRows = await _db.query(
+      'product_images',
+      columns: ['product_id', 'jpeg_bytes'],
+      where: 'product_id IN (${List.filled(productIds.length, '?').join(',')})',
+      whereArgs: productIds,
+    );
+    final imagesByProduct = {
+      for (final r in imageRows)
+        r['product_id'] as String: base64Encode(r['jpeg_bytes'] as List<int>),
+    };
     final productsById = {
-      for (final m in productMaps) m['id'] as String: Product.fromMap(m),
+      for (final m in productMaps)
+        m['id'] as String: _withImage(
+          Product.fromMap(m),
+          imagesByProduct[m['id'] as String],
+        ),
     };
 
     final stocksByProduct = <String, List<StoreStock>>{};
@@ -190,6 +209,20 @@ class SqfliteInventoryRepository implements InventoryRepository {
     );
     return items;
   }
+
+  Product _withImage(Product p, String? imageData) => Product(
+    id: p.id,
+    name: p.name,
+    code: p.code,
+    category: p.category,
+    unit: p.unit,
+    sellingPriceMinorUnits: p.sellingPriceMinorUnits,
+    boughtPriceMinorUnits: p.boughtPriceMinorUnits,
+    imageData: imageData,
+    isActive: p.isActive,
+    createdAt: p.createdAt,
+    updatedAt: p.updatedAt,
+  );
 
   // ------------------------------------------------------------------
   // Product creation (atomic)
@@ -234,8 +267,11 @@ class SqfliteInventoryRepository implements InventoryRepository {
       updatedAt: now,
     );
 
+    // Deterministic relationship identity: the pair IS the identity, so two
+    // devices recording stock for the same product+store converge on one
+    // canonical row instead of inventing competing UUIDs.
     final stock = StoreInventory(
-      id: _uuid.v4(),
+      id: 'si_${storeId}_${resolved.id}',
       storeId: storeId,
       productId: resolved.id,
       onHandMilliunits: onHandMilliunits,
@@ -273,6 +309,15 @@ class SqfliteInventoryRepository implements InventoryRepository {
       }
 
       await txn.insert('products', resolved.toMap());
+      // Photo bytes live in product_images (BLOB), never on the product row —
+      // same split as cash_movement_photos. imageData arrives as base64.
+      if (resolved.imageData != null && resolved.imageData!.isNotEmpty) {
+        await txn.insert('product_images', {
+          'product_id': resolved.id,
+          'jpeg_bytes': base64Decode(resolved.imageData!),
+          'created_at': now.toIso8601String(),
+        });
+      }
       await txn.insert('store_inventory', stock.toMap());
 
       // Queue the product first, then its stock record: the server applies

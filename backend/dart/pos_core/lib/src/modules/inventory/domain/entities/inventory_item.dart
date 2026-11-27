@@ -1,5 +1,4 @@
 import '../../../catalog/domain/entities/product.dart';
-import 'store_inventory.dart';
 
 /// Stock health of a product, per the inventory rules:
 ///   * above the reorder quantity  -> [healthy]  (green)

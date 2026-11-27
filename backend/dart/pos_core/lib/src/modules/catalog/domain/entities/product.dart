@@ -41,7 +41,6 @@ class Product {
       'unit': unit,
       'selling_price_minor_units': sellingPriceMinorUnits,
       'bought_price_minor_units': boughtPriceMinorUnits,
-      'image_data': imageData,
       'is_active': isActive ? 1 : 0,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),

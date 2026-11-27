@@ -1004,7 +1004,6 @@ class SyncPullApplier {
         'unit': _str(row['unit']) ?? '',
         'selling_price_minor_units': _int(row['selling_price_minor_units']),
         'bought_price_minor_units': _int(row['bought_price_minor_units']),
-        'image_data': _str(row['image_data']),
         'is_active': row['is_active'] == 0 ? 0 : 1,
         'created_at': _localIso(row['created_at']) ?? _nowIso(),
         'updated_at': _localIso(row['updated_at']) ?? _nowIso(),

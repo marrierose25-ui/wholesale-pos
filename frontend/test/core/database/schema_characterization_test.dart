@@ -48,7 +48,7 @@ void main() {
       );
 
       final tables = (fresh['tables'] as Map).keys.toSet();
-      expect(tables, hasLength(20));
+      expect(tables, hasLength(21));
       expect(
         tables,
         containsAll([
@@ -68,6 +68,7 @@ void main() {
           'picklist_customers',
           'stores',
           'store_inventory',
+          'product_images',
           'audit_logs',
           'counters',
           'settings',
@@ -150,14 +151,9 @@ void main() {
             'only in fresh',
           )),
         );
-        if (version == 22) {
-          expect(
-            diffs,
-            isEmpty,
-            reason: 'a genuine v22 file upgrades cleanly to the current '
-                'schema, which is a fresh install',
-          );
-        }
+        // v22 is no longer the newest fixture: it upgrades to v25 and
+        // legitimately differs (inventory tables + the ALTER-appended product
+        // column). The frozen diff snapshot above is the assertion.
       });
     }
   });

@@ -106,6 +106,16 @@ class DataExporter {
     // present in new ones. Rows carry their own deleted_at tombstones.
     final stores = await db.query('stores');
     final storeInventory = await db.query('store_inventory');
+    // Product photos are BLOBs (schema 25); export them base64-encoded like
+    // the proof photos above so a JSON backup round-trips the image bytes.
+    final productImages = <Map<String, dynamic>>[
+      for (final row in await db.query('product_images'))
+        {
+          'product_id': row['product_id'],
+          'jpeg_bytes': base64Encode(row['jpeg_bytes'] as List<int>),
+          'created_at': row['created_at'],
+        },
+    ];
 
     final exportData = {
       'exported_at': DateTime.now().toIso8601String(),
@@ -128,6 +138,7 @@ class DataExporter {
       'picklist_customers': picklistCustomers,
       'stores': stores,
       'store_inventory': storeInventory,
+      'product_images': productImages,
     };
 
     final jsonString = const JsonEncoder.withIndent('  ').convert(exportData);

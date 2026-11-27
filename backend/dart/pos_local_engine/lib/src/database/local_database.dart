@@ -734,9 +734,7 @@ class LocalDatabase {
           'INTEGER NOT NULL DEFAULT 0',
         );
       }
-      if (!productCols.any((column) => column['name'] == 'image_data')) {
-        await db.execute('ALTER TABLE products ADD COLUMN image_data TEXT');
-      }
+      await _createProductImagesTable(db);
       await db.execute('''
         CREATE TABLE IF NOT EXISTS stores (
           id TEXT PRIMARY KEY,
@@ -763,6 +761,19 @@ class LocalDatabase {
       await _createInventoryIndexes(db);
     }
     if (pause != null) await pause('late');
+  }
+
+  /// Product photos are BLOBs in their own table, mirroring
+  /// `cash_movement_photos` (schema 16): the product row stays slim so catalog
+  /// and sync payloads never carry image bytes.
+  static Future<void> _createProductImagesTable(DatabaseExecutor db) async {
+    await db.execute(
+      'CREATE TABLE IF NOT EXISTS product_images ('
+      'product_id TEXT PRIMARY KEY, '
+      'jpeg_bytes BLOB NOT NULL, '
+      'created_at TEXT NOT NULL, '
+      'FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE)',
+    );
   }
 
   /// Indexes and the name-uniqueness constraint for the inventory tables.
@@ -1058,7 +1069,6 @@ class LocalDatabase {
         unit TEXT NOT NULL,
         selling_price_minor_units INTEGER NOT NULL,
         bought_price_minor_units INTEGER NOT NULL DEFAULT 0,
-        image_data TEXT,
         is_active INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -1245,7 +1255,9 @@ class LocalDatabase {
       )
     ''');
 
-    // Inventory foundation (schema 23): stores and per-store stock. Kept
+    await _createProductImagesTable(db);
+
+    // Inventory foundation (schema 25): stores and per-store stock. Kept
     // independent of Sales/Shifts/Finance like the picklists — nothing here
     // points at those tables.
     batch.execute('''
