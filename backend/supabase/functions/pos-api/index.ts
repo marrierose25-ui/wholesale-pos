@@ -12,7 +12,9 @@
 //   supabase functions deploy pos-api --no-verify-jwt
 //   supabase secrets set POS_API_JWT_SECRET=<long-random-hex>
 //   (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are provided automatically.)
-//   Apply docs/supabase_pos_users.sql first (adds pos_users + operational tables).
+//   The authoritative schema is backend/supabase/migrations/ (14 timestamped files).
+//   Existing customer projects must compare remote migration history before deployment.
+//   Do not apply historical docs/*.sql helpers as production migrations.
 //
 // Transport (POST /functions/v1/pos-api):
 //   * Unauthenticated: { action: 'login' | 'setup_owner' | 'has_users', ... }

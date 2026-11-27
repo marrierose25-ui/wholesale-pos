@@ -1,8 +1,9 @@
-﻿# Database Schema (SQLite, schema version 23)
+﻿# Database Schema (SQLite, schema version 24)
 
-> ⚠️ Partially stale. The system has 3 Edge Functions, 10 timestamped
-> Supabase migrations under `backend/supabase/migrations/`, and active cloud
-> sync. Verify claims against code before trusting them.
+> Current snapshot (2026-11-27): the system has 3 Supabase Edge Functions and 14
+> timestamped migrations under `backend/supabase/migrations/`. SQLite schema v24
+> includes durable sync-outbox quarantine fields. This document is maintained
+> against the current native database source; see the migration notes below.
 
 This document describes the local SQLite database used by the native app. The
 Flutter application lives in `frontend/`; the database engine and all schema
@@ -60,6 +61,7 @@ A partial unique index (`one_open_shift`) plus insert/update triggers enforce at
 
 - `id` TEXT PK, `shift_id` TEXT FK -> shifts, `user_id` TEXT FK -> users
 - `type` TEXT (`DEPOSIT`, `WITHDRAWAL`, `EXPENSE`), `amount_minor_units`, `reason`, `created_at`
+- `source_finance_entry_id` TEXT (nullable link to the finance collection whose cash deposit/reversal this movement represents)
 
 ### `sales`
 
@@ -110,9 +112,24 @@ A pending request leaves the sale `COMPLETED` and does not touch revenue or the 
 - `source` TEXT NOT NULL, `amount_minor_units` INTEGER NOT NULL (> 0)
 - `description` TEXT
 - `status` TEXT (`PENDING`/`COMPLETED`), `entry_date` TEXT
-- `created_at`, `created_by` FK -> users, `completed_at`, `completed_by` FK -> users, `updated_at`
+- `created_at`, `created_by` FK -> users, `completed_at`, `completed_by` FK -> users, `updated_at`, `payment_method`, `deleted_by`
 
 Finance entries are completely separate from sales: completing one never affects revenue. Access is the `finance` ("Money Tracking") tick — an active `OWNER`, or a staff account the owner ticked — enforced in the data layer (every read/write re-checks the acting row inside its own transaction), not by hiding the tab. The cloud backend (`pos-api`) applies the same rule to every `finance_*` action.
+
+### `picklists` (warehouse fulfillment)
+
+- `id` TEXT PK, `customer_name` TEXT NOT NULL, `status` TEXT, `created_by` TEXT
+- `created_at`, `updated_at`, `deleted_at` (soft-delete tombstone)
+
+### `picklist_items`
+
+- `id` TEXT PK, `picklist_id` TEXT FK -> `picklists` ON DELETE CASCADE
+- `product_name`, `requested_qty`, `taken_qty`, `unit`, `unit_price_minor_units`, `line_total_minor_units`
+- `updated_at`, `deleted_at` (soft-delete tombstone)
+
+### `picklist_customers`
+
+- `id` TEXT PK, `name` TEXT NOT NULL, `phone`, `created_at` — reusable warehouse customer directory, separate from POS users and finance contacts.
 
 ### `audit_logs`
 
@@ -128,12 +145,12 @@ Finance entries are completely separate from sales: completing one never affects
 
 - `key` TEXT PK, `value` TEXT — currently stores `theme_mode` (`light`/`dark`), `remember_login` (`1`/`0`, opt-in persistent sign-in, default off) and `auth_session` (opaque JSON nonce for a persisted sign-in; never the password or hash).
 
-### `sync_outbox` (transactional change queue for future cloud sync)
+### `sync_outbox` (transactional cloud-sync change queue)
 
-- `id` TEXT PK, `entity_type` TEXT (`sale`/`shift`/`cash_movement`/`void_request`), `entity_id` TEXT
+- `id` TEXT PK, `entity_type` TEXT (`sale`, `shift`, `cash_movement`, `void_request`, `user`, `product`, `finance_category`, `finance_entry`, `picklist`, `picklist_item`), `entity_id` TEXT
 - `operation` TEXT (`UPSERT`/`DELETE`), `payload` TEXT (serialized aggregate: the row plus any children)
-- `created_at` TEXT, `synced_at` TEXT (null until pushed)
-- Appended **inside the same transaction** as every business write; drained by `SyncService` only when a real `SyncBackend` is configured (ships as `NoopSyncBackend`, so it stays empty/queued and inert today). SQLite remains the single source of truth. See `docs/CLOUD_SYNC.md`. Not included in JSON backups.
+- `created_at` TEXT, `synced_at` TEXT (null until acknowledged), `status` TEXT (`pending`/`quarantined`), `last_error` TEXT, `quarantined_at` TEXT
+- Appended **inside the same transaction** as the corresponding business write. The configured cloud sync backend drains pending rows; a confirmed apply is acknowledged, retryable/deferred rows remain queued, and permanent refusals are retained in quarantine for operator recovery. SQLite remains the operational source of truth for native tills. See `docs/CLOUD_SYNC.md`. The outbox itself is intentionally not included in JSON backups; a restore clears the local queue and sync cursors so the restored till reconciles from the beginning.
 
 ## Indexes
 
@@ -145,11 +162,12 @@ Finance entries are completely separate from sales: completing one never affects
 - `finance_entries_category_id`
 - `void_requests_sale_id`, `void_requests_status`
 - `sync_outbox_pending` (on `sync_outbox.synced_at`)
+- `sync_outbox_quarantined` (partial index on `sync_outbox.status = 'quarantined'`, schema v24)
 - `picklist_items_picklist_id` (on `picklist_items.picklist_id`)
 
 ## Migrations
 
-`LocalDatabase.schemaVersion` (`backend/dart/pos_local_engine/lib/src/database/local_database.dart`) is the single source of truth (currently `23`). Both `onCreate` and `onUpgrade` build the same final shape:
+`LocalDatabase.schemaVersion` (`backend/dart/pos_local_engine/lib/src/database/local_database.dart`) is the single source of truth (currently `24`). Both `onCreate` and `onUpgrade` build the same final shape:
 
 - v2: shifts
 - v3: `sales.payment_method`
@@ -166,13 +184,14 @@ Finance entries are completely separate from sales: completing one never affects
 - v14: `users.deleted_at` (deleted accounts that still own history keep their row, hidden)
 - v15: separate cloud-issued password hash columns so a browser-issued password never overwrites a device-set one
 - v16: proof photos move from `cash_movements` into a BLOB table (`cash_movement_photos`); the old column is kept nullable for older builds
-- v17: `cash_movements.finance_entry_id` so a cloud and a local collection of the same finance entry deposit once, not twice
+- v17: adds nullable `cash_movements.source_finance_entry_id` so a cloud and a local collection of the same finance entry deposit once, not twice. Historical movements are not automatically backfilled; see the financial-reconciliation note in the commercial-readiness report.
 - v18: shift drawer ownership guard — a drawer belongs to an account (`_createShiftCashierGuards`)
 - v19: `users.updated_at` conflict stamp so cloud sync cannot overwrite a newer edit with an older one
 - v20: `picklists` + `picklist_items` tables (warehouse picklists) with `picklist_items_picklist_id` index
 - v21: picklist line pricing (unit, unit price, line total) and reusable `picklist_customers` directory
 - v22: soft-delete tombstones (`deleted_at`) on `picklists` and `picklist_items` so deletes propagate through sync
 - v23: creates `picklist_items_picklist_id` with `CREATE INDEX IF NOT EXISTS`, converging the index onto databases created at v20 or later (fresh installs and v20/v21/v22 upgrades never ran the `<20` branch that introduces it)
+- v24: adds `sync_outbox.status` (default `pending`), `last_error`, and `quarantined_at` so permanently refused synchronization rows can be retained for explicit recovery; creates the partial quarantine index.
 
 Note: every historical version from v2 upward upgrades to the current schema.
 The pre-v6 ordering defect (indexes on `finance_entries` before the `<7` step
@@ -212,7 +231,7 @@ recorded in `docs/architecture/verification-history.md`.
 
 ## Backups
 
-`DataExporter` is owner-only and writes a JSON document at the current schema version containing every table, including `void_requests` and password hashes. `DataImporter` is owner-only, validates required fields and owner retention, writes a recovery snapshot first, replaces all rows in one transaction, and runs `PRAGMA foreign_key_check` before commit. Backups at schema versions 6 through 23 are accepted; v6 rows are normalized to the flexible-quantity shape (integer quantities become `quantity_text`/`billing_quantity_milliunits`), and `finance_categories`/`finance_entries`/`void_requests` are optional in older backups and simply restore empty. Versions older than 6 are rejected rather than guessed at. After a restore the app re-registers the current device row so new sales keep valid foreign keys.
+`DataExporter` is owner-only and writes a JSON document at the current schema version containing the business tables, including sales, finance, void requests, warehouse picklists/items and the reusable picklist-customer directory. It deliberately omits password hashes/salts and licensing, session and device-identity secrets; the restoring owner keeps the live local credential and other users are locked until the owner resets their passwords. `sync_outbox` and sync cursors are omitted/cleared so restored data is re-synchronized rather than replaying stale queued writes. `DataImporter` is owner-only, validates required fields and owner retention, writes a recovery snapshot first, replaces all restored business tables in one transaction, and runs `PRAGMA foreign_key_check` before commit. Backups at schema versions 6 through 24 are accepted; v6 rows are normalized to the flexible-quantity shape (integer quantities become `quantity_text`/`billing_quantity_milliunits`), and finance/void tables plus warehouse tables are optional only for backup versions predating their introduction (v20 for picklists/items; v21 for picklist customers). A pre-v20 restore clears warehouse tables rather than leaving stale rows from the target database. Versions older than 6 are rejected rather than guessed at. After a restore the app re-registers the current device row so new sales keep valid foreign keys.
 
 **Restore limitation (by design):** export strips licensing and device-identity secrets — `license_code`, `activation_code`, install/hardware UUIDs, and session material are never written to the backup. A restored installation must re-activate the device and users must log in again; this is intentional (Rule S3 in `docs/architecture/architecture-rules.md`) so a backup file cannot be used to clone a license onto another machine.
 
