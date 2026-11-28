@@ -866,20 +866,28 @@ BEGIN
         END IF;
         -- A store tombstone must not be acknowledged while live per-store
         -- stock still references it: deleting now would orphan live
-        -- inventory. Defer until the inventory tombstones have landed.
-        IF NULLIF(st->>'deleted_at', '') IS NOT NULL AND EXISTS (
-          SELECT 1 FROM public.store_inventory
-          WHERE customer_id = p_customer
-            AND store_id = rec.entity_id
-            AND deleted_at IS NULL
-        ) THEN
-          UPDATE public.sync_mirror
-          SET apply_error = 'DEFERRED: store still has live inventory.',
-              received_at = now()
-          WHERE customer_id = p_customer
-            AND entity_type = rec.entity_type AND entity_id = rec.entity_id;
-          deferred := deferred + 1;
-          CONTINUE;
+        -- inventory. Lock the store row FIRST — the same lock
+        -- pos_delete_store and the store_inventory writer take — so a
+        -- concurrent stock write cannot slip between this check and the
+        -- tombstone. Lock order is store-then-inventory everywhere.
+        IF NULLIF(st->>'deleted_at', '') IS NOT NULL THEN
+          PERFORM 1 FROM public.stores
+          WHERE customer_id = p_customer AND id = rec.entity_id
+          FOR UPDATE;
+          IF FOUND AND EXISTS (
+            SELECT 1 FROM public.store_inventory
+            WHERE customer_id = p_customer
+              AND store_id = rec.entity_id
+              AND deleted_at IS NULL
+          ) THEN
+            UPDATE public.sync_mirror
+            SET apply_error = 'DEFERRED: store still has live inventory.',
+                received_at = now()
+            WHERE customer_id = p_customer
+              AND entity_type = rec.entity_type AND entity_id = rec.entity_id;
+            deferred := deferred + 1;
+            CONTINUE;
+          END IF;
         END IF;
 
         INSERT INTO public.stores (

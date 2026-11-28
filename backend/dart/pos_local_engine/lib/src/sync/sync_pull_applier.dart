@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:sqflite/sqflite.dart';
 
@@ -1423,9 +1424,14 @@ class SyncPullApplier {
             !_outdated(local.first['updated_at'], tombUpdated)) {
           continue;
         }
+        // Keep the row as a version marker: jpeg_bytes is emptied but
+        // updated_at survives, so a replayed older upload (T2 < T3) hits the
+        // newest-wins guard below instead of resurrecting the image, while a
+        // genuinely newer upload (T4) still restores it.
         await _safely(txn, () async {
-          await txn.delete(
+          await txn.update(
             'product_images',
+            {'jpeg_bytes': Uint8List(0)},
             where: 'product_id = ?',
             whereArgs: [productId],
           );

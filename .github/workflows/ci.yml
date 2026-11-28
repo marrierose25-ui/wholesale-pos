@@ -347,3 +347,12 @@ jobs:
           PGUSER: postgres
           PGPASSWORD: postgres
         run: psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/inventory_foundation/inventory_integrity_test.sql
+      # Two real sessions race store deletion against stock creation in both
+      # orderings — neither may leave a deleted store with live inventory.
+      - name: Inventory store-delete concurrency
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: bash backend/supabase/tests/inventory_foundation/concurrency.sh

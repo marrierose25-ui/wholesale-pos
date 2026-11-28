@@ -408,7 +408,8 @@ void main() {
     expect(images, hasLength(1));
     expect(images.single['jpeg_bytes'], isA<List<int>>());
 
-    // A cloud tombstone deletes the local bytes.
+    // A cloud tombstone empties the local bytes but KEEPS the row as a
+    // version marker, so a replayed older upload cannot resurrect it.
     final later = DateTime.now().add(const Duration(minutes: 1)).toIso8601String();
     await pull(deviceA, {
       'product_images': [
@@ -424,6 +425,63 @@ void main() {
       ],
     });
     images = await deviceA.query('product_images');
-    expect(images, isEmpty);
+    expect(images, hasLength(1));
+    expect((images.single['jpeg_bytes'] as List<int>), isEmpty);
+    expect(images.single['updated_at'], later);
+  });
+
+  test('image tombstone version survives replay: T1 -> T3 delete -> T2 stale '
+      '-> T4 restore', () async {
+    Map<String, dynamic> imgRow(String updatedAt, String? data,
+            {String? deletedAt}) =>
+        {
+          'customer_id': 'cust-1',
+          'product_id': productId,
+          'image_data': data,
+          'created_at': updatedAt,
+          'updated_at': updatedAt,
+          'deleted_at': deletedAt,
+          'received_at': updatedAt,
+        };
+
+    final t1 = '2026-01-01T00:00:00.000Z';
+    final t2 = '2026-01-02T00:00:00.000Z';
+    final t3 = '2026-01-03T00:00:00.000Z';
+    final t4 = '2026-01-04T00:00:00.000Z';
+    final jpeg1 = base64Encode(List<int>.filled(32, 0x11));
+    final jpeg2 = base64Encode(List<int>.filled(32, 0x22));
+
+    Future<List<Map<String, dynamic>>> images() =>
+        deviceA.query('product_images');
+
+    // T1: image lands.
+    await pull(deviceA, {
+      'product_images': [imgRow(t1, jpeg1)],
+    });
+    expect((await images()).single['jpeg_bytes'], isNotEmpty);
+
+    // T3: newer tombstone empties bytes, keeps the T3 version marker.
+    await pull(deviceA, {
+      'product_images': [imgRow(t3, null, deletedAt: t3)],
+    });
+    var row = (await images()).single;
+    expect((row['jpeg_bytes'] as List<int>), isEmpty);
+    expect(row['updated_at'], t3);
+
+    // T2: replayed older upload cannot resurrect the deleted image.
+    await pull(deviceA, {
+      'product_images': [imgRow(t2, jpeg1)],
+    });
+    row = (await images()).single;
+    expect((row['jpeg_bytes'] as List<int>), isEmpty);
+    expect(row['updated_at'], t3);
+
+    // T4: a genuinely newer upload restores the image.
+    await pull(deviceA, {
+      'product_images': [imgRow(t4, jpeg2)],
+    });
+    row = (await images()).single;
+    expect((row['jpeg_bytes'] as List<int>), isNotEmpty);
+    expect(row['updated_at'], t4);
   });
 }

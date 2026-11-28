@@ -171,7 +171,9 @@ class SqfliteInventoryRepository implements InventoryRepository {
     );
     final imagesByProduct = {
       for (final r in imageRows)
-        r['product_id'] as String: base64Encode(r['jpeg_bytes'] as List<int>),
+        if ((r['jpeg_bytes'] as List<int>).isNotEmpty)
+          r['product_id'] as String:
+              base64Encode(r['jpeg_bytes'] as List<int>),
     };
     final productsById = {
       for (final m in productMaps)
