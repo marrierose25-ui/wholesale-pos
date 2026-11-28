@@ -1,8 +1,8 @@
 export {
-  listStores,
+  createInventoryProduct,
   createStore,
   deleteStore,
   listInventory,
-  createInventoryProduct,
+  listStores,
   saveProductImage,
 } from "./inventory_actions.ts";

@@ -1,6 +1,6 @@
 ﻿# Database Schema (SQLite, schema version 26)
 
-> Current snapshot (2026-11-27): the system has 3 Supabase Edge Functions and 16
+> Current snapshot (2026-11-27): the system has 3 Supabase Edge Functions and 17
 > timestamped migrations under `backend/supabase/migrations/`. SQLite schema v26
 > includes durable sync-outbox quarantine fields, the inventory foundation (stores, per-store stock, product images) and image-sync timestamps. This document is maintained
 > against the current native database source; see the migration notes below.

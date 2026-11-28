@@ -58,27 +58,27 @@ export async function createStore(db: any, ctx: Ctx, body: any) {
 export async function deleteStore(db: any, ctx: Ctx, body: any) {
   const id = str(body.id);
   if (!id) return json({ ok: false, error: "Missing store id." }, 400);
-  const stocked = await db.from("store_inventory").select("id", {
-    count: "exact",
-    head: true,
-  })
-    .eq("customer_id", ctx.customerId).eq("store_id", id).is(
-      "deleted_at",
-      null,
-    );
-  if (stocked.error) throw new Error(stocked.error.message);
-  if ((stocked.count ?? 0) > 0) {
-    return json({
-      ok: false,
-      error:
-        `This store still has ${stocked.count} product(s) in stock. Remove its inventory before deleting it.`,
-    }, 409);
+  // Atomic server-side delete: pos_delete_store locks the store row, refuses
+  // while ANY live store_inventory row references it (zero-quantity counts),
+  // and tombstones in the same transaction — no check-then-act race.
+  const { data, error } = await db.rpc("pos_delete_store", {
+    p_customer: ctx.customerId,
+    p_store_id: id,
+  });
+  if (error) {
+    const msg = String(error.message ?? "");
+    if (msg.includes("still has inventory")) {
+      return json({
+        ok: false,
+        error:
+          "This store still has products in stock. Remove its inventory before deleting it.",
+      }, 409);
+    }
+    if (msg.includes("not found") || msg.includes("Not found")) {
+      return json({ ok: false, error: "Store not found." }, 404);
+    }
+    throw new Error(msg || "Store delete failed.");
   }
-  const now = new Date().toISOString();
-  const up = await db.from("stores")
-    .update({ deleted_at: now, updated_at: now })
-    .eq("customer_id", ctx.customerId).eq("id", id).is("deleted_at", null);
-  if (up.error) throw new Error(up.error.message);
   await audit(
     db,
     ctx.customerId,

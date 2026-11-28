@@ -1407,6 +1407,22 @@ class SyncPullApplier {
       final deletedAt = _localIso(row['deleted_at']);
       if (deletedAt != null) {
         if (await _hasPending(txn, 'product_image', productId)) continue;
+        // Newest-wins like the upload path: a stale tombstone must not
+        // delete a newer local/cloud image.
+        final tombUpdated = _localIso(row['updated_at']) ??
+            _localIso(row['created_at']) ??
+            deletedAt;
+        final local = await txn.query(
+          'product_images',
+          columns: const ['updated_at'],
+          where: 'product_id = ?',
+          whereArgs: [productId],
+          limit: 1,
+        );
+        if (local.isNotEmpty &&
+            !_outdated(local.first['updated_at'], tombUpdated)) {
+          continue;
+        }
         await _safely(txn, () async {
           await txn.delete(
             'product_images',

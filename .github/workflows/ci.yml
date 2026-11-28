@@ -338,3 +338,12 @@ jobs:
           PGUSER: postgres
           PGPASSWORD: postgres
         run: psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/inventory_foundation/inventory_foundation_test.sql
+      # Inventory integrity: atomic store deletion, sync tombstone
+      # deferral, composite FKs/CHECKs, image newest-wins restore.
+      - name: Inventory integrity SQL tests
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/inventory_foundation/inventory_integrity_test.sql
