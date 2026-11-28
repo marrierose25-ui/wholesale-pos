@@ -242,6 +242,7 @@ DECLARE
   v_new_active     bool;
   v_new_deleted    timestamptz;
   v_defer_reason   text;
+  v_product_updated_at timestamptz;
   -- Finance attribution: creator, completer and deleter are resolved
   -- independently through their own staged grant digests.
   v_created_id     text;
@@ -523,21 +524,26 @@ BEGIN
         END IF;
 
       ELSIF rec.entity_type = 'product' THEN
-        -- Product sync stays POS-authorized for updates. The inventory
-        -- feature may only land a product the tenant does not already have:
-        -- that is the wizard's creation path, not catalogue editing.
-        IF EXISTS (
-          SELECT 1 FROM public.pos_products
-          WHERE customer_id = p_customer AND id = rec.entity_id
-        ) THEN
-          PERFORM public.pos_require_feature(p_customer, v_actor_id, 'pos');
-        ELSE
-          PERFORM public.pos_require_any_feature(
-            p_customer, v_actor_id, ARRAY['pos', 'inventory']);
-        END IF;
         pr := rec.payload->'product';
         IF pr IS NULL OR jsonb_typeof(pr) <> 'object' THEN
           RAISE EXCEPTION 'Product payload is missing.';
+        END IF;
+        SELECT p.updated_at INTO v_product_updated_at
+        FROM public.pos_products p
+        WHERE p.customer_id = p_customer AND p.id = rec.entity_id;
+        -- Product sync stays POS-authorized for updates. The inventory
+        -- feature may land a product the tenant does not have, and may
+        -- replay a payload that cannot update the existing row (lost-ack
+        -- retry or stale copy); a payload that can move updated_at forward
+        -- is catalogue editing and still requires 'pos'.
+        IF NOT FOUND
+           OR (v_product_updated_at IS NOT NULL
+               AND v_product_updated_at >= COALESCE(
+                 (pr->>'updated_at')::timestamptz, now())) THEN
+          PERFORM public.pos_require_any_feature(
+            p_customer, v_actor_id, ARRAY['pos', 'inventory']);
+        ELSE
+          PERFORM public.pos_require_feature(p_customer, v_actor_id, 'pos');
         END IF;
         IF NULLIF(pr->>'name', '') IS NULL THEN
           RAISE EXCEPTION 'A saved name needs a name.';

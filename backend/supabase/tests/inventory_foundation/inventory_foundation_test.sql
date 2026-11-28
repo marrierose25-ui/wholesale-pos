@@ -527,6 +527,36 @@ BEGIN
       AND product_id = 'p-stock-create' AND image_data = 'aGVsbG8='));
 END $$;
 
+-- A lost push ack can replay the same creation payload after the product
+-- already exists. That payload cannot move updated_at forward, so it stays
+-- inventory-authorized and applies idempotently instead of becoming an edit.
+SELECT pg_temp.stage(
+  '11111111-1111-1111-1111-111111111111', 'product', 'p-stock-create',
+  jsonb_build_object('product', jsonb_build_object(
+    'id', 'p-stock-create', 'name', 'Inventory Created', 'code', '',
+    'category', NULL, 'unit', 'Pc',
+    'selling_price_minor_units', 9999,
+    'bought_price_minor_units', 4321,
+    'is_active', 1,
+    'created_at', '2026-01-01T00:00:00Z',
+    'updated_at', '2026-01-02T00:00:00Z')),
+  pg_temp.igrant('stock-a'));
+SELECT public.pos_sync_apply('11111111-1111-1111-1111-111111111111', 500, 'fp-inv1');
+DO $$
+BEGIN
+  PERFORM pg_temp.expect_true('I7 creation replay applies', EXISTS (
+    SELECT 1 FROM public.sync_mirror
+    WHERE customer_id = '11111111-1111-1111-1111-111111111111'
+      AND entity_type = 'product' AND entity_id = 'p-stock-create'
+      AND apply_status = 'APPLIED'));
+  PERFORM pg_temp.expect_true('I7 replay left product unchanged', EXISTS (
+    SELECT 1 FROM public.pos_products
+    WHERE customer_id = '11111111-1111-1111-1111-111111111111'
+      AND id = 'p-stock-create' AND name = 'Inventory Created'
+      AND selling_price_minor_units = 9999
+      AND bought_price_minor_units = 4321));
+END $$;
+
 -- The same inventory-only actor cannot update an existing product: that is
 -- catalogue editing and still requires 'pos'.
 SELECT pg_temp.stage(
