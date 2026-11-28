@@ -131,6 +131,11 @@ void main() {
   Future<void> pull(Database db, Map<String, List<Map<String, dynamic>>> changes) =>
       SyncPullApplier(db).apply(SyncPullResult(changes: changes));
 
+
+  /// _localIso stores local-time ISO strings; compare instants, not text.
+  DateTime instant(Object? v) =>
+      DateTime.parse('$v').toUtc();
+
   Future<List<Map<String, dynamic>>> stockRows(Database db) =>
       db.query('store_inventory', where: 'store_id = ?', whereArgs: [storeId]);
 
@@ -466,7 +471,7 @@ void main() {
     });
     var row = (await images()).single;
     expect((row['jpeg_bytes'] as List<int>), isEmpty);
-    expect(row['updated_at'], t3);
+    expect(instant(row['updated_at']), instant(t3));
 
     // T2: replayed older upload cannot resurrect the deleted image.
     await pull(deviceA, {
@@ -474,7 +479,7 @@ void main() {
     });
     row = (await images()).single;
     expect((row['jpeg_bytes'] as List<int>), isEmpty);
-    expect(row['updated_at'], t3);
+    expect(instant(row['updated_at']), instant(t3));
 
     // T4: a genuinely newer upload restores the image.
     await pull(deviceA, {
@@ -482,6 +487,53 @@ void main() {
     });
     row = (await images()).single;
     expect((row['jpeg_bytes'] as List<int>), isNotEmpty);
-    expect(row['updated_at'], t4);
+    expect(instant(row['updated_at']), instant(t4));
+  });
+
+  test('tombstone with no local row still records the version marker',
+      () async {
+    Map<String, dynamic> imgRow(String updatedAt, String? data,
+            {String? deletedAt}) =>
+        {
+          'customer_id': 'cust-1',
+          'product_id': productId,
+          'image_data': data,
+          'created_at': updatedAt,
+          'updated_at': updatedAt,
+          'deleted_at': deletedAt,
+          'received_at': updatedAt,
+        };
+
+    final t2 = '2026-02-02T00:00:00.000Z';
+    final t3 = '2026-02-03T00:00:00.000Z';
+    final t4 = '2026-02-04T00:00:00.000Z';
+    final jpeg = base64Encode(List<int>.filled(32, 0x33));
+
+    // Local table is EMPTY: a tombstone arrives first (device missed T1).
+    await pull(deviceA, {
+      'product_images': [imgRow(t3, null, deletedAt: t3)],
+    });
+    var images = await deviceA.query('product_images');
+    expect(images, hasLength(1));
+    expect((images.single['jpeg_bytes'] as List<int>), isEmpty);
+    expect(instant(images.single['updated_at']), instant(t3));
+
+    // A replayed older upload must NOT create the image — the marker wins.
+    await pull(deviceA, {
+      'product_images': [imgRow(t2, jpeg)],
+    });
+    images = await deviceA.query('product_images');
+    expect(images, hasLength(1));
+    expect((images.single['jpeg_bytes'] as List<int>), isEmpty);
+    expect(instant(images.single['updated_at']), instant(t3));
+
+    // A newer upload restores it.
+    await pull(deviceA, {
+      'product_images': [imgRow(t4, jpeg)],
+    });
+    images = await deviceA.query('product_images');
+    expect(images, hasLength(1));
+    expect((images.single['jpeg_bytes'] as List<int>), isNotEmpty);
+    expect(instant(images.single['updated_at']), instant(t4));
   });
 }

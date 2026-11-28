@@ -1424,17 +1424,27 @@ class SyncPullApplier {
             !_outdated(local.first['updated_at'], tombUpdated)) {
           continue;
         }
-        // Keep the row as a version marker: jpeg_bytes is emptied but
-        // updated_at survives, so a replayed older upload (T2 < T3) hits the
-        // newest-wins guard below instead of resurrecting the image, while a
-        // genuinely newer upload (T4) still restores it.
+        // Keep a version marker: jpeg_bytes is emptied but updated_at is
+        // stamped with the tombstone's version, so a replayed older upload
+        // (T2 < T3) hits the newest-wins guard below instead of resurrecting
+        // the image, while a genuinely newer upload (T4) still restores it.
+        // When no local row exists yet, INSERT the marker — otherwise the
+        // missing row would let a stale replayed upload create the image.
         await _safely(txn, () async {
-          await txn.update(
+          final updated = await txn.update(
             'product_images',
-            {'jpeg_bytes': Uint8List(0)},
+            {'jpeg_bytes': Uint8List(0), 'updated_at': tombUpdated},
             where: 'product_id = ?',
             whereArgs: [productId],
           );
+          if (updated == 0) {
+            await txn.insert('product_images', {
+              'product_id': productId,
+              'jpeg_bytes': Uint8List(0),
+              'created_at': _localIso(row['created_at']) ?? tombUpdated,
+              'updated_at': tombUpdated,
+            });
+          }
         });
         continue;
       }
