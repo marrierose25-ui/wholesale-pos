@@ -17,7 +17,10 @@
 --       non-deleted write can neither overwrite nor resurrect
 --   I6  product_image persistence: bytes stored and retrievable,
 --       invalid base64 REJECTED, tombstone clears bytes
---   I7  authorization: an actor without the 'inventory' feature is
+--   I7  inventory-only product creation sync: product + stock + image land;
+--       purchase price survives; updates still require 'pos'; an actor with
+--       neither feature is rejected; older payloads default bought price to 0
+--   I8  authorization: an actor without the 'inventory' feature is
 --       REJECTED; anon/authenticated cannot execute the RPCs directly
 --
 -- psql -v ON_ERROR_STOP=1 -f inventory_foundation_test.sql
@@ -121,6 +124,10 @@ INSERT INTO pos_users
    'CASHIER', 's', 'h', true, '["pos","inventory"]'::jsonb),
   ('inv-nofeat-a', '11111111-1111-1111-1111-111111111111', 'inv-nofeat-a',
    'CASHIER', 's', 'h', true, '["pos"]'::jsonb),
+  ('inv-stock-a', '11111111-1111-1111-1111-111111111111', 'inv-stock-a',
+   'CASHIER', 's', 'h', true, '["inventory"]'::jsonb),
+  ('inv-none-a', '11111111-1111-1111-1111-111111111111', 'inv-none-a',
+   'CASHIER', 's', 'h', true, '[]'::jsonb),
   ('inv-owner-b', '22222222-2222-2222-2222-222222222222', 'inv-owner-b',
    'OWNER', 's', 'h', true, '[]'::jsonb);
 
@@ -132,6 +139,10 @@ INSERT INTO inv_grants (label, token) VALUES
     '11111111-1111-1111-1111-111111111111', 'inv-cash-a', 'fp-inv1', 3600)->>'grant')),
   ('nofeat-a', (public.pos_issue_actor_grant(
     '11111111-1111-1111-1111-111111111111', 'inv-nofeat-a', 'fp-inv1', 3600)->>'grant')),
+  ('stock-a', (public.pos_issue_actor_grant(
+    '11111111-1111-1111-1111-111111111111', 'inv-stock-a', 'fp-inv1', 3600)->>'grant')),
+  ('none-a', (public.pos_issue_actor_grant(
+    '11111111-1111-1111-1111-111111111111', 'inv-none-a', 'fp-inv1', 3600)->>'grant')),
   ('owner-b', (public.pos_issue_actor_grant(
     '22222222-2222-2222-2222-222222222222', 'inv-owner-b', 'fp-inv2', 3600)->>'grant'));
 
@@ -463,7 +474,129 @@ BEGIN
 END $$;
 
 -- ===========================================================================
--- I7  Authorization
+-- I7  Inventory-only product creation sync + purchase price
+-- ===========================================================================
+
+-- A cashier with 'inventory' but no 'pos' can land the wizard's three sync
+-- entities: product, opening stock and optional image.
+SELECT pg_temp.stage(
+  '11111111-1111-1111-1111-111111111111', 'product', 'p-stock-create',
+  jsonb_build_object('product', jsonb_build_object(
+    'id', 'p-stock-create', 'name', 'Inventory Created', 'code', '',
+    'category', NULL, 'unit', 'Pc',
+    'selling_price_minor_units', 9999,
+    'bought_price_minor_units', 4321,
+    'is_active', 1,
+    'created_at', '2026-01-01T00:00:00Z',
+    'updated_at', '2026-01-02T00:00:00Z')),
+  pg_temp.igrant('stock-a'));
+SELECT pg_temp.stage(
+  '11111111-1111-1111-1111-111111111111', 'store_inventory', 'si-stock-create',
+  jsonb_build_object('store_inventory', jsonb_build_object(
+    'id', 'si-stock-create', 'store_id', 'st-a1', 'product_id', 'p-stock-create',
+    'on_hand_milliunits', 123, 'reorder_milliunits', 4,
+    'created_at', '2026-01-01T00:00:00Z',
+    'updated_at', '2026-01-02T00:00:00Z')),
+  pg_temp.igrant('stock-a'));
+SELECT pg_temp.stage(
+  '11111111-1111-1111-1111-111111111111', 'product_image', 'p-stock-create',
+  jsonb_build_object('product_image', jsonb_build_object(
+    'product_id', 'p-stock-create', 'image_data', 'aGVsbG8=',
+    'created_at', '2026-01-01T00:00:00Z',
+    'updated_at', '2026-01-02T00:00:00Z')),
+  pg_temp.igrant('stock-a'));
+SELECT public.pos_sync_apply('11111111-1111-1111-1111-111111111111', 500, 'fp-inv1');
+DO $$
+BEGIN
+  PERFORM pg_temp.expect_true('I7 inventory-only product applied', EXISTS (
+    SELECT 1 FROM public.pos_products
+    WHERE customer_id = '11111111-1111-1111-1111-111111111111'
+      AND id = 'p-stock-create' AND name = 'Inventory Created'));
+  PERFORM pg_temp.expect_true('I7 purchase price survived sync', EXISTS (
+    SELECT 1 FROM public.pos_products
+    WHERE customer_id = '11111111-1111-1111-1111-111111111111'
+      AND id = 'p-stock-create' AND bought_price_minor_units = 4321));
+  PERFORM pg_temp.expect_true('I7 opening stock applied', EXISTS (
+    SELECT 1 FROM public.store_inventory
+    WHERE customer_id = '11111111-1111-1111-1111-111111111111'
+      AND id = 'si-stock-create' AND product_id = 'p-stock-create'
+      AND on_hand_milliunits = 123 AND reorder_milliunits = 4));
+  PERFORM pg_temp.expect_true('I7 product image applied', EXISTS (
+    SELECT 1 FROM public.product_images
+    WHERE customer_id = '11111111-1111-1111-1111-111111111111'
+      AND product_id = 'p-stock-create' AND image_data = 'aGVsbG8='));
+END $$;
+
+-- The same inventory-only actor cannot update an existing product: that is
+-- catalogue editing and still requires 'pos'.
+SELECT pg_temp.stage(
+  '11111111-1111-1111-1111-111111111111', 'product', 'p-a1',
+  jsonb_build_object('product', jsonb_build_object(
+    'id', 'p-a1', 'name', 'Berbere Renamed', 'code', 'B-1', 'unit', 'Kg',
+    'selling_price_minor_units', 13000, 'bought_price_minor_units', 8100,
+    'is_active', 1,
+    'created_at', '2026-01-01T00:00:00Z',
+    'updated_at', '2030-01-01T00:00:00Z')),
+  pg_temp.igrant('stock-a'));
+SELECT public.pos_sync_apply('11111111-1111-1111-1111-111111111111', 500, 'fp-inv1');
+DO $$
+BEGIN
+  PERFORM pg_temp.expect_true('I7 inventory-only product update rejected', EXISTS (
+    SELECT 1 FROM public.sync_mirror
+    WHERE customer_id = '11111111-1111-1111-1111-111111111111'
+      AND entity_type = 'product' AND entity_id = 'p-a1'
+      AND apply_status = 'REJECTED'
+      AND apply_error LIKE '%pos permission required%'));
+  PERFORM pg_temp.expect_true('I7 existing product untouched', EXISTS (
+    SELECT 1 FROM public.pos_products
+    WHERE customer_id = '11111111-1111-1111-1111-111111111111'
+      AND id = 'p-a1' AND name = 'Berbere'
+      AND selling_price_minor_units = 12000));
+END $$;
+
+-- An actor with neither 'pos' nor 'inventory' cannot create product master
+-- data through sync either.
+SELECT pg_temp.stage(
+  '11111111-1111-1111-1111-111111111111', 'product', 'p-denied-none',
+  jsonb_build_object('product', jsonb_build_object(
+    'id', 'p-denied-none', 'name', 'Denied Product', 'unit', 'Pc',
+    'selling_price_minor_units', 100, 'bought_price_minor_units', 50,
+    'is_active', 1, 'updated_at', '2026-01-01T00:00:00Z')),
+  pg_temp.igrant('none-a'));
+SELECT public.pos_sync_apply('11111111-1111-1111-1111-111111111111', 500, 'fp-inv1');
+DO $$
+BEGIN
+  PERFORM pg_temp.expect_true('I7 no-feature product rejected', EXISTS (
+    SELECT 1 FROM public.sync_mirror
+    WHERE customer_id = '11111111-1111-1111-1111-111111111111'
+      AND entity_type = 'product' AND entity_id = 'p-denied-none'
+      AND apply_status = 'REJECTED'));
+  PERFORM pg_temp.expect_true('I7 denied product not written', NOT EXISTS (
+    SELECT 1 FROM public.pos_products
+    WHERE customer_id = '11111111-1111-1111-1111-111111111111'
+      AND id = 'p-denied-none'));
+END $$;
+
+-- An older product payload without bought_price_minor_units still applies and
+-- defaults the cost to zero instead of failing the cast.
+SELECT pg_temp.stage(
+  '11111111-1111-1111-1111-111111111111', 'product', 'p-old-payload',
+  jsonb_build_object('product', jsonb_build_object(
+    'id', 'p-old-payload', 'name', 'Old Payload Product', 'unit', 'Pc',
+    'selling_price_minor_units', 700, 'is_active', 1,
+    'updated_at', '2026-01-01T00:00:00Z')),
+  pg_temp.igrant('owner-a'));
+SELECT public.pos_sync_apply('11111111-1111-1111-1111-111111111111', 500, 'fp-inv1');
+DO $$
+BEGIN
+  PERFORM pg_temp.expect_true('I7 older payload defaults bought price', EXISTS (
+    SELECT 1 FROM public.pos_products
+    WHERE customer_id = '11111111-1111-1111-1111-111111111111'
+      AND id = 'p-old-payload' AND bought_price_minor_units = 0));
+END $$;
+
+-- ===========================================================================
+-- I8  Authorization
 -- ===========================================================================
 
 -- Cashier WITHOUT the inventory feature cannot push a store.
@@ -475,28 +608,28 @@ SELECT pg_temp.stage(
 SELECT public.pos_sync_apply('11111111-1111-1111-1111-111111111111', 500, 'fp-inv1');
 DO $$
 BEGIN
-  PERFORM pg_temp.expect_true('I7 no-feature actor rejected', EXISTS (
+  PERFORM pg_temp.expect_true('I8 no-feature actor rejected', EXISTS (
     SELECT 1 FROM public.sync_mirror
     WHERE customer_id = '11111111-1111-1111-1111-111111111111'
       AND entity_type = 'store' AND entity_id = 'st-denied'
       AND apply_status = 'REJECTED'
       AND apply_error LIKE '%inventory permission required%'));
-  PERFORM pg_temp.expect_true('I7 denied store not written', NOT EXISTS (
+  PERFORM pg_temp.expect_true('I8 denied store not written', NOT EXISTS (
     SELECT 1 FROM public.stores WHERE id = 'st-denied'));
 END $$;
 
 -- Direct RPC surface: anon/authenticated must not execute either function.
 DO $$
 BEGIN
-  PERFORM pg_temp.expect_true('I7 anon cannot execute create RPC', NOT
+  PERFORM pg_temp.expect_true('I8 anon cannot execute create RPC', NOT
     has_function_privilege('anon',
       'public.pos_create_inventory_product(uuid,text,jsonb,text,bigint,bigint)',
       'EXECUTE'));
-  PERFORM pg_temp.expect_true('I7 authenticated cannot execute create RPC', NOT
+  PERFORM pg_temp.expect_true('I8 authenticated cannot execute create RPC', NOT
     has_function_privilege('authenticated',
       'public.pos_create_inventory_product(uuid,text,jsonb,text,bigint,bigint)',
       'EXECUTE'));
-  PERFORM pg_temp.expect_true('I7 anon cannot execute sync apply', NOT
+  PERFORM pg_temp.expect_true('I8 anon cannot execute sync apply', NOT
     has_function_privilege('anon',
       'public.pos_sync_apply(uuid,integer,text)', 'EXECUTE'));
 END $$;

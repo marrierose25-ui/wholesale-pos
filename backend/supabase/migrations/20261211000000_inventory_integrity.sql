@@ -523,7 +523,18 @@ BEGIN
         END IF;
 
       ELSIF rec.entity_type = 'product' THEN
-        PERFORM public.pos_require_feature(p_customer, v_actor_id, 'pos');
+        -- Product sync stays POS-authorized for updates. The inventory
+        -- feature may only land a product the tenant does not already have:
+        -- that is the wizard's creation path, not catalogue editing.
+        IF EXISTS (
+          SELECT 1 FROM public.pos_products
+          WHERE customer_id = p_customer AND id = rec.entity_id
+        ) THEN
+          PERFORM public.pos_require_feature(p_customer, v_actor_id, 'pos');
+        ELSE
+          PERFORM public.pos_require_any_feature(
+            p_customer, v_actor_id, ARRAY['pos', 'inventory']);
+        END IF;
         pr := rec.payload->'product';
         IF pr IS NULL OR jsonb_typeof(pr) <> 'object' THEN
           RAISE EXCEPTION 'Product payload is missing.';
@@ -539,10 +550,12 @@ BEGIN
         END IF;
         INSERT INTO public.pos_products (
           id, customer_id, name, code, category, unit,
-          selling_price_minor_units, is_active, created_at, updated_at)
+          selling_price_minor_units, bought_price_minor_units,
+          is_active, created_at, updated_at)
         VALUES (
           rec.entity_id, p_customer, pr->>'name', pr->>'code', pr->>'category',
           pr->>'unit', COALESCE((pr->>'selling_price_minor_units')::bigint, 0),
+          COALESCE((pr->>'bought_price_minor_units')::bigint, 0),
           COALESCE((pr->>'is_active')::int, 1),
           COALESCE((pr->>'created_at')::timestamptz, now()),
           COALESCE((pr->>'updated_at')::timestamptz, now()))
@@ -552,6 +565,9 @@ BEGIN
           category                 = EXCLUDED.category,
           unit                     = EXCLUDED.unit,
           selling_price_minor_units = EXCLUDED.selling_price_minor_units,
+          bought_price_minor_units  = COALESCE(
+            (pr->>'bought_price_minor_units')::bigint,
+            public.pos_products.bought_price_minor_units),
           is_active                = EXCLUDED.is_active,
           updated_at               = EXCLUDED.updated_at
         WHERE public.pos_products.updated_at IS NULL

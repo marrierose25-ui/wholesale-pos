@@ -327,6 +327,21 @@ void main() {
       expect(repo.createCalls, 1);
     });
 
+    testWidgets('successful Done closes only the wizard and keeps Inventory',
+        (tester) async {
+      final repo = FakeInventoryRepository()
+        ..stores.add(_store('s1', 'Main'));
+      await openWizard(tester, repo);
+      await _fillWizard(tester, repo);
+      await tester.tap(find.text('Done'));
+      await tester.pumpAndSettle();
+
+      expect(repo.createCalls, 1);
+      expect(find.byType(InventoryScreen), findsOneWidget);
+      expect(find.text('Inventory'), findsOneWidget);
+      expect(find.text('Berbere'), findsOneWidget);
+    });
+
     testWidgets('image picker cancellation keeps image optional',
         (tester) async {
       // Mock the image_picker platform channel: pickImage returns null

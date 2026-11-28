@@ -33,7 +33,7 @@ void main() {
     } catch (_) {}
   });
 
-  test('historical v12 database upgrades to v23 with data intact', () async {
+  test('historical v12 database upgrades to v26 with data intact', () async {
     // Seed the genuine v12 fixture (bundled as a test asset).
     final bytes = await rootBundle.load(
       'integration_test/fixtures/v12_wholesale_pos.db',

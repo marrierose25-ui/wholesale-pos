@@ -292,7 +292,6 @@ class _ProductWizardState extends State<ProductWizard> {
       );
       if (!mounted) return;
       widget.onFinished(true);
-      Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;
       setState(() {

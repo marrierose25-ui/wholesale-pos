@@ -392,6 +392,18 @@ void main() {
     expect(bRows.single['on_hand_milliunits'], 7000);
   });
 
+  test('pulled products keep the purchase price on both devices', () async {
+    for (final db in [deviceA, deviceB]) {
+      final rows = await db.query(
+        'products',
+        where: 'id = ?',
+        whereArgs: [productId],
+      );
+      expect(rows, hasLength(1));
+      expect(rows.single['bought_price_minor_units'], 8000);
+    }
+  });
+
   test('product image pull hydrates bytes and tombstone removes them',
       () async {
     final jpeg = base64Encode(List<int>.filled(64, 0xFF));

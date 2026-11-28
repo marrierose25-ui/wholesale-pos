@@ -65,8 +65,12 @@ class CloudInventoryRepository implements InventoryRepository {
     required int onHandMilliunits,
     required int reorderMilliunits,
   }) async {
+    final productMap = product.toMap();
+    if (product.imageData != null) {
+      productMap['image_data'] = product.imageData;
+    }
     await _api.call('create_inventory_product', {
-      'product': product.toMap(),
+      'product': productMap,
       'store_id': storeId,
       'on_hand_milliunits': onHandMilliunits,
       'reorder_milliunits': reorderMilliunits,
