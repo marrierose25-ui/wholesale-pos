@@ -14,7 +14,7 @@
 > `migrations/`). Server schema authority is `backend/supabase/migrations/`
 > (6 files: `20261030000000` production baseline, H1 void migrations
 > `20261125`–`20261127`, Request 2 `20261128000000`/`20261128000001`).
-> SQLite `schemaVersion = 23` in `pos_local_engine`. Licensing is now
+> SQLite `schemaVersion = 26` in `pos_local_engine`. Licensing is now
 > unlimited-device; device management is owner-authenticated on `pos-api`
 > with Ed25519 device-license proofs; rate limiting is durable
 > (`rate_limit_buckets`). Paths, file counts, and test totals below are
@@ -45,6 +45,7 @@ not just existing documentation.
 | Function | File | Size | Role |
 | --- | --- | --- | --- |
 | `pos-api` | `functions/pos-api/index.ts` (~210-line router) + `modules/*` (7 domains) + `shared/*` (auth, authorization, helpers, env) + `tests/*` | — | Modular Edge Function — `index.ts` is the production entry point: CORS/JSON guards → JWT verify → `checkAuthorization` (actor load, token_version, OWNER_ONLY, ACTION_FEATURES) → `ACTIONS` dispatch table → domain module handlers. Action contract unchanged. `Deno.serve` is guarded by `import.meta.main` so tests can import `handleRequest` with an injected DB. |
+| `pos-api` | `functions/pos-api/index.ts` + `modules/*` + `shared/*` | ~434 lines (router), 28 module/shared files | Modularized Edge Function — router dispatches to domain modules (auth, catalog, sales, register, finance, warehouse, reporting, users) via shared helpers. Same deploy boundary. |
 | `sync` | `functions/sync/index.ts` | 576 lines | License-gated push/pull gateway; stages into `sync_mirror`, `pos_sync_apply` RPC replays to canonical tables |
 | `licensing` | `functions/licensing/index.ts` | 358 lines | Device activation/seats, vouchers, Ed25519 license issuance helpers |
 

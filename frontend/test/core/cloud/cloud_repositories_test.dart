@@ -624,4 +624,36 @@ void main() {
       expect(totals['completed_total'], 200);
     });
   });
+
+  group('CloudInventoryRepository', () {
+    test('createProductWithStock sends the selected image to pos-api',
+        () async {
+      final rec = _Recorder()
+        ..reply = (_) => http.Response('{"ok":true,"product_id":"p1"}', 200);
+      final repo = CloudInventoryRepository(_clientWith(rec));
+      final product = Product(
+        id: 'p1',
+        name: 'Sugar 50kg',
+        code: 'SGR50',
+        unit: 'bag',
+        sellingPriceMinorUnits: 45000,
+        boughtPriceMinorUnits: 30000,
+        imageData: 'aGVsbG8=',
+        createdAt: DateTime.parse('2026-01-01T00:00:00.000'),
+        updatedAt: DateTime.parse('2026-01-01T00:00:00.000'),
+      );
+
+      await repo.createProductWithStock(
+        product: product,
+        storeId: 'store-1',
+        onHandMilliunits: 10000,
+        reorderMilliunits: 2000,
+      );
+
+      expect(rec.body!['action'], 'create_inventory_product');
+      final sent = rec.body!['product'] as Map<String, dynamic>;
+      expect(sent['image_data'], 'aGVsbG8=');
+      expect(sent['bought_price_minor_units'], 30000);
+    });
+  });
 }

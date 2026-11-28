@@ -106,12 +106,22 @@ const PULL_TABLES: Record<string, { from: string; select: string }> = {
   },
   // Saved names are read off the till's own screen, so the browser's edits have
   // to reach it. `updated_at` is what the device compares to decide which of
-  // its copy and the cloud's is stale.
+  // its copy and the cloud's is stale. `bought_price_minor_units` is the
+  // inventory-foundation cost column; without it a pulled product would lose
+  // its cost price on every device.
   products: {
     from: "pos_products",
     select:
-      "id, name, code, category, unit, selling_price_minor_units, is_active, created_at, updated_at, received_at",
+      "id, name, code, category, unit, selling_price_minor_units, bought_price_minor_units, is_active, created_at, updated_at, received_at",
   },
+  // Inventory foundation: stores and per-store stock. Both are mutable
+  // master data, read straight through like the picklist tables.
+  stores: { from: "stores", select: "*" },
+  store_inventory: { from: "store_inventory", select: "*" },
+  // Product photos: one row per (customer, product), base64 JPEG in
+  // image_data. Pulled like any other mutable master row so a photo taken on
+  // one device reaches the rest of the shop's catalogue.
+  product_images: { from: "product_images", select: "*" },
   shifts: { from: "shifts", select: "*" },
   sales: { from: "sales", select: "*" },
   sale_items: { from: "sale_items", select: "*" },
@@ -159,6 +169,13 @@ const ENTITY_ALIAS: Record<string, string> = {
   picklist: "picklist",
   picklist_items: "picklist_item",
   picklist_item: "picklist_item",
+  stores: "store",
+  store: "store",
+  store_inventory: "store_inventory",
+  storeInventory: "store_inventory",
+  product_images: "product_image",
+  product_image: "product_image",
+  productImage: "product_image",
 };
 
 // Master data, i.e. everything a shop EDITS after creating. A ledger row is
@@ -177,6 +194,12 @@ const MUTABLE_ENTITIES = new Set([
   // stock, so a later edit must replace the earlier mirror copy, not freeze.
   "picklist",
   "picklist_item",
+  // Stores and per-store stock are edited after creation, so a later change
+  // must replace the earlier mirror copy rather than freeze at first push.
+  // A product photo is replaced the same way — newest image_data wins.
+  "store",
+  "store_inventory",
+  "product_image",
 ]);
 
 // Max outbox entries accepted in one push batch (abuse guard).

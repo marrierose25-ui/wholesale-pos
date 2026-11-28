@@ -38,7 +38,7 @@ void main() {
   // the neighbouring fixtures instead (see fixtures README and the migration
   // log).
   final allVersions = <int>[
-    2, 3, 4, 5, 6, 8, 9, 10, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22,
+    2, 3, 4, 5, 6, 8, 9, 10, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 24,
   ];
   final upgradeableVersions = allVersions;
 
@@ -434,6 +434,38 @@ Future<void> _expectHistoricalDataPreserved(int version, Database db) async {
       expect(picklistCustomers.single['name'], 'Acme Traders');
     }
   }
+
+  // Inventory foundation (v25+) and image lifecycle (v26): every upgraded
+  // file ends with the store/stock/image tables present and empty — the v25
+  // upgrade is additive and must not fabricate rows.
+  final storeTables = await db.rawQuery(
+    "SELECT name FROM sqlite_master WHERE type = 'table' "
+    "AND name IN ('stores', 'store_inventory', 'product_images')",
+  );
+  expect(
+    storeTables.map((row) => row['name']),
+    containsAll(['stores', 'store_inventory', 'product_images']),
+    reason: 'v$version must reach the inventory schema',
+  );
+  expect(await db.query('stores'), isEmpty, reason: 'v$version stores');
+  expect(await db.query('store_inventory'), isEmpty);
+  expect(await db.query('product_images'), isEmpty);
+  // v25 adds products.bought_price_minor_units; pre-existing products keep
+  // their rows and simply gain the new column at its default.
+  final productCols = (await db.rawQuery('PRAGMA table_info(products)'))
+      .map((row) => row['name']);
+  expect(productCols, contains('bought_price_minor_units'));
+  expect(
+    (await db.query('products')).every(
+      (row) => row['bought_price_minor_units'] == 0,
+    ),
+    isTrue,
+    reason: 'v$version bought_price backfill',
+  );
+  // v26 adds product_images.updated_at for newest-wins pull application.
+  final imageCols = (await db.rawQuery('PRAGMA table_info(product_images)'))
+      .map((row) => row['name']);
+  expect(imageCols, contains('updated_at'));
 
   // Triggers that guard a single open drawer and a known cashier are present on
   // every v22 database.

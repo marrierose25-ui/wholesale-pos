@@ -102,6 +102,21 @@ class DataExporter {
     final picklists = await db.query('picklists');
     final picklistItems = await db.query('picklist_items');
     final picklistCustomers = await db.query('picklist_customers');
+    // Inventory foundation (schema 23): optional in older backups, always
+    // present in new ones. Rows carry their own deleted_at tombstones.
+    final stores = await db.query('stores');
+    final storeInventory = await db.query('store_inventory');
+    // Product photos are BLOBs (schema 25); export them base64-encoded like
+    // the proof photos above so a JSON backup round-trips the image bytes.
+    final productImages = <Map<String, dynamic>>[
+      for (final row in await db.query('product_images'))
+        {
+          'product_id': row['product_id'],
+          'jpeg_bytes': base64Encode(row['jpeg_bytes'] as List<int>),
+          'created_at': row['created_at'],
+          'updated_at': row['updated_at'],
+        },
+    ];
 
     final exportData = {
       'exported_at': DateTime.now().toIso8601String(),
@@ -122,6 +137,9 @@ class DataExporter {
       'picklists': picklists,
       'picklist_items': picklistItems,
       'picklist_customers': picklistCustomers,
+      'stores': stores,
+      'store_inventory': storeInventory,
+      'product_images': productImages,
     };
 
     final jsonString = const JsonEncoder.withIndent('  ').convert(exportData);

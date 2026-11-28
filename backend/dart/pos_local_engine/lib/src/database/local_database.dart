@@ -43,7 +43,7 @@ class UnsupportedDatabaseVersionException implements Exception {
 
 class LocalDatabase {
   static const String databaseName = 'wholesale_pos.db';
-  static const int schemaVersion = 24;
+  static const int schemaVersion = 26;
   static const String deviceIdFileName = 'device_id.txt';
   static const String themeSettingKey = 'theme_mode';
 
@@ -719,7 +719,105 @@ class LocalDatabase {
         await db.execute('ALTER TABLE finance_entries ADD COLUMN deleted_by TEXT');
       }
     }
+    if (oldVersion < 25) {
+      // Inventory foundation: stores (locations holding stock) and the
+      // per-store product stock records. Quantities are milliunits, matching
+      // `sale_items.billing_quantity_milliunits`. Products gain the cost
+      // price and optional image the creation wizard collects. Additive
+      // columns/indexes/tables only — existing rows are untouched.
+      final productCols = await db.rawQuery('PRAGMA table_info(products)');
+      if (!productCols.any(
+        (column) => column['name'] == 'bought_price_minor_units',
+      )) {
+        await db.execute(
+          'ALTER TABLE products ADD COLUMN bought_price_minor_units '
+          'INTEGER NOT NULL DEFAULT 0',
+        );
+      }
+      await _createProductImagesTable(db);
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS stores (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          deleted_at TEXT
+        )
+      ''');
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS store_inventory (
+          id TEXT PRIMARY KEY,
+          store_id TEXT NOT NULL,
+          product_id TEXT NOT NULL,
+          on_hand_milliunits INTEGER NOT NULL DEFAULT 0,
+          reorder_milliunits INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          deleted_at TEXT,
+          FOREIGN KEY(store_id) REFERENCES stores(id),
+          FOREIGN KEY(product_id) REFERENCES products(id)
+        )
+      ''');
+      await _createInventoryIndexes(db);
+    }
+    if (oldVersion < 26) {
+      // Product-image lifecycle completion: `updated_at` lets the pull
+      // applier apply newest-wins like every other mutable entity, and
+      // existing rows inherit their creation stamp. Additive only.
+      final imageCols = await db.rawQuery('PRAGMA table_info(product_images)');
+      if (!imageCols.any((c) => c['name'] == 'updated_at')) {
+        await db.execute(
+          'ALTER TABLE product_images ADD COLUMN updated_at TEXT',
+        );
+        await db.execute(
+          'UPDATE product_images SET updated_at = created_at '
+          'WHERE updated_at IS NULL',
+        );
+      }
+    }
     if (pause != null) await pause('late');
+  }
+
+  /// Product photos are BLOBs in their own table, mirroring
+  /// `cash_movement_photos` (schema 16): the product row stays slim so catalog
+  /// and sync payloads never carry image bytes.
+  static Future<void> _createProductImagesTable(DatabaseExecutor db) async {
+    await db.execute(
+      'CREATE TABLE IF NOT EXISTS product_images ('
+      'product_id TEXT PRIMARY KEY, '
+      'jpeg_bytes BLOB NOT NULL, '
+      'created_at TEXT NOT NULL, '
+      'updated_at TEXT, '
+      'FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE)',
+    );
+  }
+
+  /// Indexes and the name-uniqueness constraint for the inventory tables.
+  /// Kept out of [_createIndexesAndTriggers] because that helper also runs
+  /// during upgrades from schema < 23, before `stores` exists.
+  static Future<void> _createInventoryIndexes(DatabaseExecutor db) async {
+    // Database-level duplicate protection, not just the repository check:
+    // live stores may not share a name ignoring case and surrounding
+    // whitespace. Tombstoned stores are excluded so a deleted name can be
+    // registered again.
+    await db.execute(
+      'CREATE UNIQUE INDEX IF NOT EXISTS stores_name_unique '
+      'ON stores(LOWER(TRIM(name))) WHERE deleted_at IS NULL',
+    );
+    // One live stock record per product per store. Partial so a tombstoned
+    // row never blocks re-stocking the same pair.
+    await db.execute(
+      'CREATE UNIQUE INDEX IF NOT EXISTS store_inventory_pair '
+      'ON store_inventory(store_id, product_id) WHERE deleted_at IS NULL',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS store_inventory_store_id '
+      'ON store_inventory(store_id)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS store_inventory_product_id '
+      'ON store_inventory(product_id)',
+    );
   }
 
   /// Proof photos are BLOBs in their own table (schema 16), one per movement.
@@ -986,6 +1084,7 @@ class LocalDatabase {
         category TEXT,
         unit TEXT NOT NULL,
         selling_price_minor_units INTEGER NOT NULL,
+        bought_price_minor_units INTEGER NOT NULL DEFAULT 0,
         is_active INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -1172,6 +1271,36 @@ class LocalDatabase {
       )
     ''');
 
+    await _createProductImagesTable(db);
+
+    // Inventory foundation (schema 25): stores and per-store stock. Kept
+    // independent of Sales/Shifts/Finance like the picklists — nothing here
+    // points at those tables.
+    batch.execute('''
+      CREATE TABLE stores (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT
+      )
+    ''');
+
+    batch.execute('''
+      CREATE TABLE store_inventory (
+        id TEXT PRIMARY KEY,
+        store_id TEXT NOT NULL,
+        product_id TEXT NOT NULL,
+        on_hand_milliunits INTEGER NOT NULL DEFAULT 0,
+        reorder_milliunits INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT,
+        FOREIGN KEY(store_id) REFERENCES stores(id),
+        FOREIGN KEY(product_id) REFERENCES products(id)
+      )
+    ''');
+
     batch.execute('''
       CREATE TABLE audit_logs (
         id TEXT PRIMARY KEY,
@@ -1216,5 +1345,6 @@ class LocalDatabase {
 
     await batch.commit(noResult: true);
     await _createIndexesAndTriggers(db);
+    await _createInventoryIndexes(db);
   }
 }

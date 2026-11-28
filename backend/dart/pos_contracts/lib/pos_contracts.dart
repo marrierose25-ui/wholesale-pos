@@ -12,6 +12,7 @@ export 'src/repositories/shift_repository.dart';
 export 'src/repositories/user_repository.dart';
 export 'src/repositories/product_repository.dart';
 export 'src/repositories/picklist_repository.dart';
+export 'src/repositories/inventory_repository.dart';
 export 'src/repositories/reporting_repository.dart';
 export 'src/repositories/feature_gate.dart';
 

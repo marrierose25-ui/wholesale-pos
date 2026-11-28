@@ -1,5 +1,5 @@
 {
-  "user_version": 24,
+  "user_version": 26,
   "tables": {
     "audit_logs": {
       "sql": "CREATE TABLE audit_logs (id TEXT PRIMARY KEY, user_id TEXT, action TEXT NOT NULL, details TEXT, created_at TEXT NOT NULL)",
@@ -661,8 +661,55 @@
       "indexes": [],
       "unique_constraints": []
     },
+    "product_images": {
+      "sql": "CREATE TABLE product_images (product_id TEXT PRIMARY KEY, jpeg_bytes BLOB NOT NULL, created_at TEXT NOT NULL, updated_at TEXT, FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE)",
+      "columns": [
+        {
+          "name": "product_id",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 1
+        },
+        {
+          "name": "jpeg_bytes",
+          "type": "BLOB",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "updated_at",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        }
+      ],
+      "foreign_keys": [
+        {
+          "id": 0,
+          "seq": 0,
+          "table": "products",
+          "from": "product_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "CASCADE",
+          "match": "NONE"
+        }
+      ],
+      "indexes": [],
+      "unique_constraints": []
+    },
     "products": {
-      "sql": "CREATE TABLE products (id TEXT PRIMARY KEY, name TEXT NOT NULL, code TEXT UNIQUE NOT NULL, category TEXT, unit TEXT NOT NULL, selling_price_minor_units INTEGER NOT NULL, is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+      "sql": "CREATE TABLE products (id TEXT PRIMARY KEY, name TEXT NOT NULL, code TEXT UNIQUE NOT NULL, category TEXT, unit TEXT NOT NULL, selling_price_minor_units INTEGER NOT NULL, is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, bought_price_minor_units INTEGER NOT NULL DEFAULT 0)",
       "columns": [
         {
           "name": "id",
@@ -725,6 +772,13 @@
           "type": "TEXT",
           "not_null": 1,
           "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "bought_price_minor_units",
+          "type": "INTEGER",
+          "not_null": 1,
+          "default": "0",
           "primary_key": 0
         }
       ],
@@ -1122,6 +1176,171 @@
             "status"
           ],
           "sql": "CREATE UNIQUE INDEX one_open_shift ON shifts(status) WHERE status = 'OPEN'"
+        }
+      ],
+      "unique_constraints": []
+    },
+    "store_inventory": {
+      "sql": "CREATE TABLE store_inventory (id TEXT PRIMARY KEY, store_id TEXT NOT NULL, product_id TEXT NOT NULL, on_hand_milliunits INTEGER NOT NULL DEFAULT 0, reorder_milliunits INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT, FOREIGN KEY(store_id) REFERENCES stores(id), FOREIGN KEY(product_id) REFERENCES products(id))",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 1
+        },
+        {
+          "name": "store_id",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "product_id",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "on_hand_milliunits",
+          "type": "INTEGER",
+          "not_null": 1,
+          "default": "0",
+          "primary_key": 0
+        },
+        {
+          "name": "reorder_milliunits",
+          "type": "INTEGER",
+          "not_null": 1,
+          "default": "0",
+          "primary_key": 0
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "updated_at",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "deleted_at",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        }
+      ],
+      "foreign_keys": [
+        {
+          "id": 0,
+          "seq": 0,
+          "table": "products",
+          "from": "product_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "NO ACTION",
+          "match": "NONE"
+        },
+        {
+          "id": 1,
+          "seq": 0,
+          "table": "stores",
+          "from": "store_id",
+          "to": "id",
+          "on_update": "NO ACTION",
+          "on_delete": "NO ACTION",
+          "match": "NONE"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "store_inventory_pair",
+          "unique": true,
+          "partial": true,
+          "columns": [
+            "store_id",
+            "product_id"
+          ],
+          "sql": "CREATE UNIQUE INDEX store_inventory_pair ON store_inventory(store_id, product_id) WHERE deleted_at IS NULL"
+        },
+        {
+          "name": "store_inventory_product_id",
+          "unique": false,
+          "partial": false,
+          "columns": [
+            "product_id"
+          ],
+          "sql": "CREATE INDEX store_inventory_product_id ON store_inventory(product_id)"
+        },
+        {
+          "name": "store_inventory_store_id",
+          "unique": false,
+          "partial": false,
+          "columns": [
+            "store_id"
+          ],
+          "sql": "CREATE INDEX store_inventory_store_id ON store_inventory(store_id)"
+        }
+      ],
+      "unique_constraints": []
+    },
+    "stores": {
+      "sql": "CREATE TABLE stores (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT)",
+      "columns": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 1
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "created_at",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "updated_at",
+          "type": "TEXT",
+          "not_null": 1,
+          "default": null,
+          "primary_key": 0
+        },
+        {
+          "name": "deleted_at",
+          "type": "TEXT",
+          "not_null": 0,
+          "default": null,
+          "primary_key": 0
+        }
+      ],
+      "foreign_keys": [],
+      "indexes": [
+        {
+          "name": "stores_name_unique",
+          "unique": true,
+          "partial": true,
+          "columns": [],
+          "sql": "CREATE UNIQUE INDEX stores_name_unique ON stores(LOWER(TRIM(name))) WHERE deleted_at IS NULL"
         }
       ],
       "unique_constraints": []

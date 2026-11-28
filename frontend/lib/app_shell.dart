@@ -12,6 +12,7 @@ import 'core/theme/app_design.dart';
 import 'core/theme/app_theme.dart';
 import 'features/dashboard/dashboard_screen.dart';
 import 'features/finance/finance_overview_screen.dart';
+import 'features/inventory/inventory_screen.dart';
 import 'features/auth/login_screen.dart';
 import 'features/register/register_screen.dart';
 import 'features/reports/reports_screen.dart';
@@ -272,6 +273,11 @@ class _MainScaffoldState extends State<MainScaffold>
   final GlobalKey<WarehouseScreenState> _warehouseKey =
       GlobalKey<WarehouseScreenState>();
 
+  /// Inventory tab handle — same seam pattern as the warehouse key: mounted
+  /// only when the backend exposes an [InventoryRepository].
+  final GlobalKey<InventoryScreenState> _inventoryKey =
+      GlobalKey<InventoryScreenState>();
+
   /// Drives the quick fade-in that plays whenever a tab becomes visible.
   late final AnimationController _tabFadeController = AnimationController(
     vsync: this,
@@ -362,6 +368,7 @@ class _MainScaffoldState extends State<MainScaffold>
     _registerKey.currentState?.loadData(silent: true);
     _financeKey.currentState?.load(silent: true);
     _warehouseKey.currentState?.refresh(silent: true);
+    _inventoryKey.currentState?.refresh(silent: true);
     _reportsKey.currentState?.loadReports();
   }
 
@@ -380,6 +387,8 @@ class _MainScaffoldState extends State<MainScaffold>
         _financeKey.currentState?.load(silent: silent);
       case 'warehouse':
         _warehouseKey.currentState?.refresh(silent: silent);
+      case 'inventory':
+        _inventoryKey.currentState?.refresh(silent: silent);
       case 'reports':
         _reportsKey.currentState?.loadReports();
     }
@@ -491,6 +500,20 @@ class _MainScaffoldState extends State<MainScaffold>
             repository: picklists,
             currentUser: user,
           ),
+        ),
+      );
+    }
+    // Inventory foundation: stores + per-store product stock. Only rendered
+    // when the backend seam exposes a repository; gated by the `inventory`
+    // feature tick like every other tab.
+    final inventory = backend.inventory;
+    if (inventory != null && user.can('inventory')) {
+      entries.add(
+        _ShellDestination(
+          'inventory',
+          'Inventory',
+          CupertinoIcons.cube,
+          InventoryScreen(key: _inventoryKey, repository: inventory),
         ),
       );
     }

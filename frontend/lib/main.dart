@@ -31,6 +31,7 @@ import 'features/audit/audit_log_screen.dart';
 import 'features/auth/login_screen.dart';
 import 'features/dashboard/dashboard_screen.dart';
 import 'features/finance/finance_overview_screen.dart';
+import 'features/inventory/inventory_screen.dart';
 import 'features/licensing/activation_screen.dart';
 import 'features/register/register_screen.dart';
 import 'features/reports/reports_screen.dart';
@@ -933,6 +934,11 @@ class _MainLayoutState extends State<MainLayout> {
     widget.db,
   );
 
+  /// Inventory tab handle + its SQLite repository, constructed lazily from
+  /// the shared [widget.db] exactly like the picklist repository above.
+  late final InventoryRepository _inventoryRepository =
+      SqfliteInventoryRepository(widget.db);
+
   /// Silent background refreshes so every data screen shows the latest
   /// figures. Each loader is guarded by its GlobalKey, so a screen the account
   /// can't open (null currentState) is simply skipped.
@@ -1082,6 +1088,13 @@ class _MainLayoutState extends State<MainLayout> {
         ),
       );
     }
+    add(
+      'inventory',
+      InventoryScreen(
+        repository: _inventoryRepository,
+        onDataChanged: _wakeSync,
+      ),
+    );
     add(
       'reports',
       ReportsScreen(

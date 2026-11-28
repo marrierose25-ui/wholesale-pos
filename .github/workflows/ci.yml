@@ -47,6 +47,11 @@ jobs:
       - name: Build web (PWA entry point)
         run: flutter build web --release -t lib/main_web.dart
 
+      # The Windows desktop shell is the primary till target: sqflite_ffi,
+      # path_provider and the native plugins only link in a real build.
+      - name: Build Windows desktop
+        run: flutter build windows --release
+
   # Edge Function gate: the Deno suites (licensing activation + rate limits,
   # pos-api router/auth/device authorization, sync push security) previously
   # only ran locally, so a regression could reach the branch green. Format,
@@ -114,10 +119,9 @@ jobs:
 
   ios-database:
     runs-on: macos-15
-    # Bounded so a hung `flutter test` (flutter/flutter#181771: the iOS log
-    # reader can miss the VM service URL and wait forever) fails in minutes,
-    # not at the 6-hour default. Fix merged upstream in flutter/flutter#193142
-    # but is NOT in stable 3.50.1 yet.
+    # Bounded so a hung `flutter test` fails in minutes, not at the 6-hour
+    # default. The iOS job is pinned to Flutter 3.51.0-0.2.pre because the
+    # flutter/flutter#193142 VM-service discovery fix is not in stable 3.50.1.
     timeout-minutes: 100
     defaults:
       run:
@@ -126,8 +130,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          channel: beta
+          flutter-version: 3.51.0-0.2.pre
           cache: true
+      - name: Print Flutter SDK version
+        run: flutter --version
       - name: Resolve dependencies
         run: flutter pub get
 
@@ -323,3 +330,31 @@ jobs:
           PGUSER: postgres
           PGPASSWORD: postgres
         run: bash backend/supabase/tests/request3_financial_integrity/concurrency.sh
+      # Inventory foundation: atomic product+stock+image creation, store
+      # tenant isolation, upsert convergence/newest-wins, missing-parent
+      # deferral, tombstones, image persistence and feature authorization.
+      - name: Inventory foundation SQL tests
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/inventory_foundation/inventory_foundation_test.sql
+      # Inventory integrity: atomic store deletion, sync tombstone
+      # deferral, composite FKs/CHECKs, image newest-wins restore.
+      - name: Inventory integrity SQL tests
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: psql -v ON_ERROR_STOP=1 -f backend/supabase/tests/inventory_foundation/inventory_integrity_test.sql
+      # Two real sessions race store deletion against stock creation in both
+      # orderings — neither may leave a deleted store with live inventory.
+      - name: Inventory store-delete concurrency
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: bash backend/supabase/tests/inventory_foundation/concurrency.sh

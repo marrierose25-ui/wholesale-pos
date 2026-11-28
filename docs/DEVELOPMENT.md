@@ -155,8 +155,8 @@ graphify . --no-viz
 
 - **No new shims after 6.7** (M-24 gate from risk register)
 - **Web graph must be free of sqflite/dart:io/path_provider/LocalDatabase** (F-1 gate)
-- **Single source of truth for server schema:** `backend/supabase/migrations/` (10 timestamped files)
-- **One `schemaVersion = 23` definition only** — in `backend/dart/pos_local_engine/lib/src/database/local_database.dart`
+- **Single source of truth for server schema:** `backend/supabase/migrations/` (17 timestamped files)
+- **One `schemaVersion = 26` definition only** — in `backend/dart/pos_local_engine/lib/src/database/local_database.dart`
 - **No core → features model imports** (layering violation gate)
 - **Transaction inventory must remain 38** (M-07 gate)
 - **pos_cloud_engine has no Flutter/sqflite/io imports** — verified by architecture test

@@ -5,6 +5,15 @@ class Product {
   final String? category;
   final String unit;
   final int sellingPriceMinorUnits;
+
+  /// Purchase/cost price in minor units. Defaults to 0 for products created
+  /// before the inventory foundation (and for saved-name rows that never
+  /// carried a cost).
+  final int boughtPriceMinorUnits;
+
+  /// Optional product photo as a base64 JPEG, compressed through the same
+  /// pipeline as register proof photos. Null when the product has no image.
+  final String? imageData;
   final bool isActive;
   final DateTime createdAt;
   final DateTime updatedAt;
@@ -16,6 +25,8 @@ class Product {
     this.category,
     required this.unit,
     required this.sellingPriceMinorUnits,
+    this.boughtPriceMinorUnits = 0,
+    this.imageData,
     this.isActive = true,
     required this.createdAt,
     required this.updatedAt,
@@ -29,6 +40,7 @@ class Product {
       'category': category,
       'unit': unit,
       'selling_price_minor_units': sellingPriceMinorUnits,
+      'bought_price_minor_units': boughtPriceMinorUnits,
       'is_active': isActive ? 1 : 0,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
@@ -47,6 +59,9 @@ class Product {
       unit: map['unit'] as String? ?? '',
       sellingPriceMinorUnits:
           (map['selling_price_minor_units'] as num?)?.toInt() ?? 0,
+      boughtPriceMinorUnits:
+          (map['bought_price_minor_units'] as num?)?.toInt() ?? 0,
+      imageData: map['image_data'] as String?,
       isActive: ((map['is_active'] as num?)?.toInt() ?? 1) == 1,
       createdAt: DateTime.parse(map['created_at'] as String),
       updatedAt: DateTime.parse(

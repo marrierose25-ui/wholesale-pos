@@ -71,6 +71,11 @@ class DataImporter {
     final voidRequests = data['void_requests'] is List
         ? data['void_requests'] as List
         : <dynamic>[];
+    // Inventory tables arrived in schema 23; older backups simply start empty.
+    final stores = data['stores'] is List ? data['stores'] as List : <dynamic>[];
+    final storeInventory = data['store_inventory'] is List
+        ? data['store_inventory'] as List
+        : <dynamic>[];
 
     // Warehouse tables were introduced in schema v20 (picklists/items) and
     // v21 (reusable customer directory). The first v20-v24 JSON exporters did
@@ -310,6 +315,9 @@ class DataImporter {
         await txn.delete('picklists');
         await txn.delete('picklist_customers');
       }
+      await txn.delete('product_images');
+      await txn.delete('store_inventory');
+      await txn.delete('stores');
       await txn.delete('devices');
       await txn.delete('products');
       await txn.delete('settings');
@@ -350,8 +358,50 @@ class DataImporter {
       for (var row in (data['devices'] as List)) {
         await txn.insert('devices', Map<String, dynamic>.from(row));
       }
+      for (var row in stores) {
+        await txn.insert('stores', Map<String, dynamic>.from(row as Map));
+      }
       for (var row in (data['products'] as List)) {
         await txn.insert('products', Map<String, dynamic>.from(row));
+      }
+      for (var row in storeInventory) {
+        await txn.insert(
+          'store_inventory',
+          Map<String, dynamic>.from(row as Map),
+        );
+      }
+      // Optional: backups predating product images simply restore none.
+      // A malformed row or one naming a product the backup does not carry is
+      // skipped, never allowed to fail the whole restore.
+      final productIds = {
+        for (final row in (data['products'] as List? ?? const []))
+          (row as Map)['id'],
+      };
+      final productImages = data['product_images'] is List
+          ? data['product_images'] as List
+          : const <dynamic>[];
+      for (var row in productImages) {
+        final m = Map<String, dynamic>.from(row as Map);
+        final productId = m['product_id'];
+        if (productId == null || !productIds.contains(productId)) continue;
+        final b64 = m['jpeg_bytes'];
+        List<int>? bytes;
+        if (b64 is String) {
+          try {
+            bytes = base64Decode(b64);
+          } on FormatException {
+            bytes = null;
+          }
+        } else if (b64 is List<int>) {
+          bytes = b64;
+        }
+        if (bytes == null || bytes.isEmpty) continue;
+        await txn.insert('product_images', {
+          'product_id': productId,
+          'jpeg_bytes': bytes,
+          'created_at': m['created_at'],
+          'updated_at': m['updated_at'] ?? m['created_at'],
+        });
       }
       for (var row in (data['shifts'] as List)) {
         await txn.insert('shifts', Map<String, dynamic>.from(row));
